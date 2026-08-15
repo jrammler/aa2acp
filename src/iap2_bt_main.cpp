@@ -146,6 +146,7 @@ int main(int argc, char **argv) {
   std::string video_path;
   std::string video_socket;
   std::string pairing_store;
+  std::string display_profile_store;
   std::string wifi_interface;
   for (int index = 1; index < argc; ++index) {
     const std::string argument = argv[index];
@@ -179,6 +180,8 @@ int main(int argc, char **argv) {
       bridge = true;
     } else if (argument == "--video" && index + 1 < argc) {
       video_path = argv[++index];
+    } else if (argument == "--display-profile-store" && index + 1 < argc) {
+      display_profile_store = argv[++index];
     } else if (argument == "--video-socket" && index + 1 < argc) {
       video_socket = argv[++index];
     } else if (argument == "--pairing-store" && index + 1 < argc) {
@@ -325,6 +328,8 @@ int main(int argc, char **argv) {
                 ? [live_video] { return live_video->next(); }
                 : std::function<std::optional<std::vector<std::uint8_t>>()>{},
         .pairing_store = pairing_store,
+        .display_profile_store = display_profile_store,
+        .head_unit_mac = address,
         .stop_requested = [] { return shutdown_requested != 0; },
     };
     const auto result = aa2acp::airplay::run_session(options);

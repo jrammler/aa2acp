@@ -2,6 +2,7 @@
 #include "aa2acp/airplay/bplist.hpp"
 #include "aa2acp/airplay/control_cipher.hpp"
 #include "aa2acp/airplay/crypto.hpp"
+#include "aa2acp/airplay/display_profile.hpp"
 #include "aa2acp/airplay/pairing_store.hpp"
 #include "aa2acp/airplay/rtsp.hpp"
 #include "aa2acp/airplay/srp.hpp"
@@ -642,6 +643,21 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     return 1;
   }
   std::cout << "AirPlay: encrypted /info capabilities received\n";
+  const auto *info = dictionary_of(info_plist);
+  if (!options.display_profile_store.empty() &&
+      !options.head_unit_mac.empty()) {
+    const auto profile = main_display_profile(*info, options.head_unit_mac);
+    if (!profile) {
+      std::cerr
+          << "AirPlay: /info did not provide a valid main display profile\n";
+    } else if (!save_display_profile(options.display_profile_store, *profile)) {
+      std::cerr << "AirPlay: unable to cache main display profile\n";
+    } else {
+      std::cout << "AirPlay: cached main display profile "
+                << profile->width_pixels << 'x' << profile->height_pixels
+                << " at up to " << profile->max_fps << " FPS\n";
+    }
+  }
 
   const auto session_body =
       aa2acp::airplay::encode_bplist(aa2acp::airplay::PlistValue::Dictionary{

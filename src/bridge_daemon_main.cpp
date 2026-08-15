@@ -724,16 +724,19 @@ int run_carplay_session(const char *program_path,
   }
   const auto executable =
       std::filesystem::path(program_path).parent_path() / "aa2acp-iap2-bt";
-  std::vector<std::string> arguments{executable.string(),
-                                     "--bridge",
-                                     "--mac",
-                                     config.head_unit_mac,
-                                     "--wifi-interface",
-                                     config.wifi_interface,
-                                     "--pairing-store",
-                                     config.airplay_pairing_store.string(),
-                                     "--timeout",
-                                     "60"};
+  std::vector<std::string> arguments{
+      executable.string(),
+      "--bridge",
+      "--mac",
+      config.head_unit_mac,
+      "--wifi-interface",
+      config.wifi_interface,
+      "--pairing-store",
+      config.airplay_pairing_store.string(),
+      "--display-profile-store",
+      aa2acp::bridge::default_display_profile_store().string(),
+      "--timeout",
+      "60"};
   if (!video_socket.empty()) {
     arguments.push_back("--video-socket");
     arguments.push_back(video_socket);

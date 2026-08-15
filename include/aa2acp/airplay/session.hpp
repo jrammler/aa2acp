@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <optional>
 #include <string>
@@ -20,6 +21,8 @@ struct SessionOptions {
   // ends the live stream. The callback may block while waiting for a frame.
   std::function<std::optional<std::vector<std::uint8_t>>()> next_video_frame;
   std::string pairing_store;
+  std::filesystem::path display_profile_store;
+  std::string head_unit_mac;
   std::function<bool()> stop_requested;
 };
 

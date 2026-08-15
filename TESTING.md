@@ -77,8 +77,10 @@ longer visible in the terminal.
 - To capture the Android Auto elementary H.264 stream during a run, set
   `AA2ACP_DUMP_H264=/tmp/android-auto.h264` before launching the daemon. This
   is for diagnosis only; it can produce a large file.
-- The current bridge does not yet negotiate the head-unit display profile, so
-  Android Auto uses the conservative 1280x720 path. See the first TODO item.
+- The bridge caches the main display profile advertised by CarPlay in
+  `$XDG_STATE_HOME/aa2acp/display-profile` (normally
+  `~/.local/state/aa2acp/display-profile`). Android Auto still uses the
+  conservative 1280x720 path until profile-based negotiation is completed.
 
 ## Regression cases
 
