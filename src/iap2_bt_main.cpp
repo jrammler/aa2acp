@@ -228,6 +228,10 @@ int main(int argc, char **argv) {
     // The profile and credentials remain in NetworkManager for fast reconnect,
     // but the car AP must not remain the active idle network.
     const auto left_wifi = acp::iap2::leave_with_networkmanager(wifi_interface);
+    if (shutdown_requested != 0) {
+      std::cerr << "Bridge: shutdown requested during AirPlay phase\n";
+      return 128 + SIGTERM;
+    }
     if (result != 0) {
       std::cerr << "Bridge: AirPlay phase failed\n";
     }
