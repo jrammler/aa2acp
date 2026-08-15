@@ -11,7 +11,7 @@ Android phone and presents it to a car as a wireless CarPlay phone.
 ## Current state
 
 The wired Android Auto → wireless CarPlay video path has been verified end to
-end with a development CarPlay head unit:
+end with [LIVI](https://github.com/f-io/LIVI):
 
 - AOAP USB and Android Auto TLS/control session;
 - Bluetooth iAP2, pairing, MFi test authentication, and CarPlay Wi-Fi handover;

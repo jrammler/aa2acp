@@ -6,8 +6,8 @@ emulators into this repository.
 
 ## Verified state
 
-AA2ACP has been tested end to end with a wired Android Auto phone and a
-development CarPlay head unit:
+AA2ACP has been tested end to end with a wired Android Auto phone and
+[LIVI](https://github.com/f-io/LIVI):
 
 1. An Android phone connects over USB and starts Android Auto.
 2. AA2ACP receives the phone's H.264 video stream through AOAP/AASDK.
@@ -27,9 +27,10 @@ Audio and input/control forwarding are not implemented. The active work is in
 - The Android phone must be connected to a data-capable USB port. The daemon
   needs persistent USB access; install `udev/70-aa2acp-android-auto.rules` and
   run it as a user in `plugdev` as described in the README.
-- A CarPlay-capable head unit that accepts this development implementation.
-  Any development-only authentication configuration is external to this
-  repository and is not a production certification configuration.
+- A LIVI development setup, or another CarPlay-capable head unit that accepts
+  this development implementation. LIVI's development-only authentication
+  configuration is external to this repository and is not a production
+  certification configuration.
 
 ## Runbook
 

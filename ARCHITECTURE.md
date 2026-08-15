@@ -36,6 +36,6 @@ Wi-Fi client connection.
 6. Package the daemon as a minimal Raspberry Pi image with ignition/power
    handling and persistent state.
 
-Any development-only head-unit authentication setup is external test
-infrastructure; it is not part of this repository or a production
+The development MFi implementation and LIVI test setup are external test
+infrastructure; they are not part of this repository or a production
 certification story.
