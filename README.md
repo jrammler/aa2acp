@@ -6,14 +6,22 @@ See `../ARCHITECTURE.md` for the system plan and milestone sequence.
 
 ## Current milestone
 
-### Wired Android Auto USB transport
+### Wired Android Auto receiver
 
 `android-auto-usb` is the wired Android Auto transport diagnostic. It uses
 AASDK and libusb hotplug monitoring to find an Android phone, put a normal USB
 device into Android Open Accessory Protocol (AOAP) mode, retain the resulting
-transport, and report phone disconnects. `bridge-daemon --run` owns that same
-receiver in service mode. `--run-carplay` preserves the old direct-CarPlay
-diagnostic mode.
+transport, and report phone disconnects. It completes the Android Auto control
+TLS handshake and advertises a non-touch head-unit baseline: H.264 video,
+media/guidance/system PCM audio, microphone, driving-status sensor, and
+physical-button input. The receiver handles channel open/configuration and
+flow control for those services.
+
+This was verified with the development Android phone on 2026-08-15: Android
+Auto accepted the head unit, displayed its welcome flow, opened the H.264 video
+channel, selected 1280×720@30 Baseline H.264, and started the video stream.
+`bridge-daemon --run` owns that same receiver in service mode.
+`--run-carplay` preserves the old direct-CarPlay diagnostic mode.
 
 The process needs read/write access to the phone's USB device node. Install the
 provided udev rule once (and ensure the service/developer user belongs to
@@ -37,10 +45,10 @@ nix develop --command ./pi-bridge/build/android-auto-usb
 nix develop --command ./pi-bridge/build/bridge-daemon --run
 ```
 
-AOAP transport readiness is deliberately not presented as an established
-Android Auto projection session. The next milestone is AASDK's Android Auto
-service/channel handshake; only that successful handshake may start the
-CarPlay session and later forward video, audio, and input.
+The receiver is deliberately not presented as a working bridge yet. It accepts
+and acknowledges Android Auto projection, but currently discards the incoming
+video/audio and does not forward CarPlay input. The next milestone connects
+those streams and controls to the established CarPlay session.
 
 `iap2-tcp` establishes the phone-side iAP2 link layer over TCP. It repeatedly
 sends the iAP2 marker while detecting the accessory, negotiates LSP with
