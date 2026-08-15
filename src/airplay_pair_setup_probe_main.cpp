@@ -9,10 +9,13 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
+#include <fstream>
 #include <iostream>
 #include <string>
+#include <thread>
 
 namespace {
 
@@ -103,11 +106,89 @@ integer_at(const acp::airplay::PlistValue::Dictionary &dictionary,
   return value ? std::optional<std::uint64_t>(*value) : std::nullopt;
 }
 
+std::vector<acp::airplay::Bytes> h264_nalus(const std::string &path) {
+  std::ifstream file(path, std::ios::binary);
+  if (!file)
+    return {};
+  const std::vector<std::uint8_t> input((std::istreambuf_iterator<char>(file)),
+                                        std::istreambuf_iterator<char>());
+  std::vector<acp::airplay::Bytes> result;
+  for (std::size_t offset = 0; offset + 3 <= input.size();) {
+    std::size_t start_code = 0;
+    if (offset + 4 <= input.size() && input[offset] == 0 &&
+        input[offset + 1] == 0 && input[offset + 2] == 0 &&
+        input[offset + 3] == 1) {
+      start_code = 4;
+    } else if (input[offset] == 0 && input[offset + 1] == 0 &&
+               input[offset + 2] == 1) {
+      start_code = 3;
+    }
+    if (start_code == 0) {
+      ++offset;
+      continue;
+    }
+    const auto start = offset + start_code;
+    auto end = start;
+    while (end + 3 <= input.size()) {
+      if ((end + 4 <= input.size() && input[end] == 0 && input[end + 1] == 0 &&
+           input[end + 2] == 0 && input[end + 3] == 1) ||
+          (input[end] == 0 && input[end + 1] == 0 && input[end + 2] == 1))
+        break;
+      ++end;
+    }
+    if (start < end)
+      result.emplace_back(input.begin() + static_cast<std::ptrdiff_t>(start),
+                          input.begin() + static_cast<std::ptrdiff_t>(end));
+    offset = end;
+  }
+  return result;
+}
+
+std::optional<acp::airplay::Bytes>
+avcc_config(const std::vector<acp::airplay::Bytes> &nalus) {
+  const auto sps =
+      std::find_if(nalus.begin(), nalus.end(), [](const auto &nalu) {
+        return !nalu.empty() && (nalu[0] & 0x1f) == 7;
+      });
+  const auto pps =
+      std::find_if(nalus.begin(), nalus.end(), [](const auto &nalu) {
+        return !nalu.empty() && (nalu[0] & 0x1f) == 8;
+      });
+  if (sps == nalus.end() || pps == nalus.end() || sps->size() < 4 ||
+      sps->size() > UINT16_MAX || pps->size() > UINT16_MAX)
+    return std::nullopt;
+  acp::airplay::Bytes config{1,
+                             (*sps)[1],
+                             (*sps)[2],
+                             (*sps)[3],
+                             0xff,
+                             0xe1,
+                             static_cast<std::uint8_t>(sps->size() >> 8),
+                             static_cast<std::uint8_t>(sps->size())};
+  config.insert(config.end(), sps->begin(), sps->end());
+  config.push_back(1);
+  config.push_back(static_cast<std::uint8_t>(pps->size() >> 8));
+  config.push_back(static_cast<std::uint8_t>(pps->size()));
+  config.insert(config.end(), pps->begin(), pps->end());
+  return config;
+}
+
+void store_le32(std::span<std::uint8_t> target, const std::uint32_t value) {
+  for (std::size_t index = 0; index < 4; ++index)
+    target[index] = static_cast<std::uint8_t>(value >> (index * 8));
+}
+
+void store_le64(std::span<std::uint8_t> target, const std::uint64_t value) {
+  for (std::size_t index = 0; index < 8; ++index)
+    target[index] = static_cast<std::uint8_t>(value >> (index * 8));
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
   std::string host = "10.10.0.1";
   std::string port = "7000";
+  std::string video_path;
   int timeout_seconds = 10;
   for (int index = 1; index < argc; ++index) {
     const std::string argument = argv[index];
@@ -117,9 +198,11 @@ int main(int argc, char **argv) {
       port = argv[++index];
     else if (argument == "--timeout" && index + 1 < argc)
       timeout_seconds = std::stoi(argv[++index]);
+    else if (argument == "--video" && index + 1 < argc)
+      video_path = argv[++index];
     else {
       std::cerr << "usage: airplay-pair-setup-probe [--host HOST] [--port "
-                   "PORT] [--timeout SECONDS]\n";
+                   "PORT] [--timeout SECONDS] [--video H264_FILE]\n";
       return 2;
     }
   }
@@ -588,11 +671,76 @@ int main(int argc, char **argv) {
       acp::airplay::encode_request("RECORD", "rtsp://127.0.0.1/stream", 9, {},
                                    "application/octet-stream"),
       timeout_seconds);
-  close(socket_fd);
   if (!record_response || record_response->status != 200) {
     std::cerr << "Encrypted RECORD failed\n";
+    close(socket_fd);
     return 1;
   }
   std::cout << "AirPlay: encrypted RECORD accepted\n";
+  if (video_path.empty()) {
+    close(socket_fd);
+    return 0;
+  }
+  const auto nalus = h264_nalus(video_path);
+  const auto config = avcc_config(nalus);
+  if (!config) {
+    std::cerr << "Unable to parse H.264 SPS/PPS from " << video_path << '\n';
+    close(socket_fd);
+    return 1;
+  }
+  const auto stream_key = acp::airplay::hkdf_sha512(
+      *shared, std::string("DataStream-Salt") + std::string(screen_stream_id),
+      "DataStream-Output-Encryption-Key", 32);
+  const auto data_socket = connect_tcp(host, std::to_string(*screen_port));
+  if (stream_key.size() != 32 || data_socket < 0) {
+    std::cerr << "Unable to establish encrypted screen data stream\n";
+    close(socket_fd);
+    return 1;
+  }
+  acp::airplay::Bytes config_header(128);
+  store_le32(std::span(config_header).first(4), config->size());
+  config_header[4] = 1;
+  if (!send_all(data_socket, config_header) ||
+      !send_all(data_socket, *config)) {
+    std::cerr << "Unable to send H.264 video config\n";
+    close(data_socket);
+    close(socket_fd);
+    return 1;
+  }
+  std::uint64_t frame_counter{};
+  std::size_t sent_frames{};
+  for (const auto &nalu : nalus) {
+    if (nalu.empty() || ((nalu[0] & 0x1f) != 1 && (nalu[0] & 0x1f) != 5))
+      continue;
+    acp::airplay::Bytes frame;
+    frame.reserve(nalu.size() + 4);
+    frame.push_back(static_cast<std::uint8_t>(nalu.size() >> 24));
+    frame.push_back(static_cast<std::uint8_t>(nalu.size() >> 16));
+    frame.push_back(static_cast<std::uint8_t>(nalu.size() >> 8));
+    frame.push_back(static_cast<std::uint8_t>(nalu.size()));
+    frame.insert(frame.end(), nalu.begin(), nalu.end());
+    acp::airplay::Bytes header(128);
+    store_le32(std::span(header).first(4), frame.size() + 16);
+    header[4] = 0;
+    store_le64(std::span(header).subspan(8, 8), frame_counter);
+    std::array<std::uint8_t, 12> nonce{};
+    store_le64(std::span(nonce).subspan(4, 8), frame_counter);
+    const auto encrypted =
+        acp::airplay::seal_with_nonce(stream_key, nonce, frame, header);
+    if (!encrypted || !send_all(data_socket, header) ||
+        !send_all(data_socket, *encrypted)) {
+      std::cerr << "Unable to send encrypted H.264 frame\n";
+      close(data_socket);
+      close(socket_fd);
+      return 1;
+    }
+    ++frame_counter;
+    ++sent_frames;
+    std::this_thread::sleep_for(std::chrono::milliseconds(33));
+  }
+  close(data_socket);
+  close(socket_fd);
+  std::cout << "AirPlay: encrypted H.264 stream sent " << sent_frames
+            << " frames\n";
   return 0;
 }

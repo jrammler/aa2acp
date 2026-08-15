@@ -27,8 +27,10 @@ The encrypted M5/M6 identity exchange is also verified: the client encrypts
 and signs its Ed25519 identity, then decrypts and verifies test head unit's accessory
 identity. Pair-Verify and the complete encrypted RTSP control plane are also
 live-verified against test head unit: `/info`, session `SETUP`, screen `SETUP` (which
-returns a live screen-data TCP port), and `RECORD`. The next C++ AirPlay
-milestone is the encrypted H.264 media data stream.
+returns a live screen-data TCP port), and `RECORD`. The encrypted H.264 media
+plane is also live-verified: it derives the screen stream key, sends avcC
+configuration and ChaCha20-Poly1305 protected AVCC frames, and test head unit decodes the
+test video on its display.
 
 Build and run tests from the repository root:
 
@@ -46,6 +48,14 @@ With test head unit's TCP test handler running on the Pi:
 ./pi-bridge/build/iap2-tcp --host [redacted-host] --port 12346
 # Full first CSM milestone:
 ./pi-bridge/build/iap2-tcp --host [redacted-host] --port 12346 --bootstrap --timeout 30
+```
+
+With the development machine joined to test head unit's AP, the complete C++ AirPlay
+test (including video) is:
+
+```bash
+./pi-bridge/build/airplay-pair-setup-probe --host 10.10.0.1 \
+  --video iphone-emulator/test_frames.h264
 ```
 
 ## Bluetooth bootstrap test
