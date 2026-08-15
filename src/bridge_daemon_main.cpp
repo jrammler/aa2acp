@@ -34,6 +34,7 @@ struct ManagementSnapshot {
   std::vector<std::string> wifi_interfaces;
   bool show_unnamed_bluetooth_devices{};
   bool bluetooth_scan_running{};
+  int bluetooth_scan_phase_id{};
   std::string bluetooth_scan_phase{"idle"};
   std::string bluetooth_error;
 };
@@ -193,22 +194,25 @@ ManagementSnapshot management_snapshot(ManagementState &state) {
 }
 
 void run_bluetooth_scan(ManagementState &state) {
-  const auto set_phase = [&state](const std::string &phase) {
+  const auto set_phase = [&state](const int phase_id,
+                                  const std::string &phase) {
     std::lock_guard lock(state.mutex);
+    state.snapshot.bluetooth_scan_phase_id = phase_id;
     state.snapshot.bluetooth_scan_phase = phase;
   };
   const auto log = [](const std::string &message) {
     std::cout << "Management Bluetooth: " << message << '\n';
   };
-  set_phase("LE discovery in progress");
+  set_phase(2, "LE discovery in progress");
   acp::bridge::discover_bluez_devices("le", 30, log);
   refresh_bluetooth_inventory(state);
-  set_phase("classic discovery in progress");
+  set_phase(3, "classic discovery in progress");
   acp::bridge::discover_bluez_devices("bredr", 15, log);
   refresh_bluetooth_inventory(state);
   {
     std::lock_guard lock(state.mutex);
     state.snapshot.bluetooth_scan_running = false;
+    state.snapshot.bluetooth_scan_phase_id = 4;
     state.snapshot.bluetooth_scan_phase = "last discovery completed";
   }
   std::cout << "Management Bluetooth: discovery finished\n";
@@ -226,7 +230,8 @@ std::string page(const acp::bridge::Config &config,
       ".hint{color:#555}.status{padding:.6rem;background:#eef7ee}</style></"
       "head><body data-scan-running=\"" +
       std::string(snapshot.bluetooth_scan_running ? "1" : "0") +
-      "\" data-scan-phase=\"" + html_escape(snapshot.bluetooth_scan_phase) +
+      "\" data-scan-phase=\"" +
+      std::to_string(snapshot.bluetooth_scan_phase_id) +
       "\">"
       "<h1>ACP-AA Bridge</h1><p>Configure the pinned CarPlay head unit.</p>";
   if (saved)
@@ -459,25 +464,27 @@ int main(int argc, char **argv) {
     const auto split = request.find("\r\n\r\n");
     const auto body =
         split == std::string::npos ? "" : request.substr(split + 4);
+    const auto request_line_end = request.find("\r\n");
+    const auto request_line = request.substr(0, request_line_end);
+    const auto respond = [&](const int status, const char *type,
+                             const std::string &response_body,
+                             const std::string &extra = {}) {
+      std::cout << "Management: " << request_line << " -> " << status << '\n';
+      return send_response(client, status, type, response_body, extra);
+    };
     if (request.starts_with("GET / ") || request.starts_with("GET /?")) {
       const bool saved = request.find("saved=1") != std::string::npos;
       const auto snapshot = management_snapshot(management_state);
-      std::cout << "Management: GET / (" << snapshot.bluetooth_devices.size()
-                << " cached Bluetooth devices, "
-                << snapshot.wifi_interfaces.size()
-                << " cached Wi-Fi interfaces)\n";
-      send_response(client, 200, "text/html; charset=utf-8",
-                    page(config, snapshot, saved));
-    } else if (request.starts_with("GET /scan-status ")) {
+      respond(200, "text/html; charset=utf-8", page(config, snapshot, saved));
+    } else if (request.starts_with("GET /scan-status")) {
       const auto snapshot = management_snapshot(management_state);
       const auto phase = query_field(request, "phase");
-      const int status = snapshot.bluetooth_scan_running && phase &&
-                                 *phase == snapshot.bluetooth_scan_phase
-                             ? 204
-                             : 205;
-      std::cout << "Management: GET /scan-status (phase="
-                << phase.value_or("none") << ", response=" << status << ")\n";
-      send_response(client, status, "text/plain", "");
+      const int status =
+          snapshot.bluetooth_scan_running && phase &&
+                  *phase == std::to_string(snapshot.bluetooth_scan_phase_id)
+              ? 204
+              : 205;
+      respond(status, "text/plain", "");
     } else if (request.starts_with("POST /scan ")) {
       std::cout << "Management: Bluetooth scan requested\n";
       bool start_scan = false;
@@ -485,13 +492,14 @@ int main(int argc, char **argv) {
         std::lock_guard lock(management_state.mutex);
         if (!management_state.snapshot.bluetooth_scan_running) {
           management_state.snapshot.bluetooth_scan_running = true;
+          management_state.snapshot.bluetooth_scan_phase_id = 1;
           management_state.snapshot.bluetooth_scan_phase = "queued";
           start_scan = true;
         }
       }
       if (start_scan)
         std::thread(run_bluetooth_scan, std::ref(management_state)).detach();
-      send_response(client, 303, "text/plain", "", "Location: /\r\n");
+      respond(303, "text/plain", "", "Location: /\r\n");
     } else if (request.starts_with("POST /display ")) {
       const bool show_unnamed = form_field(body, "show_unnamed").has_value();
       {
@@ -500,7 +508,7 @@ int main(int argc, char **argv) {
       }
       std::cout << "Management: unnamed Bluetooth devices "
                 << (show_unnamed ? "shown" : "hidden") << '\n';
-      send_response(client, 303, "text/plain", "", "Location: /\r\n");
+      respond(303, "text/plain", "", "Location: /\r\n");
     } else if (request.starts_with("POST /config ")) {
       const auto manual = form_field(body, "manual_mac");
       const auto selected = form_field(body, "head_unit_mac");
@@ -514,14 +522,14 @@ int main(int argc, char **argv) {
         config = {mac, *wifi, config.airplay_pairing_store};
         std::cout << "Management: saved head unit " << config.head_unit_mac
                   << " on " << config.wifi_interface << '\n';
-        send_response(client, 303, "text/plain", "", "Location: /?saved=1\r\n");
+        respond(303, "text/plain", "", "Location: /?saved=1\r\n");
       } else {
         std::cout << "Management: rejected invalid configuration\n";
-        send_response(client, 400, "text/plain", "Invalid configuration\n");
+        respond(400, "text/plain", "Invalid configuration\n");
       }
     } else {
       std::cout << "Management: unknown request\n";
-      send_response(client, 400, "text/plain", "Unknown endpoint\n");
+      respond(400, "text/plain", "Unknown endpoint\n");
     }
     close(client);
   }
