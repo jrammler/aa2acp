@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace acp::bridge {
@@ -17,6 +18,7 @@ struct BluetoothDevice {
 // devices discovered by an active/recent scan, so one source of truth is used
 // for both lists.
 std::vector<BluetoothDevice> list_bluez_devices(std::string *error = nullptr);
+bool bluez_device_is_paired(std::string_view address);
 
 // Populate BlueZ's cache with a bounded scan. BlueZ only permits one discovery
 // transport at a time, so the caller may invoke this once for LE and once for

@@ -73,7 +73,7 @@ target_compile_options(iap2-tcp PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 add_executable(iap2-bt src/iap2_bt_main.cpp)
 target_sources(iap2-bt PRIVATE src/iap2/bluez_pairing.cpp)
-target_link_libraries(iap2-bt PRIVATE iap2_link airplay_session ${BLUETOOTH_LIBRARY} PkgConfig::DBUS)
+target_link_libraries(iap2-bt PRIVATE iap2_link airplay_session bluez_inventory ${BLUETOOTH_LIBRARY} PkgConfig::DBUS)
 target_compile_options(iap2-bt PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 add_executable(bridge-daemon src/bridge_daemon_main.cpp)

@@ -206,6 +206,14 @@ std::vector<BluetoothDevice> list_bluez_devices(std::string *error) {
   return devices;
 }
 
+bool bluez_device_is_paired(const std::string_view address) {
+  const auto devices = list_bluez_devices();
+  return std::any_of(devices.begin(), devices.end(),
+                     [address](const BluetoothDevice &device) {
+                       return device.address == address && device.paired;
+                     });
+}
+
 bool discover_bluez_devices(
     const std::string &transport, int seconds,
     const std::function<void(const std::string &)> &log) {

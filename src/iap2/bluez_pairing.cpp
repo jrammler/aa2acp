@@ -1,4 +1,5 @@
 #include "acp/iap2/bluez_pairing.hpp"
+#include "acp/bridge/bluez_inventory.hpp"
 
 #include <dbus/dbus.h>
 
@@ -204,40 +205,6 @@ bool call_set_trusted(DBusConnection *connection, const std::string &path,
   return result;
 }
 
-std::optional<bool> device_is_paired(DBusConnection *connection,
-                                     const std::string &path) {
-  DBusMessage *message = new_call(path.c_str(), kPropertiesInterface, "Get");
-  if (message == nullptr)
-    return std::nullopt;
-  const char *interface = kDeviceInterface;
-  const char *property = "Paired";
-  dbus_message_append_args(message, DBUS_TYPE_STRING, &interface,
-                           DBUS_TYPE_STRING, &property, DBUS_TYPE_INVALID);
-  DBusError error;
-  dbus_error_init(&error);
-  DBusMessage *reply = dbus_connection_send_with_reply_and_block(
-      connection, message, 5000, &error);
-  dbus_message_unref(message);
-  if (reply == nullptr) {
-    dbus_error_free(&error);
-    return std::nullopt;
-  }
-  DBusMessageIter arguments;
-  DBusMessageIter value;
-  dbus_bool_t paired = false;
-  const bool has_variant =
-      dbus_message_iter_init(reply, &arguments) &&
-      dbus_message_iter_get_arg_type(&arguments) == DBUS_TYPE_VARIANT;
-  if (has_variant)
-    dbus_message_iter_recurse(&arguments, &value);
-  const bool valid = has_variant && dbus_message_iter_get_arg_type(&value) ==
-                                        DBUS_TYPE_BOOLEAN;
-  if (valid)
-    dbus_message_iter_get_basic(&value, &paired);
-  dbus_message_unref(reply);
-  return valid ? std::optional<bool>(paired) : std::nullopt;
-}
-
 bool call_set_le_discovery_filter(DBusConnection *connection, std::string &name,
                                   std::string &detail) {
   DBusMessage *message =
@@ -292,8 +259,7 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
     return false;
   }
   const auto path = device_path(mac);
-  if (const auto paired = device_is_paired(connection, path);
-      paired && *paired) {
+  if (acp::bridge::bluez_device_is_paired(mac)) {
     write_log(log, "reusing existing BlueZ bond for " + std::string(mac));
     std::string name;
     std::string detail;
