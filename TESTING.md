@@ -85,7 +85,8 @@ pairing or the Wi-Fi handover.
   `$XDG_STATE_HOME/aa2acp/display-profile` (normally
   `~/.local/state/aa2acp/display-profile`) and uses a supported cached
   resolution for Android Auto. The first connection, unavailable cache, or an
-  unsupported profile uses the conservative 1280x720 fallback.
+  unsupported profile waits up to 30 seconds for CarPlay discovery before using
+  the conservative 1280x720 fallback.
 
 ## Regression cases
 

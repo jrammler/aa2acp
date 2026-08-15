@@ -897,7 +897,7 @@ int run_wired_android_auto_receiver(
       [&config_provider]() -> std::optional<aa2acp::aa::DisplayProfile> {
         const auto config = config_provider();
         const auto deadline =
-            std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            std::chrono::steady_clock::now() + std::chrono::seconds(30);
         do {
           const auto profile = aa2acp::airplay::load_display_profile(
               aa2acp::bridge::default_display_profile_store(),
