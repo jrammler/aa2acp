@@ -741,6 +741,11 @@ public:
     if (pcm.empty())
       return;
     std::lock_guard lock(mutex_);
+    ++received_packets_;
+    if (received_packets_ <= 3 || received_packets_ % 500 == 0) {
+      std::cout << "Bridge daemon: Android Auto media audio packet #"
+                << received_packets_ << " (" << pcm.size() << " bytes)\n";
+    }
     if (frames_.size() >= 100)
       frames_.pop_front();
     frames_.emplace_back(pcm.begin(), pcm.end());
@@ -813,6 +818,7 @@ private:
   std::mutex mutex_;
   std::condition_variable frames_ready_;
   std::deque<Bytes> frames_;
+  std::size_t received_packets_{};
 };
 
 void stop_carplay_process_group(const pid_t child, int *status) {

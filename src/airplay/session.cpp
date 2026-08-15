@@ -890,6 +890,10 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
         timestamp += static_cast<std::uint32_t>(payload.size() / 4);
         ++nonce_counter;
         ++sent_packets;
+        if (sent_packets == 1) {
+          std::cout << "AirPlay: forwarding Android Auto media audio "
+                    << "(48 kHz stereo PCM)\n";
+        }
       }
       close(media_socket);
       std::cout << "AirPlay: encrypted Android Auto media audio sent "
