@@ -278,12 +278,9 @@ std::string page(const acp::bridge::Config &config,
     for (const auto &device : snapshot.bluetooth_devices) {
       if (is_unnamed(device) && !snapshot.show_unnamed_bluetooth_devices)
         continue;
-      const auto selected =
-          device.address == config.head_unit_mac ? " selected" : "";
       auto name = is_unnamed(device) ? "Unnamed device" : device.name;
-      output += "<option value=\"" + html_escape(device.address) + "\"" +
-                selected + ">" + html_escape(name) + " — " +
-                html_escape(device.address) +
+      output += "<option value=\"" + html_escape(device.address) + "\">" +
+                html_escape(name) + " — " + html_escape(device.address) +
                 (device.paired ? " (paired)" : "") +
                 (device.connected ? " (connected)" : "") + "</option>";
     }
@@ -540,9 +537,9 @@ int main(int argc, char **argv) {
       const auto manual = form_field(body, "manual_mac");
       const auto selected = form_field(body, "head_unit_mac");
       const auto wifi = form_field(body, "wifi_interface");
-      const auto mac = manual && !manual->empty()
-                           ? *manual
-                           : selected.value_or(config.head_unit_mac);
+      const auto mac = selected && !selected->empty() ? *selected
+                       : manual && !manual->empty()   ? *manual
+                                                      : config.head_unit_mac;
       if (wifi && !mac.empty() &&
           acp::bridge::save_config(
               config_path, {mac, *wifi, config.airplay_pairing_store})) {
