@@ -6,6 +6,26 @@ See `../ARCHITECTURE.md` for the system plan and milestone sequence.
 
 ## Current milestone
 
+### Wired Android Auto USB transport
+
+`android-auto-usb` is the wired Android Auto transport diagnostic. It uses
+AASDK and libusb hotplug monitoring to find an Android phone, put a normal USB
+device into Android Open Accessory Protocol (AOAP) mode, retain the resulting
+transport, and report phone disconnects. `bridge-daemon --run` owns that same
+receiver in service mode. `--run-carplay` preserves the old direct-CarPlay
+diagnostic mode.
+
+```bash
+nix develop --command ./pi-bridge/build/android-auto-usb
+# Service-mode receiver; stop with SIGTERM/SIGINT:
+nix develop --command ./pi-bridge/build/bridge-daemon --run
+```
+
+AOAP transport readiness is deliberately not presented as an established
+Android Auto projection session. The next milestone is AASDK's Android Auto
+service/channel handshake; only that successful handshake may start the
+CarPlay session and later forward video, audio, and input.
+
 `iap2-tcp` establishes the phone-side iAP2 link layer over TCP. It repeatedly
 sends the iAP2 marker while detecting the accessory, negotiates LSP with
 SYN/ACK packets, and exits successfully after reaching `NORMAL`. Its

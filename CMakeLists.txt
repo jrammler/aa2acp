@@ -2,14 +2,22 @@ cmake_minimum_required(VERSION 3.20)
 
 project(acp_aa_pi_bridge LANGUAGES CXX)
 
+if(POLICY CMP0167)
+  cmake_policy(SET CMP0167 NEW)
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(OpenSSL REQUIRED)
+find_package(Boost 1.83 REQUIRED COMPONENTS system log_setup log unit_test_framework)
+find_package(aap_protobuf CONFIG REQUIRED)
+find_package(aasdk CONFIG REQUIRED)
 find_library(BLUETOOTH_LIBRARY bluetooth REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(DBUS REQUIRED IMPORTED_TARGET dbus-1)
+find_path(LIBUSB_INCLUDE_DIR libusb.h PATH_SUFFIXES libusb-1.0 REQUIRED)
 
 add_library(iap2_link
     src/iap2/link_layer.cpp
@@ -48,6 +56,12 @@ target_include_directories(bluez_inventory PUBLIC include)
 target_link_libraries(bluez_inventory PUBLIC PkgConfig::DBUS)
 target_compile_options(bluez_inventory PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
+add_library(android_auto_usb src/aa/wired_receiver.cpp)
+target_include_directories(android_auto_usb PUBLIC include)
+target_include_directories(android_auto_usb PRIVATE ${LIBUSB_INCLUDE_DIR})
+target_link_libraries(android_auto_usb PUBLIC AASDK::aasdk)
+target_compile_options(android_auto_usb PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
 add_executable(airplay-pair-setup-probe src/airplay_pair_setup_probe_main.cpp)
 target_link_libraries(airplay-pair-setup-probe PRIVATE airplay_session)
 target_compile_options(airplay-pair-setup-probe PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -62,8 +76,12 @@ target_link_libraries(iap2-bt PRIVATE iap2_link airplay_session ${BLUETOOTH_LIBR
 target_compile_options(iap2-bt PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 add_executable(bridge-daemon src/bridge_daemon_main.cpp)
-target_link_libraries(bridge-daemon PRIVATE bridge_config bluez_inventory)
+target_link_libraries(bridge-daemon PRIVATE bridge_config bluez_inventory android_auto_usb)
 target_compile_options(bridge-daemon PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+add_executable(android-auto-usb src/android_auto_usb_main.cpp)
+target_link_libraries(android-auto-usb PRIVATE android_auto_usb)
+target_compile_options(android-auto-usb PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 enable_testing()
 add_executable(iap2-link-tests tests/link_layer_tests.cpp)

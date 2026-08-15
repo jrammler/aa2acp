@@ -1,3 +1,4 @@
+#include "acp/aa/wired_receiver.hpp"
 #include "acp/bridge/bluez_inventory.hpp"
 #include "acp/bridge/config.hpp"
 
@@ -373,12 +374,53 @@ int run_carplay_session(const char *program_path,
   }
 }
 
+int run_wired_android_auto_receiver(const int signal_fd) {
+  acp::aa::WiredReceiver receiver([](const auto &event) {
+    switch (event.type) {
+    case acp::aa::WiredReceiverEventType::waiting_for_phone:
+      std::cout << "Bridge daemon: Android Auto USB idle: " << event.detail
+                << '\n';
+      break;
+    case acp::aa::WiredReceiverEventType::aoap_transport_ready:
+      std::cout << "Bridge daemon: Android Auto USB transport ready: "
+                << event.detail << '\n';
+      break;
+    case acp::aa::WiredReceiverEventType::disconnected:
+      std::cout << "Bridge daemon: Android Auto USB disconnected\n";
+      break;
+    case acp::aa::WiredReceiverEventType::error:
+      std::cerr << "Bridge daemon: " << event.detail << '\n';
+      break;
+    }
+  });
+  std::string error;
+  if (!receiver.start(&error)) {
+    std::cerr << "Bridge daemon: unable to start Android Auto USB receiver: "
+              << error << '\n';
+    return 1;
+  }
+  std::cout << "Bridge daemon: wired Android Auto receiver started\n";
+  for (;;) {
+    pollfd signal_poll{signal_fd, POLLIN, 0};
+    if (poll(&signal_poll, 1, -1) <= 0 || (signal_poll.revents & POLLIN) == 0)
+      continue;
+    signalfd_siginfo signal_info{};
+    if (read(signal_fd, &signal_info, sizeof(signal_info)) ==
+        static_cast<ssize_t>(sizeof(signal_info)))
+      break;
+  }
+  std::cout << "Bridge daemon: stopping wired Android Auto receiver\n";
+  receiver.stop();
+  return 0;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
   std::filesystem::path config_path = "/var/lib/acp-aa-bridge/config";
   int port = 8080;
   bool run_session = false;
+  bool run_carplay = false;
   for (int index = 1; index < argc; ++index) {
     const std::string argument = argv[index];
     if (argument == "--config" && index + 1 < argc)
@@ -387,9 +429,11 @@ int main(int argc, char **argv) {
       port = std::stoi(argv[++index]);
     else if (argument == "--run")
       run_session = true;
+    else if (argument == "--run-carplay")
+      run_carplay = true;
     else {
-      std::cerr
-          << "usage: bridge-daemon [--config PATH] [--port PORT] [--run]\n";
+      std::cerr << "usage: bridge-daemon [--config PATH] [--port PORT] [--run] "
+                   "[--run-carplay]\n";
       return 2;
     }
   }
@@ -420,6 +464,11 @@ int main(int argc, char **argv) {
     return 1;
   }
   if (run_session) {
+    const auto result = run_wired_android_auto_receiver(signal_fd);
+    close(signal_fd);
+    return result;
+  }
+  if (run_carplay) {
     const auto result = run_carplay_session(argv[0], config, signal_fd);
     close(signal_fd);
     return result;
