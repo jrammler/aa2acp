@@ -1,4 +1,4 @@
-#include "acp/airplay/srp.hpp"
+#include "aa2acp/airplay/srp.hpp"
 
 #include <openssl/bn.h>
 #include <openssl/crypto.h>
@@ -9,7 +9,7 @@
 #include <memory>
 #include <string_view>
 
-namespace acp::airplay {
+namespace aa2acp::airplay {
 namespace {
 
 constexpr std::size_t kGroupBytes = 384;
@@ -163,4 +163,4 @@ bool SrpClient::verify_server(
                sha512({public_key_, client_proof_, session_key_}));
 }
 
-} // namespace acp::airplay
+} // namespace aa2acp::airplay

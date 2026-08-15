@@ -1,4 +1,4 @@
-#include "acp/bridge/bluez_inventory.hpp"
+#include "aa2acp/bridge/bluez_inventory.hpp"
 
 #include <dbus/dbus.h>
 
@@ -6,7 +6,7 @@
 #include <chrono>
 #include <thread>
 
-namespace acp::bridge {
+namespace aa2acp::bridge {
 namespace {
 
 constexpr char kBluez[] = "org.bluez";
@@ -250,4 +250,4 @@ bool discover_bluez_devices(
   return true;
 }
 
-} // namespace acp::bridge
+} // namespace aa2acp::bridge

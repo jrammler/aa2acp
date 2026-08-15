@@ -4,7 +4,7 @@
 #include <span>
 #include <vector>
 
-namespace acp::airplay {
+namespace aa2acp::airplay {
 
 using Bytes = std::vector<std::uint8_t>;
 
@@ -26,4 +26,4 @@ private:
   Bytes session_key_;
 };
 
-} // namespace acp::airplay
+} // namespace aa2acp::airplay

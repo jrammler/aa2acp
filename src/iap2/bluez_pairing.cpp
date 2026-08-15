@@ -1,5 +1,5 @@
-#include "acp/iap2/bluez_pairing.hpp"
-#include "acp/bridge/bluez_inventory.hpp"
+#include "aa2acp/iap2/bluez_pairing.hpp"
+#include "aa2acp/bridge/bluez_inventory.hpp"
 
 #include <dbus/dbus.h>
 
@@ -9,11 +9,11 @@
 #include <iostream>
 #include <string>
 
-namespace acp::iap2 {
+namespace aa2acp::iap2 {
 namespace {
 
 constexpr char kBluez[] = "org.bluez";
-constexpr char kAgentPath[] = "/com/acp_aabridge/agent";
+constexpr char kAgentPath[] = "/com/aa2acp/agent";
 constexpr char kAgentManager[] = "org.bluez.AgentManager1";
 constexpr char kAgentInterface[] = "org.bluez.Agent1";
 constexpr char kAdapterPath[] = "/org/bluez/hci0";
@@ -259,7 +259,7 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
     return false;
   }
   const auto path = device_path(mac);
-  if (acp::bridge::bluez_device_is_paired(mac)) {
+  if (aa2acp::bridge::bluez_device_is_paired(mac)) {
     write_log(log, "reusing existing BlueZ bond for " + std::string(mac));
     std::string name;
     std::string detail;
@@ -354,4 +354,4 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
   return true;
 }
 
-} // namespace acp::iap2
+} // namespace aa2acp::iap2

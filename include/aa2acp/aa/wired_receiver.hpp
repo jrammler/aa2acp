@@ -6,7 +6,7 @@
 #include <span>
 #include <string>
 
-namespace acp::aa {
+namespace aa2acp::aa {
 
 // This is deliberately a transport-level milestone. "ready" means the phone
 // has entered Android Open Accessory Protocol mode and its USB endpoints are
@@ -52,4 +52,4 @@ private:
   std::unique_ptr<Impl> impl_;
 };
 
-} // namespace acp::aa
+} // namespace aa2acp::aa

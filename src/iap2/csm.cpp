@@ -1,11 +1,11 @@
-#include "acp/iap2/csm.hpp"
+#include "aa2acp/iap2/csm.hpp"
 
 #include <openssl/evp.h>
 #include <openssl/x509.h>
 
 #include <algorithm>
 
-namespace acp::iap2::csm {
+namespace aa2acp::iap2::csm {
 namespace {
 
 std::uint16_t read_u16(const std::span<const std::uint8_t> bytes,
@@ -130,4 +130,4 @@ std::optional<Message> Decoder::next() {
   return std::nullopt;
 }
 
-} // namespace acp::iap2::csm
+} // namespace aa2acp::iap2::csm

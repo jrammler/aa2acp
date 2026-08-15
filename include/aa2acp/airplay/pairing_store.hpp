@@ -1,12 +1,12 @@
 #pragma once
 
-#include "acp/airplay/crypto.hpp"
+#include "aa2acp/airplay/crypto.hpp"
 
 #include <filesystem>
 #include <optional>
 #include <string>
 
-namespace acp::airplay {
+namespace aa2acp::airplay {
 
 struct PairingRecord {
   std::string controller_id;
@@ -22,4 +22,4 @@ load_pairing_record(const std::filesystem::path &path);
 bool save_pairing_record(const std::filesystem::path &path,
                          const PairingRecord &record);
 
-} // namespace acp::airplay
+} // namespace aa2acp::airplay

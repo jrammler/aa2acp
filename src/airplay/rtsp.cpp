@@ -1,11 +1,11 @@
-#include "acp/airplay/rtsp.hpp"
+#include "aa2acp/airplay/rtsp.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <charconv>
 #include <string_view>
 
-namespace acp::airplay {
+namespace aa2acp::airplay {
 namespace {
 
 std::string lower(std::string value) {
@@ -31,7 +31,7 @@ Bytes encode_request(const std::string_view method, const std::string_view path,
                      const int cseq, const std::span<const std::uint8_t> body,
                      const std::string_view content_type) {
   std::string headers = std::string(method) + " " + std::string(path) +
-                        " RTSP/1.0\r\n" + "User-Agent: ACP-AA-Bridge/0.1\r\n" +
+                        " RTSP/1.0\r\n" + "User-Agent: AA2ACP/0.1\r\n" +
                         "CSeq: " + std::to_string(cseq) + "\r\n";
   if (!content_type.empty()) {
     headers += "Content-Type: " + std::string(content_type) + "\r\n";
@@ -151,4 +151,4 @@ decode_tlv8(const std::span<const std::uint8_t> bytes) {
   return result;
 }
 
-} // namespace acp::airplay
+} // namespace aa2acp::airplay

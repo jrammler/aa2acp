@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <string>
 
-namespace acp::iap2 {
+namespace aa2acp::iap2 {
 
 struct AccessoryWifiConfiguration {
   std::string ssid;
@@ -19,4 +19,4 @@ bool join_with_networkmanager(const AccessoryWifiConfiguration &configuration,
                               const std::string &interface_name);
 bool leave_with_networkmanager(const std::string &interface_name);
 
-} // namespace acp::iap2
+} // namespace aa2acp::iap2

@@ -1,4 +1,4 @@
-#include "acp/bridge/h264_normalizer.hpp"
+#include "aa2acp/bridge/h264_normalizer.hpp"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -10,7 +10,7 @@ extern "C" {
 #include <algorithm>
 #include <memory>
 
-namespace acp::bridge {
+namespace aa2acp::bridge {
 
 struct H264Normalizer::Context {
   AVBSFContext *filter{};
@@ -102,4 +102,4 @@ H264Normalizer::normalize(const std::span<const std::uint8_t> access_unit,
   return output;
 }
 
-} // namespace acp::bridge
+} // namespace aa2acp::bridge

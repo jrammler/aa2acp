@@ -1,4 +1,4 @@
-#include "acp/aa/wired_receiver.hpp"
+#include "aa2acp/aa/wired_receiver.hpp"
 
 #include <csignal>
 #include <iostream>
@@ -11,21 +11,21 @@ volatile std::sig_atomic_t stop_requested{};
 
 void handle_signal(int) { stop_requested = 1; }
 
-const char *event_name(const acp::aa::WiredReceiverEventType type) {
+const char *event_name(const aa2acp::aa::WiredReceiverEventType type) {
   switch (type) {
-  case acp::aa::WiredReceiverEventType::waiting_for_phone:
+  case aa2acp::aa::WiredReceiverEventType::waiting_for_phone:
     return "waiting";
-  case acp::aa::WiredReceiverEventType::aoap_transport_ready:
+  case aa2acp::aa::WiredReceiverEventType::aoap_transport_ready:
     return "ready";
-  case acp::aa::WiredReceiverEventType::control_session_ready:
+  case aa2acp::aa::WiredReceiverEventType::control_session_ready:
     return "session";
-  case acp::aa::WiredReceiverEventType::video_stream_configured:
+  case aa2acp::aa::WiredReceiverEventType::video_stream_configured:
     return "video-configured";
-  case acp::aa::WiredReceiverEventType::video_stream_started:
+  case aa2acp::aa::WiredReceiverEventType::video_stream_started:
     return "video";
-  case acp::aa::WiredReceiverEventType::disconnected:
+  case aa2acp::aa::WiredReceiverEventType::disconnected:
     return "disconnected";
-  case acp::aa::WiredReceiverEventType::error:
+  case aa2acp::aa::WiredReceiverEventType::error:
     return "error";
   }
   return "unknown";
@@ -36,7 +36,7 @@ const char *event_name(const acp::aa::WiredReceiverEventType type) {
 int main() {
   std::signal(SIGINT, handle_signal);
   std::signal(SIGTERM, handle_signal);
-  acp::aa::WiredReceiver receiver([](const auto &event) {
+  aa2acp::aa::WiredReceiver receiver([](const auto &event) {
     std::cout << "Android Auto USB [" << event_name(event.type)
               << "]: " << event.detail << '\n';
   });

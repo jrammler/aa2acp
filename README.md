@@ -1,6 +1,6 @@
-# ACP-AA Bridge
+# AA2ACP
 
-ACP-AA Bridge is a C++20 bridge that receives Android Auto from an Android
+AA2ACP is a C++20 bridge that receives Android Auto from an Android
 phone and presents it to a car as a wireless CarPlay phone.
 
 ## Current state
@@ -16,7 +16,8 @@ the test head unit test head unit:
   handling.
 
 Audio and physical-control forwarding are not implemented yet. See
-[ARCHITECTURE.md](ARCHITECTURE.md) for the active roadmap.
+[TODO.md](TODO.md) for the active task list and
+[ARCHITECTURE.md](ARCHITECTURE.md) for the system design.
 
 ## Build and test
 
@@ -33,19 +34,19 @@ nix develop --command bash -c '
 Run the integrated daemon with:
 
 ```bash
-nix develop --command ./build/bridge-daemon
+nix develop --command ./build/aa2acp-bridge-daemon
 ```
 
 The management UI listens on `http://127.0.0.1:8080`. Its configuration,
 AirPlay pairing identity, and 30 launch-rotated timestamped log files live in
-`$XDG_STATE_HOME/acp-aa-bridge` (normally `~/.local/state/acp-aa-bridge`).
+`$XDG_STATE_HOME/aa2acp` (normally `~/.local/state/aa2acp`).
 
 For wired Android Auto, install the checked-in udev rule once and ensure the
 running user belongs to `plugdev`:
 
 ```bash
-sudo install -Dm644 udev/70-acp-aa-bridge-android-auto.rules \
-  /etc/udev/rules.d/70-acp-aa-bridge-android-auto.rules
+sudo install -Dm644 udev/70-aa2acp-android-auto.rules \
+  /etc/udev/rules.d/70-aa2acp-android-auto.rules
 sudo udevadm control --reload
 sudo udevadm trigger --subsystem-match=usb --attr-match=idVendor=18d1
 ```

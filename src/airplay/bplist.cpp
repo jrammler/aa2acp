@@ -1,11 +1,11 @@
-#include "acp/airplay/bplist.hpp"
+#include "aa2acp/airplay/bplist.hpp"
 
 #include <algorithm>
 #include <array>
 #include <bit>
 #include <limits>
 
-namespace acp::airplay {
+namespace aa2acp::airplay {
 namespace {
 
 constexpr std::array<std::uint8_t, 8> magic{'b', 'p', 'l', 'i',
@@ -305,4 +305,4 @@ decode_bplist(const std::span<const std::uint8_t> bytes) {
   return Decoder(bytes).decode();
 }
 
-} // namespace acp::airplay
+} // namespace aa2acp::airplay

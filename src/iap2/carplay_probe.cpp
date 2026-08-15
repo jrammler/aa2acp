@@ -1,12 +1,12 @@
-#include "acp/iap2/carplay_probe.hpp"
+#include "aa2acp/iap2/carplay_probe.hpp"
 
-#include "acp/iap2/link_layer.hpp"
+#include "aa2acp/iap2/link_layer.hpp"
 
 #include <array>
 #include <iostream>
 #include <vector>
 
-namespace acp::iap2 {
+namespace aa2acp::iap2 {
 namespace {
 
 constexpr std::uint16_t kCarPlayAvailability = 0x4300;
@@ -177,4 +177,4 @@ void CarPlayProbe::handle(const csm::Message &message) {
   }
 }
 
-} // namespace acp::iap2
+} // namespace aa2acp::iap2

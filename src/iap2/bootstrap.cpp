@@ -1,11 +1,11 @@
-#include "acp/iap2/bootstrap.hpp"
+#include "aa2acp/iap2/bootstrap.hpp"
 
-#include "acp/iap2/link_layer.hpp"
+#include "aa2acp/iap2/link_layer.hpp"
 
 #include <iostream>
 #include <random>
 
-namespace acp::iap2 {
+namespace aa2acp::iap2 {
 
 void BootstrapSession::attach(PhoneLink &link) { link_ = &link; }
 
@@ -91,4 +91,4 @@ void BootstrapSession::handle(const csm::Message &message) {
   }
 }
 
-} // namespace acp::iap2
+} // namespace aa2acp::iap2

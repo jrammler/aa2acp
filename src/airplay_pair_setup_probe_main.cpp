@@ -1,10 +1,10 @@
-#include "acp/airplay/session.hpp"
+#include "aa2acp/airplay/session.hpp"
 
 #include <iostream>
 #include <string>
 
 int main(int argc, char **argv) {
-  acp::airplay::SessionOptions options;
+  aa2acp::airplay::SessionOptions options;
   for (int index = 1; index < argc; ++index) {
     const std::string argument = argv[index];
     if (argument == "--host" && index + 1 < argc)
@@ -18,11 +18,12 @@ int main(int argc, char **argv) {
     else if (argument == "--pairing-store" && index + 1 < argc)
       options.pairing_store = argv[++index];
     else {
-      std::cerr << "usage: airplay-pair-setup-probe [--host HOST] [--port "
-                   "PORT] [--timeout SECONDS] [--video H264_FILE] "
-                   "[--pairing-store FILE]\n";
+      std::cerr
+          << "usage: aa2acp-airplay-pair-setup-probe [--host HOST] [--port "
+             "PORT] [--timeout SECONDS] [--video H264_FILE] "
+             "[--pairing-store FILE]\n";
       return 2;
     }
   }
-  return acp::airplay::run_session(options);
+  return aa2acp::airplay::run_session(options);
 }

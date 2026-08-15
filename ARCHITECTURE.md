@@ -5,7 +5,7 @@ wired Android Auto today (wireless Android Auto is planned); the bridge joins
 the car's wireless CarPlay network and acts as the CarPlay phone.
 
 ```
-Android phone ── Android Auto ──> ACP-AA Bridge ── CarPlay ──> car head unit
+Android phone ── Android Auto ──> AA2ACP ── CarPlay ──> car head unit
 ```
 
 The bridge owns Bluetooth pairing, the CarPlay Wi-Fi handover, persistent

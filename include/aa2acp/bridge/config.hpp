@@ -4,7 +4,7 @@
 #include <optional>
 #include <string>
 
-namespace acp::bridge {
+namespace aa2acp::bridge {
 
 // Configuration deliberately contains references to OS-owned credentials only:
 // BlueZ owns the BT bond and NetworkManager owns the Wi-Fi secret/profile.
@@ -22,4 +22,4 @@ std::filesystem::path default_airplay_pairing_store();
 std::optional<Config> load_config(const std::filesystem::path &path);
 bool save_config(const std::filesystem::path &path, const Config &config);
 
-} // namespace acp::bridge
+} // namespace aa2acp::bridge

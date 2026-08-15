@@ -1,13 +1,13 @@
 #pragma once
 
-#include "acp/iap2/csm.hpp"
+#include "aa2acp/iap2/csm.hpp"
 
 #include <array>
 #include <cstdint>
 #include <span>
 #include <vector>
 
-namespace acp::iap2 {
+namespace aa2acp::iap2 {
 
 class PhoneLink;
 
@@ -44,4 +44,4 @@ private:
   Stage stage_{Stage::Idle};
 };
 
-} // namespace acp::iap2
+} // namespace aa2acp::iap2

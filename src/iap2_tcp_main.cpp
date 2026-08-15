@@ -1,6 +1,6 @@
-#include "acp/iap2/bootstrap.hpp"
-#include "acp/iap2/carplay_probe.hpp"
-#include "acp/iap2/link_layer.hpp"
+#include "aa2acp/iap2/bootstrap.hpp"
+#include "aa2acp/iap2/carplay_probe.hpp"
+#include "aa2acp/iap2/link_layer.hpp"
 
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -82,8 +82,9 @@ int main(int argc, char **argv) {
       carplay = true;
       wifi_config = true;
     } else {
-      std::cerr << "usage: iap2-tcp [--host HOST] [--port PORT] [--timeout "
-                   "SECONDS] [--bootstrap] [--carplay] [--wifi-config]\n";
+      std::cerr
+          << "usage: aa2acp-iap2-tcp [--host HOST] [--port PORT] [--timeout "
+             "SECONDS] [--bootstrap] [--carplay] [--wifi-config]\n";
       return 2;
     }
   }
@@ -94,9 +95,9 @@ int main(int argc, char **argv) {
     return 1;
   }
   std::cout << "Connected to " << host << ':' << port << '\n';
-  acp::iap2::BootstrapSession session;
-  acp::iap2::CarPlayProbe carplay_probe;
-  acp::iap2::PhoneLink link(
+  aa2acp::iap2::BootstrapSession session;
+  aa2acp::iap2::CarPlayProbe carplay_probe;
+  aa2acp::iap2::PhoneLink link(
       [socket_fd](const std::span<const std::uint8_t> bytes) {
         return send_all(socket_fd, bytes);
       },
@@ -118,11 +119,11 @@ int main(int argc, char **argv) {
 
   std::array<std::uint8_t, 1024> buffer{};
   while (std::chrono::steady_clock::now() < deadline &&
-         link.state() != acp::iap2::State::Dead &&
+         link.state() != aa2acp::iap2::State::Dead &&
          (!bootstrap ||
           (carplay ? (!carplay_probe.done() && !carplay_probe.failed())
                    : (!session.done() && !session.failed()))) &&
-         (bootstrap || link.state() != acp::iap2::State::Normal)) {
+         (bootstrap || link.state() != aa2acp::iap2::State::Normal)) {
     pollfd descriptor{socket_fd, POLLIN, 0};
     const auto result = poll(&descriptor, 1, 100);
     const auto now = std::chrono::steady_clock::now();
@@ -136,7 +137,7 @@ int main(int argc, char **argv) {
                    now);
     }
     link.tick(now);
-    if (bootstrap && link.state() == acp::iap2::State::Normal &&
+    if (bootstrap && link.state() == aa2acp::iap2::State::Normal &&
         !session.started()) {
       session.begin();
     }
@@ -149,5 +150,5 @@ int main(int argc, char **argv) {
     return carplay_probe.done() ? 0 : 1;
   }
   return bootstrap ? (session.done() ? 0 : 1)
-                   : (link.state() == acp::iap2::State::Normal ? 0 : 1);
+                   : (link.state() == aa2acp::iap2::State::Normal ? 0 : 1);
 }

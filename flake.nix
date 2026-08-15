@@ -47,7 +47,7 @@
           cmake clang-tools ninja gcc gnumake pkg-config git openssh rsync
         ];
         shellHook = ''
-          echo 'acp-aa-bridge development shell'
+          echo 'aa2acp development shell'
         '';
       };
     };

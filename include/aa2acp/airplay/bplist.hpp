@@ -1,13 +1,13 @@
 #pragma once
 
-#include "acp/airplay/rtsp.hpp"
+#include "aa2acp/airplay/rtsp.hpp"
 
 #include <cstdint>
 #include <map>
 #include <optional>
 #include <variant>
 
-namespace acp::airplay {
+namespace aa2acp::airplay {
 
 struct PlistValue {
   using Array = std::vector<PlistValue>;
@@ -29,4 +29,4 @@ struct PlistValue {
 Bytes encode_bplist(const PlistValue &root);
 std::optional<PlistValue> decode_bplist(std::span<const std::uint8_t> bytes);
 
-} // namespace acp::airplay
+} // namespace aa2acp::airplay

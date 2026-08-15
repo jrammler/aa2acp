@@ -1,4 +1,4 @@
-#include "acp/iap2/network_manager.hpp"
+#include "aa2acp/iap2/network_manager.hpp"
 
 #include <fcntl.h>
 #include <spawn.h>
@@ -11,7 +11,7 @@
 
 extern char **environ;
 
-namespace acp::iap2 {
+namespace aa2acp::iap2 {
 namespace {
 
 bool run_nmcli(std::vector<std::string> arguments,
@@ -134,4 +134,4 @@ bool leave_with_networkmanager(const std::string &interface_name) {
                    true);
 }
 
-} // namespace acp::iap2
+} // namespace aa2acp::iap2

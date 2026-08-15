@@ -5,7 +5,7 @@
 #include <string_view>
 #include <vector>
 
-namespace acp::bridge {
+namespace aa2acp::bridge {
 
 struct BluetoothDevice {
   std::string address;
@@ -27,4 +27,4 @@ bool discover_bluez_devices(
     const std::string &transport, int seconds,
     const std::function<void(const std::string &)> &log);
 
-} // namespace acp::bridge
+} // namespace aa2acp::bridge

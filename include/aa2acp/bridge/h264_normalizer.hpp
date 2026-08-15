@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace acp::bridge {
+namespace aa2acp::bridge {
 
 class H264Normalizer final {
 public:
@@ -23,4 +23,4 @@ private:
   Context *context_{};
 };
 
-} // namespace acp::bridge
+} // namespace aa2acp::bridge

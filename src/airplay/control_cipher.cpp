@@ -1,10 +1,10 @@
-#include "acp/airplay/control_cipher.hpp"
+#include "aa2acp/airplay/control_cipher.hpp"
 
-#include "acp/airplay/crypto.hpp"
+#include "aa2acp/airplay/crypto.hpp"
 
 #include <array>
 
-namespace acp::airplay {
+namespace aa2acp::airplay {
 namespace {
 
 std::array<std::uint8_t, 12> nonce_for_counter(const std::uint64_t counter) {
@@ -69,4 +69,4 @@ std::optional<Bytes> ControlCipher::decrypt_one(Bytes &buffer) {
   return plaintext;
 }
 
-} // namespace acp::airplay
+} // namespace aa2acp::airplay

@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-namespace acp::airplay {
+namespace aa2acp::airplay {
 
 using Bytes = std::vector<std::uint8_t>;
 
@@ -30,4 +30,4 @@ std::optional<Response> parse_response(std::span<const std::uint8_t> bytes);
 Bytes encode_tlv8(const std::vector<std::pair<std::uint8_t, Bytes>> &fields);
 std::map<std::uint8_t, Bytes> decode_tlv8(std::span<const std::uint8_t> bytes);
 
-} // namespace acp::airplay
+} // namespace aa2acp::airplay

@@ -1,14 +1,14 @@
 #pragma once
 
-#include "acp/iap2/csm.hpp"
-#include "acp/iap2/network_manager.hpp"
+#include "aa2acp/iap2/csm.hpp"
+#include "aa2acp/iap2/network_manager.hpp"
 
 #include <cstdint>
 #include <functional>
 #include <span>
 #include <string>
 
-namespace acp::iap2 {
+namespace aa2acp::iap2 {
 
 class PhoneLink;
 
@@ -50,4 +50,4 @@ private:
   std::string airplay_host_;
 };
 
-} // namespace acp::iap2
+} // namespace aa2acp::iap2

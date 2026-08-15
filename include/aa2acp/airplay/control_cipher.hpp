@@ -1,11 +1,11 @@
 #pragma once
 
-#include "acp/airplay/rtsp.hpp"
+#include "aa2acp/airplay/rtsp.hpp"
 
 #include <cstdint>
 #include <optional>
 
-namespace acp::airplay {
+namespace aa2acp::airplay {
 
 // AirPlay control messages after Pair-Verify: LE length, encrypted RTSP, tag.
 class ControlCipher {
@@ -23,4 +23,4 @@ private:
   std::uint64_t write_counter_{};
 };
 
-} // namespace acp::airplay
+} // namespace aa2acp::airplay

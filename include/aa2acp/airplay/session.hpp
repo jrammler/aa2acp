@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace acp::airplay {
+namespace aa2acp::airplay {
 
 // Performs one authenticated AirPlay control and optional H.264 screen session.
 // Returns zero only after the encrypted RECORD phase (and optional video)
@@ -25,4 +25,4 @@ struct SessionOptions {
 
 int run_session(const SessionOptions &options);
 
-} // namespace acp::airplay
+} // namespace aa2acp::airplay

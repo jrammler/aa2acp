@@ -1,9 +1,9 @@
-#include "acp/iap2/link_layer.hpp"
+#include "aa2acp/iap2/link_layer.hpp"
 
 #include <algorithm>
 #include <cstring>
 
-namespace acp::iap2 {
+namespace aa2acp::iap2 {
 namespace {
 
 constexpr std::uint16_t kPacketStart = 0xff5a;
@@ -273,4 +273,4 @@ void PhoneLink::log(const char *message) const {
   }
 }
 
-} // namespace acp::iap2
+} // namespace aa2acp::iap2

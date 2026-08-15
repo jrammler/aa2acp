@@ -1,4 +1,4 @@
-#include "acp/aa/wired_receiver.hpp"
+#include "aa2acp/aa/wired_receiver.hpp"
 
 #include <aasdk/Channel/Control/ControlServiceChannel.hpp>
 #include <aasdk/Channel/InputSource/InputSourceService.hpp>
@@ -33,7 +33,7 @@
 #include <utility>
 #include <vector>
 
-namespace acp::aa {
+namespace aa2acp::aa {
 
 class AudioSinkSession final
     : public aasdk::channel::mediasink::audio::
@@ -432,7 +432,7 @@ public:
     response.mutable_channels()->Reserve(8);
     response.set_driver_position(
         aap_protobuf::service::control::message::DRIVER_POSITION_LEFT);
-    response.set_display_name("ACP-AA Bridge");
+    response.set_display_name("AA2ACP");
     response.set_probe_for_support(false);
     auto *ping = response.mutable_connection_configuration()
                      ->mutable_ping_configuration();
@@ -444,7 +444,7 @@ public:
     head_unit->set_make("ACP");
     head_unit->set_model("Android Auto to CarPlay Bridge");
     head_unit->set_year("2026");
-    head_unit->set_vehicle_id("acp-aa-bridge");
+    head_unit->set_vehicle_id("aa2acp");
     head_unit->set_head_unit_make("ACP");
     head_unit->set_head_unit_model("Pi Bridge");
     head_unit->set_head_unit_software_build("1");
@@ -995,4 +995,4 @@ bool WiredReceiver::start(std::string *error) { return impl_->start(error); }
 
 void WiredReceiver::stop() { impl_->stop(); }
 
-} // namespace acp::aa
+} // namespace aa2acp::aa

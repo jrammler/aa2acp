@@ -1,14 +1,14 @@
-#include "acp/bridge/config.hpp"
+#include "aa2acp/bridge/config.hpp"
 
 #include <fstream>
 #include <sys/stat.h>
 
 #include <cstdlib>
 
-namespace acp::bridge {
+namespace aa2acp::bridge {
 namespace {
 
-constexpr char kMagic[] = "ACP-AA-BRIDGE-1";
+constexpr char kMagic[] = "AA2ACP-1";
 
 bool valid_key(const std::string_view key) {
   return key == "head_unit_mac" || key == "wifi_interface" ||
@@ -20,10 +20,10 @@ bool valid_key(const std::string_view key) {
 std::filesystem::path default_state_directory() {
   if (const char *state_home = std::getenv("XDG_STATE_HOME");
       state_home != nullptr && *state_home != '\0')
-    return std::filesystem::path(state_home) / "acp-aa-bridge";
+    return std::filesystem::path(state_home) / "aa2acp";
   if (const char *home = std::getenv("HOME"); home != nullptr && *home != '\0')
-    return std::filesystem::path(home) / ".local" / "state" / "acp-aa-bridge";
-  return std::filesystem::temp_directory_path() / "acp-aa-bridge";
+    return std::filesystem::path(home) / ".local" / "state" / "aa2acp";
+  return std::filesystem::temp_directory_path() / "aa2acp";
 }
 
 std::filesystem::path default_config_path() {
@@ -86,4 +86,4 @@ bool save_config(const std::filesystem::path &path, const Config &config) {
          std::rename(temporary.c_str(), path.c_str()) == 0;
 }
 
-} // namespace acp::bridge
+} // namespace aa2acp::bridge

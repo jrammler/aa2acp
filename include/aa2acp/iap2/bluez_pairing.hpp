@@ -3,7 +3,7 @@
 #include <functional>
 #include <string_view>
 
-namespace acp::iap2 {
+namespace aa2acp::iap2 {
 
 using PairingLogFunction = std::function<void(const std::string &)>;
 
@@ -12,4 +12,4 @@ using PairingLogFunction = std::function<void(const std::string &)>;
 bool ensure_bluez_pairing(std::string_view mac, int timeout_seconds,
                           const PairingLogFunction &log = {});
 
-} // namespace acp::iap2
+} // namespace aa2acp::iap2

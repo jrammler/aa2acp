@@ -1,8 +1,8 @@
-#include "acp/airplay/session.hpp"
-#include "acp/iap2/bluez_pairing.hpp"
-#include "acp/iap2/bootstrap.hpp"
-#include "acp/iap2/carplay_probe.hpp"
-#include "acp/iap2/link_layer.hpp"
+#include "aa2acp/airplay/session.hpp"
+#include "aa2acp/iap2/bluez_pairing.hpp"
+#include "aa2acp/iap2/bootstrap.hpp"
+#include "aa2acp/iap2/carplay_probe.hpp"
+#include "aa2acp/iap2/link_layer.hpp"
 
 #include <bluetooth/bluetooth.h>
 #include <bluetooth/rfcomm.h>
@@ -187,7 +187,8 @@ int main(int argc, char **argv) {
       wifi_interface = argv[++index];
     } else {
       std::cerr
-          << "usage: iap2-bt [--mac MAC] [--channel N] [--timeout SECONDS] "
+          << "usage: aa2acp-iap2-bt [--mac MAC] [--channel N] [--timeout "
+             "SECONDS] "
              "[--bootstrap] [--carplay] [--wifi-config] [--join-wifi] "
              "[--leave-wifi] [--wifi-interface IFACE] [--bridge] [--video "
              "H264_FILE] [--video-socket PATH] [--pairing-store FILE]\n";
@@ -200,7 +201,7 @@ int main(int argc, char **argv) {
       std::cerr << "--leave-wifi requires --wifi-interface\n";
       return 2;
     }
-    return acp::iap2::leave_with_networkmanager(wifi_interface) ? 0 : 1;
+    return aa2acp::iap2::leave_with_networkmanager(wifi_interface) ? 0 : 1;
   }
 
   if (address.empty()) {
@@ -220,7 +221,7 @@ int main(int argc, char **argv) {
   // Every Bluetooth connection has a usable bond: this is an immediate no-op
   // for an existing BlueZ record and performs discovery/pairing only when it
   // is absent.
-  if (!acp::iap2::ensure_bluez_pairing(address, timeout_seconds)) {
+  if (!aa2acp::iap2::ensure_bluez_pairing(address, timeout_seconds)) {
     return 1;
   }
 
@@ -233,9 +234,9 @@ int main(int argc, char **argv) {
   }
   std::cout << "RFCOMM connected to " << address << ':'
             << static_cast<int>(channel) << '\n';
-  acp::iap2::BootstrapSession session;
-  acp::iap2::CarPlayProbe carplay_probe(address);
-  acp::iap2::PhoneLink link(
+  aa2acp::iap2::BootstrapSession session;
+  aa2acp::iap2::CarPlayProbe carplay_probe(address);
+  aa2acp::iap2::PhoneLink link(
       [socket_fd](const std::span<const std::uint8_t> bytes) {
         return send_all(socket_fd, bytes);
       },
@@ -254,9 +255,9 @@ int main(int argc, char **argv) {
   if (join_wifi) {
     carplay_probe.set_wifi_join_handler(
         [&wifi_interface](
-            const acp::iap2::AccessoryWifiConfiguration &configuration) {
-          return acp::iap2::join_with_networkmanager(configuration,
-                                                     wifi_interface);
+            const aa2acp::iap2::AccessoryWifiConfiguration &configuration) {
+          return aa2acp::iap2::join_with_networkmanager(configuration,
+                                                        wifi_interface);
         });
   }
   const auto deadline =
@@ -265,11 +266,11 @@ int main(int argc, char **argv) {
 
   std::array<std::uint8_t, 1024> buffer{};
   while (std::chrono::steady_clock::now() < deadline &&
-         shutdown_requested == 0 && link.state() != acp::iap2::State::Dead &&
+         shutdown_requested == 0 && link.state() != aa2acp::iap2::State::Dead &&
          (!bootstrap ||
           (carplay ? (!carplay_probe.done() && !carplay_probe.failed())
                    : (!session.done() && !session.failed()))) &&
-         (bootstrap || link.state() != acp::iap2::State::Normal)) {
+         (bootstrap || link.state() != aa2acp::iap2::State::Normal)) {
     pollfd descriptor{socket_fd, POLLIN, 0};
     const auto result = poll(&descriptor, 1, 100);
     const auto now = std::chrono::steady_clock::now();
@@ -283,7 +284,7 @@ int main(int argc, char **argv) {
                    now);
     }
     link.tick(now);
-    if (bootstrap && link.state() == acp::iap2::State::Normal &&
+    if (bootstrap && link.state() == aa2acp::iap2::State::Normal &&
         !session.started()) {
       session.begin();
     }
@@ -294,7 +295,7 @@ int main(int argc, char **argv) {
   close(socket_fd);
   if (shutdown_requested != 0) {
     if (join_wifi)
-      acp::iap2::leave_with_networkmanager(wifi_interface);
+      aa2acp::iap2::leave_with_networkmanager(wifi_interface);
     std::cerr << "Bridge: shutdown requested during iAP2 phase\n";
     return 128 + SIGTERM;
   }
@@ -313,7 +314,7 @@ int main(int argc, char **argv) {
         video_socket.empty()
             ? std::shared_ptr<VideoSocketReader>{}
             : std::make_shared<VideoSocketReader>(video_socket);
-    const acp::airplay::SessionOptions options{
+    const aa2acp::airplay::SessionOptions options{
         .host = host,
         .port = static_cast<std::uint16_t>(carplay_probe.airplay_port()),
         .timeout_seconds = timeout_seconds,
@@ -325,10 +326,11 @@ int main(int argc, char **argv) {
         .pairing_store = pairing_store,
         .stop_requested = [] { return shutdown_requested != 0; },
     };
-    const auto result = acp::airplay::run_session(options);
+    const auto result = aa2acp::airplay::run_session(options);
     // The profile and credentials remain in NetworkManager for fast reconnect,
     // but the car AP must not remain the active idle network.
-    const auto left_wifi = acp::iap2::leave_with_networkmanager(wifi_interface);
+    const auto left_wifi =
+        aa2acp::iap2::leave_with_networkmanager(wifi_interface);
     if (shutdown_requested != 0) {
       std::cerr << "Bridge: shutdown requested during AirPlay phase\n";
       return 128 + SIGTERM;
@@ -342,5 +344,5 @@ int main(int argc, char **argv) {
     return carplay_probe.done() ? 0 : 1;
   }
   return bootstrap ? (session.done() ? 0 : 1)
-                   : (link.state() == acp::iap2::State::Normal ? 0 : 1);
+                   : (link.state() == aa2acp::iap2::State::Normal ? 0 : 1);
 }

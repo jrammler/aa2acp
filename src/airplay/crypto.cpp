@@ -1,4 +1,4 @@
-#include "acp/airplay/crypto.hpp"
+#include "aa2acp/airplay/crypto.hpp"
 
 #include <openssl/evp.h>
 #include <openssl/kdf.h>
@@ -6,7 +6,7 @@
 #include <array>
 #include <memory>
 
-namespace acp::airplay {
+namespace aa2acp::airplay {
 namespace {
 
 using PkeyContext = std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)>;
@@ -223,4 +223,4 @@ x25519_shared(const std::span<const std::uint8_t> private_key,
   return shared;
 }
 
-} // namespace acp::airplay
+} // namespace aa2acp::airplay

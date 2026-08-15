@@ -1,7 +1,7 @@
-#include "acp/aa/wired_receiver.hpp"
-#include "acp/bridge/bluez_inventory.hpp"
-#include "acp/bridge/config.hpp"
-#include "acp/bridge/h264_normalizer.hpp"
+#include "aa2acp/aa/wired_receiver.hpp"
+#include "aa2acp/bridge/bluez_inventory.hpp"
+#include "aa2acp/bridge/config.hpp"
+#include "aa2acp/bridge/h264_normalizer.hpp"
 
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -44,7 +44,7 @@ extern char **environ;
 namespace {
 
 struct ManagementSnapshot {
-  std::vector<acp::bridge::BluetoothDevice> bluetooth_devices;
+  std::vector<aa2acp::bridge::BluetoothDevice> bluetooth_devices;
   std::vector<std::string> wifi_interfaces;
   bool show_unnamed_bluetooth_devices{};
   bool bluetooth_scan_running{};
@@ -168,7 +168,7 @@ private:
 };
 
 std::unique_ptr<DaemonLog> start_daemon_log() {
-  const auto directory = acp::bridge::default_state_directory() / "logs";
+  const auto directory = aa2acp::bridge::default_state_directory() / "logs";
   std::error_code error;
   std::filesystem::create_directories(directory, error);
   if (error)
@@ -177,7 +177,7 @@ std::unique_ptr<DaemonLog> start_daemon_log() {
   for (const auto &entry :
        std::filesystem::directory_iterator(directory, error)) {
     if (entry.is_regular_file() && entry.path().extension() == ".log" &&
-        entry.path().filename().string().starts_with("bridge-daemon-"))
+        entry.path().filename().string().starts_with("aa2acp-bridge-daemon-"))
       logs.push_back(entry);
   }
   std::sort(logs.begin(), logs.end(), [](const auto &left, const auto &right) {
@@ -188,8 +188,9 @@ std::unique_ptr<DaemonLog> start_daemon_log() {
   const auto stamp = std::chrono::duration_cast<std::chrono::milliseconds>(
                          std::chrono::system_clock::now().time_since_epoch())
                          .count();
-  const auto path = directory / ("bridge-daemon-" + std::to_string(stamp) +
-                                 "-" + std::to_string(getpid()) + ".log");
+  const auto path =
+      directory / ("aa2acp-bridge-daemon-" + std::to_string(stamp) + "-" +
+                   std::to_string(getpid()) + ".log");
   auto log = std::make_unique<DaemonLog>(path);
   return log->active() ? std::move(log) : nullptr;
 }
@@ -203,7 +204,7 @@ std::string normalized_bluetooth_address(const std::string &value) {
   return normalized;
 }
 
-bool is_unnamed(const acp::bridge::BluetoothDevice &device) {
+bool is_unnamed(const aa2acp::bridge::BluetoothDevice &device) {
   // BlueZ commonly uses the address itself as Alias when no advertised name is
   // available, with either colons or hyphens as separators. Treat that as
   // unnamed rather than displaying the address twice.
@@ -325,13 +326,13 @@ std::vector<std::string> wifi_interfaces() {
 
 void refresh_bluetooth_inventory(ManagementState &state) {
   std::string error;
-  const auto devices = acp::bridge::list_bluez_devices(&error);
+  const auto devices = aa2acp::bridge::list_bluez_devices(&error);
   std::lock_guard lock(state.mutex);
   if (!error.empty()) {
     state.snapshot.bluetooth_error = error;
     return;
   }
-  std::map<std::string, acp::bridge::BluetoothDevice> merged;
+  std::map<std::string, aa2acp::bridge::BluetoothDevice> merged;
   for (const auto &device : state.snapshot.bluetooth_devices)
     merged.emplace(device.address, device);
   for (const auto &device : devices)
@@ -373,10 +374,10 @@ void run_bluetooth_scan(ManagementState &state) {
     std::cout << "Management Bluetooth: " << message << '\n';
   };
   set_phase(2, "LE discovery in progress");
-  acp::bridge::discover_bluez_devices("le", 30, log);
+  aa2acp::bridge::discover_bluez_devices("le", 30, log);
   refresh_bluetooth_inventory(state);
   set_phase(3, "classic discovery in progress");
-  acp::bridge::discover_bluez_devices("bredr", 15, log);
+  aa2acp::bridge::discover_bluez_devices("bredr", 15, log);
   refresh_bluetooth_inventory(state);
   {
     std::lock_guard lock(state.mutex);
@@ -387,12 +388,12 @@ void run_bluetooth_scan(ManagementState &state) {
   std::cout << "Management Bluetooth: discovery finished\n";
 }
 
-std::string page(const acp::bridge::Config &config,
+std::string page(const aa2acp::bridge::Config &config,
                  const ManagementSnapshot &snapshot, const bool saved) {
   std::string output =
       "<!doctype html><html><head><meta name=\"viewport\" "
       "content=\"width=device-width,initial-scale=1\">"
-      "<title>ACP-AA Bridge</title><style>body{font:16px "
+      "<title>AA2ACP</title><style>body{font:16px "
       "sans-serif;max-width:38rem;margin:3rem auto;padding:0 1rem}"
       "label,select,input:not([type=checkbox]){display:block;width:100%;box-"
       "sizing:border-box;"
@@ -404,7 +405,7 @@ std::string page(const acp::bridge::Config &config,
       "\" data-scan-phase=\"" +
       std::to_string(snapshot.bluetooth_scan_phase_id) +
       "\">"
-      "<h1>ACP-AA Bridge</h1><p>Configure the pinned CarPlay head unit.</p>";
+      "<h1>AA2ACP</h1><p>Configure the pinned CarPlay head unit.</p>";
   if (saved)
     output += "<p class=status>Configuration saved.</p>";
   if (!snapshot.bluetooth_error.empty())
@@ -480,7 +481,7 @@ class VideoSocketForwarder {
 public:
   explicit VideoSocketForwarder(const std::filesystem::path &path)
       : path_(path) {
-    if (const char *dump_path = std::getenv("ACP_AA_BRIDGE_DUMP_H264");
+    if (const char *dump_path = std::getenv("AA2ACP_DUMP_H264");
         dump_path != nullptr && *dump_path != '\0') {
       dump_.open(dump_path, std::ios::binary | std::ios::trunc);
       if (dump_)
@@ -708,7 +709,7 @@ void stop_carplay_process_group(const pid_t child, int *status) {
 }
 
 int run_carplay_session(const char *program_path,
-                        const acp::bridge::Config &config,
+                        const aa2acp::bridge::Config &config,
                         const std::stop_token stop,
                         const std::atomic_bool &phone_disconnected,
                         std::atomic<pid_t> &active_child,
@@ -718,7 +719,7 @@ int run_carplay_session(const char *program_path,
     return 2;
   }
   const auto executable =
-      std::filesystem::path(program_path).parent_path() / "iap2-bt";
+      std::filesystem::path(program_path).parent_path() / "aa2acp-iap2-bt";
   std::vector<std::string> arguments{executable.string(),
                                      "--bridge",
                                      "--mac",
@@ -806,11 +807,11 @@ int run_carplay_session(const char *program_path,
 
 int run_wired_android_auto_receiver(
     const char *program_path,
-    const std::function<acp::bridge::Config()> &config_provider,
+    const std::function<aa2acp::bridge::Config()> &config_provider,
     const std::stop_token stop) {
   const auto video_socket =
       std::filesystem::path("/tmp") /
-      ("acp-aa-bridge-video-" + std::to_string(getpid()) + ".sock");
+      ("aa2acp-video-" + std::to_string(getpid()) + ".sock");
   VideoSocketForwarder forwarder(video_socket);
   if (!forwarder.ready()) {
     std::cerr << "Bridge daemon: unable to listen for Android Auto video\n";
@@ -819,33 +820,33 @@ int run_wired_android_auto_receiver(
   std::atomic_bool carplay_start_requested{};
   std::atomic_bool phone_disconnected{};
   std::atomic<pid_t> active_carplay_child{-1};
-  acp::bridge::H264Normalizer h264_normalizer;
-  acp::aa::WiredReceiver receiver(
+  aa2acp::bridge::H264Normalizer h264_normalizer;
+  aa2acp::aa::WiredReceiver receiver(
       [&carplay_start_requested, &phone_disconnected,
        &active_carplay_child](const auto &event) {
         switch (event.type) {
-        case acp::aa::WiredReceiverEventType::waiting_for_phone:
+        case aa2acp::aa::WiredReceiverEventType::waiting_for_phone:
           std::cout << "Bridge daemon: Android Auto USB idle: " << event.detail
                     << '\n';
           break;
-        case acp::aa::WiredReceiverEventType::aoap_transport_ready:
+        case aa2acp::aa::WiredReceiverEventType::aoap_transport_ready:
           phone_disconnected = false;
           std::cout << "Bridge daemon: Android Auto USB transport ready: "
                     << event.detail << '\n';
           break;
-        case acp::aa::WiredReceiverEventType::control_session_ready:
+        case aa2acp::aa::WiredReceiverEventType::control_session_ready:
           std::cout << "Bridge daemon: Android Auto control session ready: "
                     << event.detail << '\n';
           break;
-        case acp::aa::WiredReceiverEventType::video_stream_configured:
+        case aa2acp::aa::WiredReceiverEventType::video_stream_configured:
           std::cout << "Bridge daemon: Android Auto video configured: "
                     << event.detail << '\n';
           carplay_start_requested = true;
           break;
-        case acp::aa::WiredReceiverEventType::video_stream_started:
+        case aa2acp::aa::WiredReceiverEventType::video_stream_started:
           std::cout << "Bridge daemon: Android Auto video stream started\n";
           break;
-        case acp::aa::WiredReceiverEventType::disconnected:
+        case aa2acp::aa::WiredReceiverEventType::disconnected:
           std::cout << "Bridge daemon: Android Auto USB disconnected\n";
           phone_disconnected = true;
           if (const auto child = active_carplay_child.load(); child > 0) {
@@ -854,7 +855,7 @@ int run_wired_android_auto_receiver(
             kill(-child, SIGTERM);
           }
           break;
-        case acp::aa::WiredReceiverEventType::error:
+        case aa2acp::aa::WiredReceiverEventType::error:
           std::cerr << "Bridge daemon: " << event.detail << '\n';
           break;
         }
@@ -916,7 +917,7 @@ int main(int argc, char **argv) {
   auto daemon_log = start_daemon_log();
   if (daemon_log)
     std::cout << "Bridge daemon: logging to " << daemon_log->path() << '\n';
-  std::filesystem::path config_path = acp::bridge::default_config_path();
+  std::filesystem::path config_path = aa2acp::bridge::default_config_path();
   int port = 8080;
   for (int index = 1; index < argc; ++index) {
     const std::string argument = argv[index];
@@ -925,15 +926,18 @@ int main(int argc, char **argv) {
     else if (argument == "--port" && index + 1 < argc)
       port = std::stoi(argv[++index]);
     else {
-      std::cerr << "usage: bridge-daemon [--config PATH] [--port PORT]\n";
+      std::cerr
+          << "usage: aa2acp-bridge-daemon [--config PATH] [--port PORT]\n";
       return 2;
     }
   }
-  auto config = acp::bridge::load_config(config_path)
-                    .value_or(acp::bridge::Config{
-                        "", "", acp::bridge::default_airplay_pairing_store()});
+  auto config =
+      aa2acp::bridge::load_config(config_path)
+          .value_or(aa2acp::bridge::Config{
+              "", "", aa2acp::bridge::default_airplay_pairing_store()});
   if (config.airplay_pairing_store.empty())
-    config.airplay_pairing_store = acp::bridge::default_airplay_pairing_store();
+    config.airplay_pairing_store =
+        aa2acp::bridge::default_airplay_pairing_store();
   std::mutex config_mutex;
   refresh_bluetooth_inventory(management_state);
   refresh_wifi_inventory(management_state);
@@ -1093,7 +1097,7 @@ int main(int argc, char **argv) {
                        : manual && !manual->empty()   ? *manual
                                                       : previous.head_unit_mac;
       if (wifi && !mac.empty() &&
-          acp::bridge::save_config(
+          aa2acp::bridge::save_config(
               config_path, {mac, *wifi, previous.airplay_pairing_store})) {
         {
           std::lock_guard lock(config_mutex);

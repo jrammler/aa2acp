@@ -1,10 +1,10 @@
-#include "acp/airplay/pairing_store.hpp"
+#include "aa2acp/airplay/pairing_store.hpp"
 
 #include <array>
 #include <fstream>
 #include <sys/stat.h>
 
-namespace acp::airplay {
+namespace aa2acp::airplay {
 namespace {
 
 constexpr std::array<char, 8> kMagic{'A', 'C', 'P', 'P', 'A', 'I', 'R', '1'};
@@ -86,4 +86,4 @@ bool save_pairing_record(const std::filesystem::path &path,
   return true;
 }
 
-} // namespace acp::airplay
+} // namespace aa2acp::airplay

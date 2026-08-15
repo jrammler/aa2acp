@@ -9,7 +9,7 @@
 #include <span>
 #include <vector>
 
-namespace acp::iap2 {
+namespace aa2acp::iap2 {
 
 constexpr std::array<std::uint8_t, 6> kMarker{0xff, 0x55, 0x02,
                                               0x00, 0xee, 0x10};
@@ -98,4 +98,4 @@ private:
   std::chrono::steady_clock::time_point next_syn_{};
 };
 
-} // namespace acp::iap2
+} // namespace aa2acp::iap2
