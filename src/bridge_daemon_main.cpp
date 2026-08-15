@@ -34,6 +34,13 @@ std::map<std::string, std::string> scanned_bluetooth_devices;
 constexpr char kPage[] =
     R"HTML(<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>ACP-AA Bridge</title><style>body{font:16px sans-serif;max-width:34rem;margin:3rem auto;padding:0 1rem}label,select,input{display:block;width:100%;box-sizing:border-box;margin:.5rem 0}button{padding:.6rem 1rem}</style><h1>ACP-AA Bridge</h1><p>Configure the pinned CarPlay head unit.</p><form><label>Head-unit Bluetooth device<select id="head_unit_mac" required></select></label><button type="button" id="scan">Scan for devices</button><label>Manual MAC fallback<input id="manual_mac" placeholder="[redacted-device-address]"></label><label>Wi-Fi interface<select id="wifi_interface" required></select></label><button>Save</button></form><p id="result"></p><script>const add=(id,items,current,bt)=>{let s=document.querySelector(id);s.innerHTML='';items.forEach(x=>{let [value,name]=bt?x.split('|'): [x,x],o=new Option(bt?name+' — '+value:name,value);if(value===current)o.selected=true;s.add(o)});if(!s.options.length)s.add(new Option('No devices found',''))};const devices=async(current=head_unit_mac.value)=>add('#head_unit_mac',await fetch('/api/bluetooth-devices').then(r=>r.json()),current,true);Promise.all([fetch('/api/config').then(r=>r.json()),fetch('/api/wifi-interfaces').then(r=>r.json())]).then(async([c,w])=>{manual_mac.value=c.head_unit_mac;await devices(c.head_unit_mac);add('#wifi_interface',w,c.wifi_interface,false)});scan.onclick=async()=>{scan.disabled=true;result.textContent='Scanning…';await fetch('/api/bluetooth-scan');for(let i=0;i<24;i++){await new Promise(r=>setTimeout(r,2000));await devices();if(!(await fetch('/api/bluetooth-scan-status').then(r=>r.json())).running)break}result.textContent='Scan complete.';scan.disabled=false};document.querySelector('form').onsubmit=async e=>{e.preventDefault();let c={head_unit_mac:manual_mac.value||head_unit_mac.value,wifi_interface:wifi_interface.value};let r=await fetch('/api/config',{method:'PUT',body:JSON.stringify(c)});result.textContent=r.ok?'Saved.':'Save failed.'}</script>)HTML";
 
+constexpr char kPageExtension[] = R"HTML(<script>
+const keepConfigured=()=>{if(!head_unit_mac.querySelector('option[value=""]'))head_unit_mac.add(new Option('Keep configured device',''),0)};
+setInterval(keepConfigured,250);keepConfigured();
+head_unit_mac.onchange=()=>{if(head_unit_mac.value)manual_mac.value=''};
+document.querySelector('form').onsubmit=async e=>{e.preventDefault();let c={head_unit_mac:manual_mac.value||head_unit_mac.value,wifi_interface:wifi_interface.value};let r=await fetch('/api/config',{method:'PUT',body:JSON.stringify(c)});result.textContent=r.ok?'Saved.':'Save failed.'};
+</script>)HTML";
+
 std::string json(const acp::bridge::Config &config) {
   // Values are validated as single-line key/value data by the config store.
   return "{\"head_unit_mac\":\"" + config.head_unit_mac +
@@ -299,7 +306,8 @@ int main(int argc, char **argv) {
     const auto body =
         split == std::string::npos ? "" : request.substr(split + 4);
     if (request.starts_with("GET / "))
-      send_response(client, 200, "text/html; charset=utf-8", kPage);
+      send_response(client, 200, "text/html; charset=utf-8",
+                    std::string(kPage) + kPageExtension);
     else if (request.starts_with("GET /api/config "))
       send_response(client, 200, "application/json", json(config));
     else if (request.starts_with("GET /api/bluetooth-devices ")) {
