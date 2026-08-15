@@ -19,6 +19,8 @@ const char *event_name(const acp::aa::WiredReceiverEventType type) {
     return "ready";
   case acp::aa::WiredReceiverEventType::control_session_ready:
     return "session";
+  case acp::aa::WiredReceiverEventType::video_stream_started:
+    return "video";
   case acp::aa::WiredReceiverEventType::disconnected:
     return "disconnected";
   case acp::aa::WiredReceiverEventType::error:

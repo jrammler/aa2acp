@@ -2,7 +2,9 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace acp::airplay {
 
@@ -14,6 +16,9 @@ struct SessionOptions {
   std::uint16_t port{7000};
   int timeout_seconds{10};
   std::string video_path;
+  // Supplies one Annex-B H.264 access unit at a time. Returning std::nullopt
+  // ends the live stream. The callback may block while waiting for a frame.
+  std::function<std::optional<std::vector<std::uint8_t>>()> next_video_frame;
   std::string pairing_store;
   std::function<bool()> stop_requested;
 };

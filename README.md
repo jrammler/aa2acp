@@ -20,7 +20,13 @@ flow control for those services.
 This was verified with the development Android phone on 2026-08-15: Android
 Auto accepted the head unit, displayed its welcome flow, opened the H.264 video
 channel, selected 1280×720@30 Baseline H.264, and started the video stream.
-`bridge-daemon --run` owns that same receiver in service mode.
+`bridge-daemon --run` is now the first live video bridge path: once Android
+Auto starts H.264 projection, it starts an authenticated wireless CarPlay
+session, joins test head unit's AP, and forwards the phone's Annex-B H.264 access units
+through the established encrypted AirPlay data stream. A bounded local queue
+keeps USB processing independent from CarPlay setup; it retains SPS/PPS so a
+late CarPlay connection still receives the required video configuration.
+Audio and head-unit input forwarding are not implemented yet.
 `--run-carplay` preserves the old direct-CarPlay diagnostic mode.
 
 The process needs read/write access to the phone's USB device node. Install the
@@ -41,14 +47,14 @@ is an appliance-image security decision, not a developer-machine default.
 
 ```bash
 nix develop --command ./pi-bridge/build/android-auto-usb
-# Service-mode receiver; stop with SIGTERM/SIGINT:
+# Live wired Android Auto → CarPlay video bridge; stop with SIGTERM/SIGINT:
 nix develop --command ./pi-bridge/build/bridge-daemon --run
 ```
 
-The receiver is deliberately not presented as a working bridge yet. It accepts
-and acknowledges Android Auto projection, but currently discards the incoming
-video/audio and does not forward CarPlay input. The next milestone connects
-those streams and controls to the established CarPlay session.
+The daemon uses the configured head-unit MAC, Wi-Fi interface, and persistent
+AirPlay pairing record. It asks BlueZ to pair if needed, then preserves the
+BlueZ/NetworkManager records for fast reconnect while disconnecting test head unit's AP
+after the CarPlay session ends.
 
 `iap2-tcp` establishes the phone-side iAP2 link layer over TCP. It repeatedly
 sends the iAP2 marker while detecting the accessory, negotiates LSP with

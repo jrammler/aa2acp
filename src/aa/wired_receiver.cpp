@@ -626,7 +626,7 @@ public:
       const aap_protobuf::service::media::shared::message::Start &indication)
       override {
     video_session_id_ = indication.session_id();
-    callback_({WiredReceiverEventType::control_session_ready,
+    callback_({WiredReceiverEventType::video_stream_started,
                "Android Auto video stream started"});
     receive_video_next();
   }

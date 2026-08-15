@@ -16,6 +16,7 @@ enum class WiredReceiverEventType {
   waiting_for_phone,
   aoap_transport_ready,
   control_session_ready,
+  video_stream_started,
   disconnected,
   error,
 };

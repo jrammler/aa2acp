@@ -10,11 +10,13 @@
 #include <csignal>
 #include <poll.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 #include <array>
 #include <chrono>
 #include <iostream>
+#include <memory>
 #include <string>
 
 namespace {
@@ -54,6 +56,77 @@ int connect_rfcomm(const std::string &address, const std::uint8_t channel) {
   return socket_fd;
 }
 
+int connect_unix(const std::string &path) {
+  if (path.size() >= sizeof(sockaddr_un::sun_path))
+    return -1;
+  const auto socket_fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+  if (socket_fd < 0)
+    return -1;
+  sockaddr_un address{};
+  address.sun_family = AF_UNIX;
+  std::copy(path.begin(), path.end(), address.sun_path);
+  if (connect(socket_fd, reinterpret_cast<sockaddr *>(&address),
+              sizeof(address)) != 0) {
+    close(socket_fd);
+    return -1;
+  }
+  return socket_fd;
+}
+
+bool receive_all(const int socket_fd, std::span<std::uint8_t> bytes) {
+  std::size_t offset{};
+  while (offset < bytes.size() && shutdown_requested == 0) {
+    pollfd descriptor{socket_fd, POLLIN, 0};
+    if (poll(&descriptor, 1, 100) <= 0)
+      continue;
+    const auto count =
+        recv(socket_fd, bytes.data() + offset, bytes.size() - offset, 0);
+    if (count <= 0)
+      return false;
+    offset += static_cast<std::size_t>(count);
+  }
+  return offset == bytes.size();
+}
+
+class VideoSocketReader {
+public:
+  explicit VideoSocketReader(std::string path) : path_(std::move(path)) {}
+  ~VideoSocketReader() {
+    if (socket_fd_ >= 0)
+      close(socket_fd_);
+  }
+
+  std::optional<std::vector<std::uint8_t>> next() {
+    if (socket_fd_ < 0) {
+      socket_fd_ = connect_unix(path_);
+      if (socket_fd_ < 0) {
+        std::cerr << "Unable to connect to Android Auto video socket " << path_
+                  << '\n';
+        return std::nullopt;
+      }
+      std::cout << "Bridge: connected to Android Auto video source\n";
+    }
+    std::array<std::uint8_t, 4> header{};
+    if (!receive_all(socket_fd_, header))
+      return std::nullopt;
+    const auto size = (static_cast<std::size_t>(header[0]) << 24) |
+                      (static_cast<std::size_t>(header[1]) << 16) |
+                      (static_cast<std::size_t>(header[2]) << 8) | header[3];
+    if (size == 0 || size > 4 * 1024 * 1024) {
+      std::cerr << "Invalid Android Auto H.264 access-unit size " << size
+                << '\n';
+      return std::nullopt;
+    }
+    std::vector<std::uint8_t> frame(size);
+    return receive_all(socket_fd_, frame) ? std::optional(std::move(frame))
+                                          : std::nullopt;
+  }
+
+private:
+  std::string path_;
+  int socket_fd_{-1};
+};
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -68,6 +141,7 @@ int main(int argc, char **argv) {
   bool leave_wifi = false;
   bool bridge = false;
   std::string video_path;
+  std::string video_socket;
   std::string pairing_store;
   std::string wifi_interface = "wlp15s0";
   for (int index = 1; index < argc; ++index) {
@@ -104,6 +178,8 @@ int main(int argc, char **argv) {
       bridge = true;
     } else if (argument == "--video" && index + 1 < argc) {
       video_path = argv[++index];
+    } else if (argument == "--video-socket" && index + 1 < argc) {
+      video_socket = argv[++index];
     } else if (argument == "--pairing-store" && index + 1 < argc) {
       pairing_store = argv[++index];
     } else if (argument == "--wifi-interface" && index + 1 < argc) {
@@ -113,7 +189,7 @@ int main(int argc, char **argv) {
           << "usage: iap2-bt [--mac MAC] [--channel N] [--timeout SECONDS] "
              "[--pair] [--bootstrap] [--carplay] [--wifi-config] [--join-wifi] "
              "[--leave-wifi] [--wifi-interface IFACE] [--bridge] [--video "
-             "H264_FILE] [--pairing-store FILE]\n";
+             "H264_FILE] [--video-socket PATH] [--pairing-store FILE]\n";
       return 2;
     }
   }
@@ -216,11 +292,19 @@ int main(int argc, char **argv) {
     }
     std::cout << "Bridge: starting AirPlay on " << host << ':'
               << carplay_probe.airplay_port() << '\n';
+    const auto live_video =
+        video_socket.empty()
+            ? std::shared_ptr<VideoSocketReader>{}
+            : std::make_shared<VideoSocketReader>(video_socket);
     const acp::airplay::SessionOptions options{
         .host = host,
         .port = static_cast<std::uint16_t>(carplay_probe.airplay_port()),
         .timeout_seconds = timeout_seconds,
         .video_path = video_path,
+        .next_video_frame =
+            live_video
+                ? [live_video] { return live_video->next(); }
+                : std::function<std::optional<std::vector<std::uint8_t>>()>{},
         .pairing_store = pairing_store,
         .stop_requested = [] { return shutdown_requested != 0; },
     };

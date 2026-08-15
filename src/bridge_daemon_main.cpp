@@ -9,6 +9,7 @@
 #include <spawn.h>
 #include <sys/signalfd.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -17,6 +18,8 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <condition_variable>
+#include <deque>
 #include <filesystem>
 #include <iostream>
 #include <map>
@@ -326,9 +329,176 @@ std::string page(const acp::bridge::Config &config,
   return output;
 }
 
+class VideoSocketForwarder {
+public:
+  explicit VideoSocketForwarder(const std::filesystem::path &path)
+      : path_(path) {
+    listener_ = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (listener_ < 0 ||
+        path_.string().size() >= sizeof(sockaddr_un::sun_path)) {
+      close_listener();
+      return;
+    }
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    const auto value = path_.string();
+    std::copy(value.begin(), value.end(), address.sun_path);
+    unlink(value.c_str());
+    if (bind(listener_, reinterpret_cast<sockaddr *>(&address),
+             sizeof(address)) != 0 ||
+        listen(listener_, 1) != 0) {
+      close_listener();
+      unlink(value.c_str());
+      return;
+    }
+    worker_ = std::jthread([this](std::stop_token stop) { forward(stop); });
+  }
+
+  ~VideoSocketForwarder() {
+    worker_.request_stop();
+    close_listener();
+    frames_ready_.notify_all();
+    if (!path_.empty())
+      unlink(path_.c_str());
+  }
+
+  bool ready() const { return listener_ >= 0; }
+
+  void push(const std::span<const std::uint8_t> access_unit) {
+    Bytes frame(access_unit.begin(), access_unit.end());
+    {
+      std::lock_guard lock(mutex_);
+      for (const auto &nalu : nalus(frame)) {
+        if (nalu.empty())
+          continue;
+        const auto type = nalu[0] & 0x1f;
+        if (type == 7)
+          sps_ = nalu;
+        else if (type == 8)
+          pps_ = nalu;
+      }
+      if (frames_.size() == 120)
+        frames_.pop_front();
+      frames_.push_back(std::move(frame));
+    }
+    frames_ready_.notify_one();
+  }
+
+private:
+  using Bytes = std::vector<std::uint8_t>;
+
+  static std::vector<Bytes> nalus(const Bytes &input) {
+    std::vector<Bytes> result;
+    for (std::size_t offset = 0; offset + 3 <= input.size();) {
+      const auto three = input[offset] == 0 && input[offset + 1] == 0 &&
+                         input[offset + 2] == 1;
+      const auto four = offset + 4 <= input.size() && input[offset] == 0 &&
+                        input[offset + 1] == 0 && input[offset + 2] == 0 &&
+                        input[offset + 3] == 1;
+      if (!three && !four) {
+        ++offset;
+        continue;
+      }
+      const auto start = offset + (four ? 4U : 3U);
+      auto end = start;
+      while (end + 3 <= input.size()) {
+        if ((end + 4 <= input.size() && input[end] == 0 &&
+             input[end + 1] == 0 && input[end + 2] == 0 &&
+             input[end + 3] == 1) ||
+            (input[end] == 0 && input[end + 1] == 0 && input[end + 2] == 1))
+          break;
+        ++end;
+      }
+      if (start < end)
+        result.emplace_back(input.begin() + static_cast<std::ptrdiff_t>(start),
+                            input.begin() + static_cast<std::ptrdiff_t>(end));
+      offset = end;
+    }
+    return result;
+  }
+
+  static bool send_all(const int socket_fd,
+                       const std::span<const std::uint8_t> bytes) {
+    for (std::size_t offset = 0; offset < bytes.size();) {
+      const auto count = send(socket_fd, bytes.data() + offset,
+                              bytes.size() - offset, MSG_NOSIGNAL);
+      if (count <= 0)
+        return false;
+      offset += static_cast<std::size_t>(count);
+    }
+    return true;
+  }
+
+  static bool send_frame(const int socket_fd, const Bytes &frame) {
+    const auto size = frame.size();
+    const std::array<std::uint8_t, 4> header{
+        static_cast<std::uint8_t>(size >> 24),
+        static_cast<std::uint8_t>(size >> 16),
+        static_cast<std::uint8_t>(size >> 8), static_cast<std::uint8_t>(size)};
+    return send_all(socket_fd, header) && send_all(socket_fd, frame);
+  }
+
+  void forward(const std::stop_token stop) {
+    while (!stop.stop_requested()) {
+      pollfd descriptor{listener_, POLLIN, 0};
+      if (poll(&descriptor, 1, 100) <= 0 || (descriptor.revents & POLLIN) == 0)
+        continue;
+      const auto client = accept4(listener_, nullptr, nullptr, SOCK_CLOEXEC);
+      if (client < 0)
+        continue;
+      Bytes config;
+      {
+        std::lock_guard lock(mutex_);
+        if (!sps_.empty() && !pps_.empty()) {
+          config = {0, 0, 0, 1};
+          config.insert(config.end(), sps_.begin(), sps_.end());
+          config.insert(config.end(), {0, 0, 0, 1});
+          config.insert(config.end(), pps_.begin(), pps_.end());
+        }
+      }
+      if (!config.empty() && !send_frame(client, config)) {
+        close(client);
+        continue;
+      }
+      while (!stop.stop_requested()) {
+        Bytes frame;
+        {
+          std::unique_lock lock(mutex_);
+          frames_ready_.wait_for(lock, std::chrono::milliseconds(100), [&] {
+            return stop.stop_requested() || !frames_.empty();
+          });
+          if (frames_.empty())
+            continue;
+          frame = std::move(frames_.front());
+          frames_.pop_front();
+        }
+        if (!send_frame(client, frame))
+          break;
+      }
+      close(client);
+    }
+  }
+
+  void close_listener() {
+    if (listener_ >= 0) {
+      close(listener_);
+      listener_ = -1;
+    }
+  }
+
+  std::filesystem::path path_;
+  int listener_{-1};
+  std::jthread worker_;
+  std::mutex mutex_;
+  std::condition_variable frames_ready_;
+  std::deque<Bytes> frames_;
+  Bytes sps_;
+  Bytes pps_;
+};
+
 int run_carplay_session(const char *program_path,
-                        const acp::bridge::Config &config,
-                        const int signal_fd) {
+                        const acp::bridge::Config &config, const int signal_fd,
+                        const std::string &video_socket = {}) {
   if (config.head_unit_mac.empty()) {
     std::cerr << "Bridge daemon: configure a head-unit MAC first\n";
     return 2;
@@ -337,6 +507,7 @@ int run_carplay_session(const char *program_path,
       std::filesystem::path(program_path).parent_path() / "iap2-bt";
   std::vector<std::string> arguments{executable.string(),
                                      "--bridge",
+                                     "--pair",
                                      "--mac",
                                      config.head_unit_mac,
                                      "--wifi-interface",
@@ -345,6 +516,10 @@ int run_carplay_session(const char *program_path,
                                      config.airplay_pairing_store.string(),
                                      "--timeout",
                                      "60"};
+  if (!video_socket.empty()) {
+    arguments.push_back("--video-socket");
+    arguments.push_back(video_socket);
+  }
   std::vector<char *> argv;
   for (auto &argument : arguments)
     argv.push_back(argument.data());
@@ -374,29 +549,52 @@ int run_carplay_session(const char *program_path,
   }
 }
 
-int run_wired_android_auto_receiver(const int signal_fd) {
-  acp::aa::WiredReceiver receiver([](const auto &event) {
-    switch (event.type) {
-    case acp::aa::WiredReceiverEventType::waiting_for_phone:
-      std::cout << "Bridge daemon: Android Auto USB idle: " << event.detail
-                << '\n';
-      break;
-    case acp::aa::WiredReceiverEventType::aoap_transport_ready:
-      std::cout << "Bridge daemon: Android Auto USB transport ready: "
-                << event.detail << '\n';
-      break;
-    case acp::aa::WiredReceiverEventType::control_session_ready:
-      std::cout << "Bridge daemon: Android Auto control session ready: "
-                << event.detail << '\n';
-      break;
-    case acp::aa::WiredReceiverEventType::disconnected:
-      std::cout << "Bridge daemon: Android Auto USB disconnected\n";
-      break;
-    case acp::aa::WiredReceiverEventType::error:
-      std::cerr << "Bridge daemon: " << event.detail << '\n';
-      break;
-    }
-  });
+int run_wired_android_auto_receiver(const char *program_path,
+                                    const acp::bridge::Config &config,
+                                    const int signal_fd) {
+  if (config.head_unit_mac.empty()) {
+    std::cerr << "Bridge daemon: configure a head-unit MAC first\n";
+    return 2;
+  }
+  const auto video_socket =
+      std::filesystem::path("/tmp") /
+      ("acp-aa-bridge-video-" + std::to_string(getpid()) + ".sock");
+  VideoSocketForwarder forwarder(video_socket);
+  if (!forwarder.ready()) {
+    std::cerr << "Bridge daemon: unable to listen for Android Auto video\n";
+    return 1;
+  }
+  std::atomic_bool carplay_start_requested{};
+  acp::aa::WiredReceiver receiver(
+      [&carplay_start_requested](const auto &event) {
+        switch (event.type) {
+        case acp::aa::WiredReceiverEventType::waiting_for_phone:
+          std::cout << "Bridge daemon: Android Auto USB idle: " << event.detail
+                    << '\n';
+          break;
+        case acp::aa::WiredReceiverEventType::aoap_transport_ready:
+          std::cout << "Bridge daemon: Android Auto USB transport ready: "
+                    << event.detail << '\n';
+          break;
+        case acp::aa::WiredReceiverEventType::control_session_ready:
+          std::cout << "Bridge daemon: Android Auto control session ready: "
+                    << event.detail << '\n';
+          break;
+        case acp::aa::WiredReceiverEventType::video_stream_started:
+          std::cout << "Bridge daemon: Android Auto video stream started\n";
+          carplay_start_requested = true;
+          break;
+        case acp::aa::WiredReceiverEventType::disconnected:
+          std::cout << "Bridge daemon: Android Auto USB disconnected\n";
+          break;
+        case acp::aa::WiredReceiverEventType::error:
+          std::cerr << "Bridge daemon: " << event.detail << '\n';
+          break;
+        }
+      },
+      [&forwarder](const std::span<const std::uint8_t> frame) {
+        forwarder.push(frame);
+      });
   std::string error;
   if (!receiver.start(&error)) {
     std::cerr << "Bridge daemon: unable to start Android Auto USB receiver: "
@@ -406,12 +604,24 @@ int run_wired_android_auto_receiver(const int signal_fd) {
   std::cout << "Bridge daemon: wired Android Auto receiver started\n";
   for (;;) {
     pollfd signal_poll{signal_fd, POLLIN, 0};
-    if (poll(&signal_poll, 1, -1) <= 0 || (signal_poll.revents & POLLIN) == 0)
+    if (poll(&signal_poll, 1, 100) > 0 && (signal_poll.revents & POLLIN) != 0) {
+      signalfd_siginfo signal_info{};
+      if (read(signal_fd, &signal_info, sizeof(signal_info)) ==
+          static_cast<ssize_t>(sizeof(signal_info)))
+        break;
+    }
+    if (!carplay_start_requested.exchange(false))
       continue;
-    signalfd_siginfo signal_info{};
-    if (read(signal_fd, &signal_info, sizeof(signal_info)) ==
-        static_cast<ssize_t>(sizeof(signal_info)))
+    std::cout << "Bridge daemon: starting CarPlay for Android Auto video\n";
+    const auto result =
+        run_carplay_session(program_path, config, signal_fd, video_socket);
+    if (result == 128 + SIGTERM)
       break;
+    if (result != 0)
+      std::cerr << "Bridge daemon: CarPlay video session ended with " << result
+                << '\n';
+    else
+      std::cout << "Bridge daemon: CarPlay video session ended\n";
   }
   std::cout << "Bridge daemon: stopping wired Android Auto receiver\n";
   receiver.stop();
@@ -468,7 +678,8 @@ int main(int argc, char **argv) {
     return 1;
   }
   if (run_session) {
-    const auto result = run_wired_android_auto_receiver(signal_fd);
+    const auto result =
+        run_wired_android_auto_receiver(argv[0], config, signal_fd);
     close(signal_fd);
     return result;
   }

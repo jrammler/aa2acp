@@ -148,6 +148,40 @@ std::vector<acp::airplay::Bytes> h264_nalus(const std::string &path) {
   return result;
 }
 
+std::vector<acp::airplay::Bytes>
+h264_nalus(const std::span<const std::uint8_t> input) {
+  std::vector<acp::airplay::Bytes> result;
+  for (std::size_t offset = 0; offset + 3 <= input.size();) {
+    std::size_t start_code = 0;
+    if (offset + 4 <= input.size() && input[offset] == 0 &&
+        input[offset + 1] == 0 && input[offset + 2] == 0 &&
+        input[offset + 3] == 1) {
+      start_code = 4;
+    } else if (input[offset] == 0 && input[offset + 1] == 0 &&
+               input[offset + 2] == 1) {
+      start_code = 3;
+    }
+    if (start_code == 0) {
+      ++offset;
+      continue;
+    }
+    const auto start = offset + start_code;
+    auto end = start;
+    while (end + 3 <= input.size()) {
+      if ((end + 4 <= input.size() && input[end] == 0 && input[end + 1] == 0 &&
+           input[end + 2] == 0 && input[end + 3] == 1) ||
+          (input[end] == 0 && input[end + 1] == 0 && input[end + 2] == 1))
+        break;
+      ++end;
+    }
+    if (start < end)
+      result.emplace_back(input.begin() + static_cast<std::ptrdiff_t>(start),
+                          input.begin() + static_cast<std::ptrdiff_t>(end));
+    offset = end;
+  }
+  return result;
+}
+
 std::optional<acp::airplay::Bytes>
 avcc_config(const std::vector<acp::airplay::Bytes> &nalus) {
   const auto sps =
@@ -695,16 +729,41 @@ int acp::airplay::run_session(const SessionOptions &options) {
     return 1;
   }
   std::cout << "AirPlay: encrypted RECORD accepted\n";
-  if (video_path.empty()) {
+  if (video_path.empty() && !options.next_video_frame) {
     close(socket_fd);
     return 0;
   }
-  const auto nalus = h264_nalus(video_path);
-  const auto config = avcc_config(nalus);
-  if (!config) {
-    std::cerr << "Unable to parse H.264 SPS/PPS from " << video_path << '\n';
-    close(socket_fd);
-    return 1;
+
+  std::vector<acp::airplay::Bytes> nalus;
+  if (!video_path.empty())
+    nalus = h264_nalus(video_path);
+
+  // A live Android Auto stream starts with an Annex-B codec configuration.
+  // Wait for it before opening the AirPlay data channel: CarPlay requires the
+  // AVCC configuration to be its first data-stream payload.
+  std::optional<acp::airplay::Bytes> config;
+  std::size_t next_nalu = 0;
+  while (!config) {
+    config = avcc_config(nalus);
+    if (config)
+      break;
+    if (!options.next_video_frame) {
+      std::cerr << "Unable to parse H.264 SPS/PPS from " << video_path << '\n';
+      close(socket_fd);
+      return 1;
+    }
+    if (options.stop_requested && options.stop_requested()) {
+      close(socket_fd);
+      return 1;
+    }
+    const auto access_unit = options.next_video_frame();
+    if (!access_unit) {
+      std::cerr << "Android Auto video ended before H.264 SPS/PPS arrived\n";
+      close(socket_fd);
+      return 1;
+    }
+    const auto unit_nalus = h264_nalus(*access_unit);
+    nalus.insert(nalus.end(), unit_nalus.begin(), unit_nalus.end());
   }
   const auto stream_key = acp::airplay::hkdf_sha512(
       *shared, std::string("DataStream-Salt") + std::string(screen_stream_id),
@@ -727,14 +786,9 @@ int acp::airplay::run_session(const SessionOptions &options) {
   }
   std::uint64_t frame_counter{};
   std::size_t sent_frames{};
-  for (const auto &nalu : nalus) {
-    if (options.stop_requested && options.stop_requested()) {
-      close(data_socket);
-      close(socket_fd);
-      return 1;
-    }
+  const auto send_nalu = [&](const acp::airplay::Bytes &nalu) {
     if (nalu.empty() || ((nalu[0] & 0x1f) != 1 && (nalu[0] & 0x1f) != 5))
-      continue;
+      return true;
     acp::airplay::Bytes frame;
     frame.reserve(nalu.size() + 4);
     frame.push_back(static_cast<std::uint8_t>(nalu.size() >> 24));
@@ -751,15 +805,39 @@ int acp::airplay::run_session(const SessionOptions &options) {
     const auto encrypted =
         acp::airplay::seal_with_nonce(stream_key, nonce, frame, header);
     if (!encrypted || !send_all(data_socket, header) ||
-        !send_all(data_socket, *encrypted)) {
+        !send_all(data_socket, *encrypted))
+      return false;
+    ++frame_counter;
+    ++sent_frames;
+    return true;
+  };
+  for (; next_nalu < nalus.size(); ++next_nalu) {
+    if (options.stop_requested && options.stop_requested()) {
+      close(data_socket);
+      close(socket_fd);
+      return 1;
+    }
+    if (!send_nalu(nalus[next_nalu])) {
       std::cerr << "Unable to send encrypted H.264 frame\n";
       close(data_socket);
       close(socket_fd);
       return 1;
     }
-    ++frame_counter;
-    ++sent_frames;
     std::this_thread::sleep_for(std::chrono::milliseconds(33));
+  }
+  while (options.next_video_frame &&
+         (!options.stop_requested || !options.stop_requested())) {
+    const auto access_unit = options.next_video_frame();
+    if (!access_unit)
+      break;
+    for (const auto &nalu : h264_nalus(*access_unit)) {
+      if (!send_nalu(nalu)) {
+        std::cerr << "Unable to send encrypted H.264 frame\n";
+        close(data_socket);
+        close(socket_fd);
+        return 1;
+      }
+    }
   }
   close(data_socket);
   close(socket_fd);
