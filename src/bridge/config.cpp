@@ -1,0 +1,71 @@
+#include "acp/bridge/config.hpp"
+
+#include <fstream>
+#include <sys/stat.h>
+
+namespace acp::bridge {
+namespace {
+
+constexpr char kMagic[] = "ACP-AA-BRIDGE-1";
+
+bool valid_key(const std::string_view key) {
+  return key == "head_unit_mac" || key == "wifi_interface" ||
+         key == "airplay_pairing_store";
+}
+
+} // namespace
+
+std::optional<Config> load_config(const std::filesystem::path &path) {
+  std::ifstream stream(path);
+  std::string line;
+  if (!std::getline(stream, line) || line != kMagic)
+    return std::nullopt;
+  Config config;
+  while (std::getline(stream, line)) {
+    const auto separator = line.find('=');
+    if (separator == std::string::npos || !valid_key(line.substr(0, separator)))
+      return std::nullopt;
+    const auto value = line.substr(separator + 1);
+    if (line.starts_with("head_unit_mac="))
+      config.head_unit_mac = value;
+    else if (line.starts_with("wifi_interface="))
+      config.wifi_interface = value;
+    else
+      config.airplay_pairing_store = value;
+  }
+  if (config.head_unit_mac.empty() || config.wifi_interface.empty() ||
+      config.airplay_pairing_store.empty())
+    return std::nullopt;
+  return config;
+}
+
+bool save_config(const std::filesystem::path &path, const Config &config) {
+  if (config.head_unit_mac.empty() || config.wifi_interface.empty() ||
+      config.airplay_pairing_store.empty() ||
+      config.head_unit_mac.find_first_of("\r\n=") != std::string::npos ||
+      config.wifi_interface.find_first_of("\r\n=") != std::string::npos ||
+      config.airplay_pairing_store.string().find_first_of("\r\n=") !=
+          std::string::npos)
+    return false;
+  std::error_code error;
+  std::filesystem::create_directories(path.parent_path(), error);
+  if (error)
+    return false;
+  const auto temporary = path.string() + ".tmp";
+  {
+    std::ofstream stream(temporary, std::ios::trunc);
+    if (!stream)
+      return false;
+    stream << kMagic << '\n'
+           << "head_unit_mac=" << config.head_unit_mac << '\n'
+           << "wifi_interface=" << config.wifi_interface << '\n'
+           << "airplay_pairing_store=" << config.airplay_pairing_store.string()
+           << '\n';
+    if (!stream)
+      return false;
+  }
+  return chmod(temporary.c_str(), S_IRUSR | S_IWUSR) == 0 &&
+         std::rename(temporary.c_str(), path.c_str()) == 0;
+}
+
+} // namespace acp::bridge
