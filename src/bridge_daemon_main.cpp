@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include <array>
+#include <cstdio>
 #include <filesystem>
 #include <iostream>
 #include <optional>
@@ -22,14 +23,12 @@ extern char **environ;
 namespace {
 
 constexpr char kPage[] =
-    R"HTML(<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>ACP-AA Bridge</title><style>body{font:16px sans-serif;max-width:34rem;margin:3rem auto;padding:0 1rem}label,input{display:block;width:100%;box-sizing:border-box;margin:.5rem 0}button{padding:.6rem 1rem}</style><h1>ACP-AA Bridge</h1><p>Configure the pinned CarPlay head unit.</p><form><label>Head-unit Bluetooth MAC<input id="head_unit_mac" required></label><label>Wi-Fi interface<input id="wifi_interface" required></label><label>AirPlay pairing record<input id="airplay_pairing_store" required></label><button>Save</button></form><p id="result"></p><script>const ids=['head_unit_mac','wifi_interface','airplay_pairing_store'];fetch('/api/config').then(r=>r.json()).then(c=>ids.forEach(i=>document.getElementById(i).value=c[i]));document.querySelector('form').onsubmit=async e=>{e.preventDefault();let c=Object.fromEntries(ids.map(i=>[i,document.getElementById(i).value]));let r=await fetch('/api/config',{method:'PUT',body:JSON.stringify(c)});document.querySelector('#result').textContent=r.ok?'Saved.':'Save failed.'}</script>)HTML";
+    R"HTML(<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>ACP-AA Bridge</title><style>body{font:16px sans-serif;max-width:34rem;margin:3rem auto;padding:0 1rem}label,input{display:block;width:100%;box-sizing:border-box;margin:.5rem 0}button{padding:.6rem 1rem}</style><h1>ACP-AA Bridge</h1><p>Configure the pinned CarPlay head unit.</p><form><label>Head-unit Bluetooth MAC<input id="head_unit_mac" list="bluetooth_devices" required><datalist id="bluetooth_devices"></datalist></label><label>Wi-Fi interface<input id="wifi_interface" list="wifi_interfaces" required><datalist id="wifi_interfaces"></datalist></label><button>Save</button></form><p id="result"></p><script>const ids=['head_unit_mac','wifi_interface'];const fill=(id,x)=>document.querySelector(id).innerHTML=x.map(v=>'<option value="'+v+'">').join('');Promise.all([fetch('/api/config').then(r=>r.json()),fetch('/api/bluetooth-devices').then(r=>r.json()),fetch('/api/wifi-interfaces').then(r=>r.json())]).then(([c,b,w])=>{ids.forEach(i=>document.getElementById(i).value=c[i]);fill('#bluetooth_devices',b);fill('#wifi_interfaces',w)});document.querySelector('form').onsubmit=async e=>{e.preventDefault();let c=Object.fromEntries(ids.map(i=>[i,document.getElementById(i).value]));let r=await fetch('/api/config',{method:'PUT',body:JSON.stringify(c)});document.querySelector('#result').textContent=r.ok?'Saved.':'Save failed.'}</script>)HTML";
 
 std::string json(const acp::bridge::Config &config) {
   // Values are validated as single-line key/value data by the config store.
   return "{\"head_unit_mac\":\"" + config.head_unit_mac +
-         "\",\"wifi_interface\":\"" + config.wifi_interface +
-         "\",\"airplay_pairing_store\":\"" +
-         config.airplay_pairing_store.string() + "\"}";
+         "\",\"wifi_interface\":\"" + config.wifi_interface + "\"}";
 }
 
 std::optional<std::string> field(const std::string &body,
@@ -55,6 +54,29 @@ bool send_response(const int client, const int status, const char *type,
       "\r\nConnection: close\r\n\r\n" + body;
   return send(client, response.data(), response.size(), MSG_NOSIGNAL) ==
          static_cast<ssize_t>(response.size());
+}
+
+std::string command_json(const char *command) {
+  std::vector<std::string> values;
+  FILE *stream = popen(command, "r");
+  std::array<char, 256> line{};
+  while (stream != nullptr &&
+         fgets(line.data(), line.size(), stream) != nullptr) {
+    std::string value(line.data());
+    while (!value.empty() && (value.back() == '\n' || value.back() == '\r'))
+      value.pop_back();
+    if (!value.empty())
+      values.push_back(value);
+  }
+  if (stream != nullptr)
+    pclose(stream);
+  std::string output{"["};
+  for (std::size_t index = 0; index < values.size(); ++index) {
+    if (index != 0)
+      output += ',';
+    output += '"' + values[index] + '"';
+  }
+  return output + ']';
 }
 
 int run_carplay_session(const char *program_path,
@@ -217,13 +239,20 @@ int main(int argc, char **argv) {
       send_response(client, 200, "text/html; charset=utf-8", kPage);
     else if (request.starts_with("GET /api/config "))
       send_response(client, 200, "application/json", json(config));
+    else if (request.starts_with("GET /api/bluetooth-devices "))
+      send_response(client, 200, "application/json",
+                    command_json("bluetoothctl devices | awk '{print $2}'"));
+    else if (request.starts_with("GET /api/wifi-interfaces "))
+      send_response(client, 200, "application/json",
+                    command_json("nmcli -t -f DEVICE,TYPE device status | awk "
+                                 "-F: '$2 == \"wifi\" {print $1}'"));
     else if (request.starts_with("PUT /api/config ")) {
       const auto mac = field(body, "head_unit_mac");
       const auto wifi = field(body, "wifi_interface");
-      const auto pairing = field(body, "airplay_pairing_store");
-      if (mac && wifi && pairing &&
-          acp::bridge::save_config(config_path, {*mac, *wifi, *pairing})) {
-        config = {*mac, *wifi, *pairing};
+      if (mac && wifi &&
+          acp::bridge::save_config(
+              config_path, {*mac, *wifi, config.airplay_pairing_store})) {
+        config = {*mac, *wifi, config.airplay_pairing_store};
         send_response(client, 200, "application/json", json(config));
       } else {
         send_response(client, 400, "text/plain", "Invalid configuration\n");

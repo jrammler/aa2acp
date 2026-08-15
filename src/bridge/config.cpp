@@ -33,15 +33,13 @@ std::optional<Config> load_config(const std::filesystem::path &path) {
     else
       config.airplay_pairing_store = value;
   }
-  if (config.head_unit_mac.empty() || config.wifi_interface.empty() ||
-      config.airplay_pairing_store.empty())
+  if (config.head_unit_mac.empty() || config.wifi_interface.empty())
     return std::nullopt;
   return config;
 }
 
 bool save_config(const std::filesystem::path &path, const Config &config) {
   if (config.head_unit_mac.empty() || config.wifi_interface.empty() ||
-      config.airplay_pairing_store.empty() ||
       config.head_unit_mac.find_first_of("\r\n=") != std::string::npos ||
       config.wifi_interface.find_first_of("\r\n=") != std::string::npos ||
       config.airplay_pairing_store.string().find_first_of("\r\n=") !=
@@ -58,9 +56,10 @@ bool save_config(const std::filesystem::path &path, const Config &config) {
       return false;
     stream << kMagic << '\n'
            << "head_unit_mac=" << config.head_unit_mac << '\n'
-           << "wifi_interface=" << config.wifi_interface << '\n'
-           << "airplay_pairing_store=" << config.airplay_pairing_store.string()
-           << '\n';
+           << "wifi_interface=" << config.wifi_interface << '\n';
+    if (!config.airplay_pairing_store.empty())
+      stream << "airplay_pairing_store="
+             << config.airplay_pairing_store.string() << '\n';
     if (!stream)
       return false;
   }

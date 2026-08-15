@@ -11,6 +11,8 @@ namespace acp::bridge {
 struct Config {
   std::string head_unit_mac;
   std::string wifi_interface{"wlan0"};
+  // Empty selects the daemon's deterministic state-directory default. This is
+  // intentionally an advanced override, not a normal UI setting.
   std::filesystem::path airplay_pairing_store;
 };
 
