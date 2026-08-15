@@ -79,8 +79,9 @@ longer visible in the terminal.
   is for diagnosis only; it can produce a large file.
 - The bridge caches the main display profile advertised by CarPlay in
   `$XDG_STATE_HOME/aa2acp/display-profile` (normally
-  `~/.local/state/aa2acp/display-profile`). Android Auto still uses the
-  conservative 1280x720 path until profile-based negotiation is completed.
+  `~/.local/state/aa2acp/display-profile`) and uses a supported cached
+  resolution for Android Auto. The first connection, unavailable cache, or an
+  unsupported profile uses the conservative 1280x720 fallback.
 
 ## Regression cases
 

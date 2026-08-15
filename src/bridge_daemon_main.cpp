@@ -856,6 +856,7 @@ int run_wired_android_auto_receiver(
           phone_disconnected = false;
           std::cout << "Bridge daemon: Android Auto USB transport ready: "
                     << event.detail << '\n';
+          carplay_start_requested = true;
           break;
         case aa2acp::aa::WiredReceiverEventType::control_session_ready:
           std::cout << "Bridge daemon: Android Auto control session ready: "
@@ -864,7 +865,6 @@ int run_wired_android_auto_receiver(
         case aa2acp::aa::WiredReceiverEventType::video_stream_configured:
           std::cout << "Bridge daemon: Android Auto video configured: "
                     << event.detail << '\n';
-          carplay_start_requested = true;
           break;
         case aa2acp::aa::WiredReceiverEventType::video_stream_started:
           std::cout << "Bridge daemon: Android Auto video stream started\n";
@@ -896,13 +896,22 @@ int run_wired_android_auto_receiver(
       },
       [&config_provider]() -> std::optional<aa2acp::aa::DisplayProfile> {
         const auto config = config_provider();
-        const auto profile = aa2acp::airplay::load_display_profile(
-            aa2acp::bridge::default_display_profile_store(),
-            config.head_unit_mac);
-        if (!profile)
-          return std::nullopt;
-        return aa2acp::aa::DisplayProfile{
-            profile->width_pixels, profile->height_pixels, profile->max_fps};
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        do {
+          const auto profile = aa2acp::airplay::load_display_profile(
+              aa2acp::bridge::default_display_profile_store(),
+              config.head_unit_mac);
+          if (profile)
+            return aa2acp::aa::DisplayProfile{profile->width_pixels,
+                                              profile->height_pixels,
+                                              profile->max_fps};
+          std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        } while (std::chrono::steady_clock::now() < deadline);
+        std::cerr << "Bridge daemon: CarPlay display profile was unavailable "
+                     "before Android Auto service discovery deadline; using "
+                     "1280x720\n";
+        return std::nullopt;
       });
   std::string error;
   if (!receiver.start(&error)) {
@@ -916,7 +925,7 @@ int run_wired_android_auto_receiver(
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
       continue;
     }
-    std::cout << "Bridge daemon: starting CarPlay for Android Auto video\n";
+    std::cout << "Bridge daemon: preparing CarPlay for Android Auto\n";
     const auto config = config_provider();
     if (config.head_unit_mac.empty() || config.wifi_interface.empty()) {
       std::cerr << "Bridge daemon: configure a head-unit MAC and Wi-Fi "
