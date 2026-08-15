@@ -32,6 +32,7 @@ namespace {
 struct ManagementSnapshot {
   std::vector<acp::bridge::BluetoothDevice> bluetooth_devices;
   std::vector<std::string> wifi_interfaces;
+  bool show_unnamed_bluetooth_devices{};
   bool bluetooth_scan_running{};
   std::string bluetooth_scan_phase{"idle"};
   std::string bluetooth_error;
@@ -128,9 +129,10 @@ std::vector<std::string> wifi_interfaces() {
   while (stream != nullptr &&
          fgets(line.data(), line.size(), stream) != nullptr) {
     std::string value(line.data());
+    while (!value.empty() && (value.back() == '\n' || value.back() == '\r'))
+      value.pop_back();
     const auto separator = value.find(':');
-    if (separator != std::string::npos &&
-        value.substr(separator + 1).starts_with("wifi"))
+    if (separator != std::string::npos && value.substr(separator + 1) == "wifi")
       interfaces.push_back(value.substr(0, separator));
   }
   if (stream != nullptr)
@@ -232,6 +234,8 @@ std::string page(const acp::bridge::Config &config,
             "<option value=\"\">Keep the configured device (use manual field "
             "below)</option>";
   for (const auto &device : snapshot.bluetooth_devices) {
+    if (device.name.empty() && !snapshot.show_unnamed_bluetooth_devices)
+      continue;
     const auto selected =
         device.address == config.head_unit_mac ? " selected" : "";
     auto name = device.name.empty() ? "Unnamed device" : device.name;
@@ -263,6 +267,11 @@ std::string page(const acp::bridge::Config &config,
               " (configured)</option>";
   output +=
       "</select></label><button type=submit>Save configuration</button></form>"
+      "<form method=post action=\"/display\"><label><input type=checkbox "
+      "name=\"show_unnamed\" value=\"1\"" +
+      std::string(snapshot.show_unnamed_bluetooth_devices ? " checked" : "") +
+      "> Show unnamed Bluetooth devices</label><button type=submit>Apply "
+      "display filter</button></form>"
       "<form method=post action=\"/scan\"><button type=submit" +
       std::string(snapshot.bluetooth_scan_running ? " disabled" : "") +
       ">Scan Bluetooth devices (LE, then classic)</button></form>"
@@ -457,6 +466,15 @@ int main(int argc, char **argv) {
       }
       if (start_scan)
         std::thread(run_bluetooth_scan, std::ref(management_state)).detach();
+      send_response(client, 303, "text/plain", "", "Location: /\r\n");
+    } else if (request.starts_with("POST /display ")) {
+      const bool show_unnamed = form_field(body, "show_unnamed").has_value();
+      {
+        std::lock_guard lock(management_state.mutex);
+        management_state.snapshot.show_unnamed_bluetooth_devices = show_unnamed;
+      }
+      std::cout << "Management: unnamed Bluetooth devices "
+                << (show_unnamed ? "shown" : "hidden") << '\n';
       send_response(client, 303, "text/plain", "", "Location: /\r\n");
     } else if (request.starts_with("POST /config ")) {
       const auto manual = form_field(body, "manual_mac");
