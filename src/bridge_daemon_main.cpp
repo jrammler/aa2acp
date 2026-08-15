@@ -385,6 +385,10 @@ int run_wired_android_auto_receiver(const int signal_fd) {
       std::cout << "Bridge daemon: Android Auto USB transport ready: "
                 << event.detail << '\n';
       break;
+    case acp::aa::WiredReceiverEventType::control_session_ready:
+      std::cout << "Bridge daemon: Android Auto control session ready: "
+                << event.detail << '\n';
+      break;
     case acp::aa::WiredReceiverEventType::disconnected:
       std::cout << "Bridge daemon: Android Auto USB disconnected\n";
       break;

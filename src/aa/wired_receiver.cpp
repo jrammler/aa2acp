@@ -1,6 +1,14 @@
 #include "acp/aa/wired_receiver.hpp"
 
+#include <aasdk/Channel/Control/ControlServiceChannel.hpp>
 #include <aasdk/Error/Error.hpp>
+#include <aasdk/Messenger/Cryptor.hpp>
+#include <aasdk/Messenger/MessageInStream.hpp>
+#include <aasdk/Messenger/MessageOutStream.hpp>
+#include <aasdk/Messenger/Messenger.hpp>
+#include <aasdk/Transport/SSLWrapper.hpp>
+#include <aasdk/Transport/USBTransport.hpp>
+#include <aasdk/USB/AOAPDevice.hpp>
 #include <aasdk/USB/AccessoryModeQueryChainFactory.hpp>
 #include <aasdk/USB/AccessoryModeQueryFactory.hpp>
 #include <aasdk/USB/IUSBHub.hpp>
@@ -19,6 +27,175 @@
 #include <utility>
 
 namespace acp::aa {
+
+class ControlSession final
+    : public aasdk::channel::control::IControlServiceChannelEventHandler,
+      public std::enable_shared_from_this<ControlSession> {
+public:
+  using Callback = WiredReceiver::EventCallback;
+
+  ControlSession(boost::asio::io_service &io_service,
+                 aasdk::usb::IUSBWrapper &usb_wrapper,
+                 aasdk::usb::DeviceHandle handle, Callback callback)
+      : io_service_(io_service), strand_(io_service), usb_wrapper_(usb_wrapper),
+        handle_(std::move(handle)), callback_(std::move(callback)) {}
+
+  void start() {
+    try {
+      auto device =
+          aasdk::usb::AOAPDevice::create(usb_wrapper_, io_service_, handle_);
+      transport_ = std::make_shared<aasdk::transport::USBTransport>(
+          io_service_, std::move(device));
+      auto ssl = std::make_shared<aasdk::transport::SSLWrapper>();
+      cryptor_ = std::make_shared<aasdk::messenger::Cryptor>(std::move(ssl));
+      cryptor_->init();
+      messenger_ = std::make_shared<aasdk::messenger::Messenger>(
+          io_service_,
+          std::make_shared<aasdk::messenger::MessageInStream>(
+              io_service_, transport_, cryptor_),
+          std::make_shared<aasdk::messenger::MessageOutStream>(
+              io_service_, transport_, cryptor_));
+      control_ =
+          std::make_shared<aasdk::channel::control::ControlServiceChannel>(
+              strand_, messenger_);
+      send_version_request();
+      receive_next();
+    } catch (const aasdk::error::Error &error) {
+      fail(error.what());
+    }
+  }
+
+  void stop() {
+    if (messenger_)
+      messenger_->stop();
+    if (transport_)
+      transport_->stop();
+    if (cryptor_)
+      cryptor_->deinit();
+  }
+
+  void onVersionResponse(uint16_t, uint16_t,
+                         aap_protobuf::shared::MessageStatus status) override {
+    if (status != aap_protobuf::shared::STATUS_SUCCESS) {
+      fail("Android Auto version negotiation was rejected");
+      return;
+    }
+    try {
+      cryptor_->doHandshake();
+      send_handshake();
+      receive_next();
+    } catch (const aasdk::error::Error &error) {
+      fail(error.what());
+    }
+  }
+
+  void onHandshake(const aasdk::common::DataConstBuffer &payload) override {
+    try {
+      cryptor_->writeHandshakeBuffer(payload);
+      if (cryptor_->doHandshake()) {
+        aap_protobuf::service::control::message::AuthResponse response;
+        response.set_status(aap_protobuf::shared::STATUS_SUCCESS);
+        send([this, response](aasdk::channel::SendPromise::Pointer promise) {
+          control_->sendAuthComplete(response, std::move(promise));
+        });
+      } else {
+        send_handshake();
+      }
+      receive_next();
+    } catch (const aasdk::error::Error &error) {
+      fail(error.what());
+    }
+  }
+
+  void onServiceDiscoveryRequest(
+      const aap_protobuf::service::control::message::ServiceDiscoveryRequest &)
+      override {
+    aap_protobuf::service::control::message::ServiceDiscoveryResponse response;
+    response.set_display_name("ACP-AA Bridge");
+    send([this, response](aasdk::channel::SendPromise::Pointer promise) {
+      control_->sendServiceDiscoveryResponse(response, std::move(promise));
+    });
+    callback_(
+        {WiredReceiverEventType::control_session_ready,
+         "TLS authentication and Android Auto service discovery completed"});
+    receive_next();
+  }
+
+  void onAudioFocusRequest(
+      const aap_protobuf::service::control::message::AudioFocusRequest &)
+      override {
+    receive_next();
+  }
+  void onByeByeRequest(
+      const aap_protobuf::service::control::message::ByeByeRequest &) override {
+    stop();
+  }
+  void onByeByeResponse(
+      const aap_protobuf::service::control::message::ByeByeResponse &)
+      override {
+    stop();
+  }
+  void onBatteryStatusNotification(
+      const aap_protobuf::service::control::message::BatteryStatusNotification
+          &) override {
+    receive_next();
+  }
+  void onNavigationFocusRequest(
+      const aap_protobuf::service::control::message::NavFocusRequestNotification
+          &) override {
+    receive_next();
+  }
+  void onVoiceSessionRequest(
+      const aap_protobuf::service::control::message::VoiceSessionNotification &)
+      override {
+    receive_next();
+  }
+  void onPingRequest(
+      const aap_protobuf::service::control::message::PingRequest &) override {
+    receive_next();
+  }
+  void onPingResponse(
+      const aap_protobuf::service::control::message::PingResponse &) override {
+    receive_next();
+  }
+  void onChannelError(const aasdk::error::Error &error) override {
+    fail(error.what());
+  }
+
+private:
+  void send_version_request() {
+    send([this](auto promise) {
+      control_->sendVersionRequest(std::move(promise));
+    });
+  }
+  void send_handshake() {
+    send([this](auto promise) {
+      control_->sendHandshake(cryptor_->readHandshakeBuffer(),
+                              std::move(promise));
+    });
+  }
+  template <typename Sender> void send(Sender sender) {
+    auto promise = aasdk::channel::SendPromise::defer(strand_);
+    promise->then([] {}, [self = shared_from_this()](
+                             const auto &error) { self->fail(error.what()); });
+    sender(std::move(promise));
+  }
+  void receive_next() { control_->receive(shared_from_this()); }
+  void fail(const std::string &detail) {
+    callback_({WiredReceiverEventType::error,
+               "Android Auto control session: " + detail});
+  }
+
+  boost::asio::io_service &io_service_;
+  boost::asio::io_service::strand strand_;
+  aasdk::usb::IUSBWrapper &usb_wrapper_;
+  aasdk::usb::DeviceHandle handle_;
+  Callback callback_;
+  aasdk::transport::ITransport::Pointer transport_;
+  aasdk::messenger::ICryptor::Pointer cryptor_;
+  aasdk::messenger::IMessenger::Pointer messenger_;
+  aasdk::channel::control::IControlServiceChannel::Pointer control_;
+};
 
 class WiredReceiver::Impl {
 public:
@@ -113,6 +290,7 @@ private:
           emit({WiredReceiverEventType::aoap_transport_ready,
                 "AOAP transport ready on USB " + std::to_string(active_bus_) +
                     ":" + std::to_string(active_address_)});
+          start_control_session();
         },
         [this](const aasdk::error::Error &error) {
           if (!stopping_)
@@ -143,6 +321,7 @@ private:
       return 0;
     self->io_service_.post([self] {
       self->active_ = false;
+      self->control_session_.reset();
       self->active_handle_.reset();
       self->emit({WiredReceiverEventType::disconnected,
                   "wired Android Auto phone disconnected"});
@@ -192,6 +371,7 @@ private:
           emit({WiredReceiverEventType::aoap_transport_ready,
                 "AOAP transport ready on USB " + std::to_string(bus) + ":" +
                     std::to_string(address)});
+          start_control_session();
         });
   }
 
@@ -200,7 +380,16 @@ private:
       callback_(event);
   }
 
+  void start_control_session() {
+    control_session_ = std::make_shared<ControlSession>(
+        io_service_, *usb_wrapper_, active_handle_, callback_);
+    control_session_->start();
+  }
+
   void reset_locked() {
+    if (control_session_)
+      control_session_->stop();
+    control_session_.reset();
     active_handle_.reset();
     active_ = false;
     usb_hub_.reset();
@@ -227,6 +416,7 @@ private:
   std::unique_ptr<aasdk::usb::AccessoryModeQueryChainFactory> chain_factory_;
   std::shared_ptr<aasdk::usb::USBHub> usb_hub_;
   aasdk::usb::DeviceHandle active_handle_;
+  std::shared_ptr<ControlSession> control_session_;
   std::atomic_bool active_{false};
   std::atomic_uint8_t active_bus_{};
   std::atomic_uint8_t active_address_{};

@@ -17,6 +17,8 @@ const char *event_name(const acp::aa::WiredReceiverEventType type) {
     return "waiting";
   case acp::aa::WiredReceiverEventType::aoap_transport_ready:
     return "ready";
+  case acp::aa::WiredReceiverEventType::control_session_ready:
+    return "session";
   case acp::aa::WiredReceiverEventType::disconnected:
     return "disconnected";
   case acp::aa::WiredReceiverEventType::error:

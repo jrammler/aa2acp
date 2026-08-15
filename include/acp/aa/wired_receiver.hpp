@@ -13,6 +13,7 @@ namespace acp::aa {
 enum class WiredReceiverEventType {
   waiting_for_phone,
   aoap_transport_ready,
+  control_session_ready,
   disconnected,
   error,
 };
