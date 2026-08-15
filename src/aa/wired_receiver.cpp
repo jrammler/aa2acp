@@ -446,7 +446,7 @@ public:
     head_unit->set_year("2026");
     head_unit->set_vehicle_id("aa2acp");
     head_unit->set_head_unit_make("ACP");
-    head_unit->set_head_unit_model("Pi Bridge");
+    head_unit->set_head_unit_model("AA2ACP");
     head_unit->set_head_unit_software_build("1");
     head_unit->set_head_unit_software_version("0.1");
 
