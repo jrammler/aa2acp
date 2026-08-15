@@ -4,8 +4,10 @@
 #include <netinet/in.h>
 #include <poll.h>
 #include <signal.h>
+#include <spawn.h>
 #include <sys/signalfd.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <array>
@@ -13,6 +15,9 @@
 #include <iostream>
 #include <optional>
 #include <string>
+#include <vector>
+
+extern char **environ;
 
 namespace {
 
@@ -52,19 +57,72 @@ bool send_response(const int client, const int status, const char *type,
          static_cast<ssize_t>(response.size());
 }
 
+int run_carplay_session(const char *program_path,
+                        const acp::bridge::Config &config,
+                        const int signal_fd) {
+  if (config.head_unit_mac.empty()) {
+    std::cerr << "Bridge daemon: configure a head-unit MAC first\n";
+    return 2;
+  }
+  const auto executable =
+      std::filesystem::path(program_path).parent_path() / "iap2-bt";
+  std::vector<std::string> arguments{executable.string(),
+                                     "--bridge",
+                                     "--mac",
+                                     config.head_unit_mac,
+                                     "--wifi-interface",
+                                     config.wifi_interface,
+                                     "--pairing-store",
+                                     config.airplay_pairing_store.string(),
+                                     "--timeout",
+                                     "60"};
+  std::vector<char *> argv;
+  for (auto &argument : arguments)
+    argv.push_back(argument.data());
+  argv.push_back(nullptr);
+  pid_t child{};
+  if (posix_spawn(&child, argv.front(), nullptr, nullptr, argv.data(),
+                  environ) != 0) {
+    std::cerr << "Bridge daemon: unable to start CarPlay session\n";
+    return 1;
+  }
+  std::cout << "Bridge daemon: CarPlay session started\n";
+  for (;;) {
+    int status{};
+    if (waitpid(child, &status, WNOHANG) == child)
+      return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+    pollfd signal_poll{signal_fd, POLLIN, 0};
+    if (poll(&signal_poll, 1, 100) > 0 && (signal_poll.revents & POLLIN) != 0) {
+      signalfd_siginfo signal_info{};
+      const auto signal_bytes =
+          read(signal_fd, &signal_info, sizeof(signal_info));
+      if (signal_bytes != static_cast<ssize_t>(sizeof(signal_info)))
+        continue;
+      std::cout << "Bridge daemon: stopping active CarPlay session\n";
+      kill(child, SIGTERM);
+      waitpid(child, &status, 0);
+      return 128 + SIGTERM;
+    }
+  }
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
   std::filesystem::path config_path = "/var/lib/acp-aa-bridge/config";
   int port = 8080;
+  bool run_session = false;
   for (int index = 1; index < argc; ++index) {
     const std::string argument = argv[index];
     if (argument == "--config" && index + 1 < argc)
       config_path = argv[++index];
     else if (argument == "--port" && index + 1 < argc)
       port = std::stoi(argv[++index]);
+    else if (argument == "--run")
+      run_session = true;
     else {
-      std::cerr << "usage: bridge-daemon [--config PATH] [--port PORT]\n";
+      std::cerr
+          << "usage: bridge-daemon [--config PATH] [--port PORT] [--run]\n";
       return 2;
     }
   }
@@ -83,6 +141,11 @@ int main(int argc, char **argv) {
   if (signal_fd < 0) {
     std::cerr << "Unable to create shutdown signal descriptor\n";
     return 1;
+  }
+  if (run_session) {
+    const auto result = run_carplay_session(argv[0], config, signal_fd);
+    close(signal_fd);
+    return result;
   }
   const int listener = socket(AF_INET, SOCK_STREAM, 0);
   int enabled = 1;
