@@ -25,7 +25,10 @@ key, computes the M3 client proof, and cryptographically verifies M4. It was
 verified against test head unit on 2026-08-15 (16-byte salt, 384-byte SRP public key).
 The encrypted M5/M6 identity exchange is also verified: the client encrypts
 and signs its Ed25519 identity, then decrypts and verifies test head unit's accessory
-identity. Pair-Verify, encrypted RTSP, and media follow.
+identity. Pair-Verify and the complete encrypted RTSP control plane are also
+live-verified against test head unit: `/info`, session `SETUP`, screen `SETUP` (which
+returns a live screen-data TCP port), and `RECORD`. The next C++ AirPlay
+milestone is the encrypted H.264 media data stream.
 
 Build and run tests from the repository root:
 

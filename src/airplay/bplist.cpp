@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <limits>
 
 namespace acp::airplay {
@@ -103,6 +104,10 @@ private:
   void encode(const std::size_t index, const std::uint64_t value) {
     nodes_[index].bytes = integer(value);
   }
+  void encode(const std::size_t index, const double value) {
+    nodes_[index].bytes = {0x23};
+    append_be(nodes_[index].bytes, std::bit_cast<std::uint64_t>(value), 8);
+  }
   void encode(const std::size_t index, const std::string &value) {
     auto header = count_marker(0x5, value.size());
     header.insert(header.end(), value.begin(), value.end());
@@ -200,6 +205,18 @@ private:
       return value ? std::optional<PlistValue>(PlistValue(*value))
                    : std::nullopt;
     }
+    if (type == 2) {
+      const auto size = std::size_t{1} << nibble;
+      const auto value = read_be(bytes_, offset + 1, size);
+      if (!value)
+        return std::nullopt;
+      if (size == 8)
+        return PlistValue(std::bit_cast<double>(*value));
+      if (size == 4)
+        return PlistValue(static_cast<double>(
+            std::bit_cast<float>(static_cast<std::uint32_t>(*value))));
+      return std::nullopt;
+    }
     const auto parsed_count = count(offset, nibble);
     if (!parsed_count)
       return std::nullopt;
@@ -211,6 +228,26 @@ private:
                                 bytes_.begin() + data_offset + items));
       return PlistValue(std::string(bytes_.begin() + data_offset,
                                     bytes_.begin() + data_offset + items));
+    }
+    if (type == 6 && data_offset <= bytes_.size() &&
+        items <= (bytes_.size() - data_offset) / 2) {
+      std::string text;
+      for (std::size_t item = 0; item < items; ++item) {
+        const auto code =
+            (static_cast<std::uint16_t>(bytes_[data_offset + item * 2]) << 8) |
+            bytes_[data_offset + item * 2 + 1];
+        if (code < 0x80) {
+          text.push_back(static_cast<char>(code));
+        } else if (code < 0x800) {
+          text.push_back(static_cast<char>(0xc0 | (code >> 6)));
+          text.push_back(static_cast<char>(0x80 | (code & 0x3f)));
+        } else {
+          text.push_back(static_cast<char>(0xe0 | (code >> 12)));
+          text.push_back(static_cast<char>(0x80 | ((code >> 6) & 0x3f)));
+          text.push_back(static_cast<char>(0x80 | (code & 0x3f)));
+        }
+      }
+      return PlistValue(std::move(text));
     }
     if ((type == 0xa || type == 0xd) && data_offset <= bytes_.size() &&
         items <= (bytes_.size() - data_offset) / ref_size_ &&

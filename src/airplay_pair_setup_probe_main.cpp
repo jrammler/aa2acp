@@ -1,3 +1,5 @@
+#include "acp/airplay/bplist.hpp"
+#include "acp/airplay/control_cipher.hpp"
 #include "acp/airplay/crypto.hpp"
 #include "acp/airplay/rtsp.hpp"
 #include "acp/airplay/srp.hpp"
@@ -47,6 +49,58 @@ bool send_all(const int socket_fd, const std::span<const std::uint8_t> bytes) {
     offset += static_cast<std::size_t>(count);
   }
   return true;
+}
+
+std::optional<acp::airplay::Response>
+send_encrypted(const int socket_fd, acp::airplay::ControlCipher &cipher,
+               acp::airplay::Bytes &encrypted_buffer,
+               const std::span<const std::uint8_t> plaintext,
+               const int timeout_seconds) {
+  const auto encrypted = cipher.encrypt(plaintext);
+  if (!encrypted || !send_all(socket_fd, *encrypted))
+    return std::nullopt;
+  acp::airplay::Bytes response_plaintext;
+  std::array<std::uint8_t, 4096> buffer{};
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
+  while (std::chrono::steady_clock::now() < deadline) {
+    while (true) {
+      const auto frame = cipher.decrypt_one(encrypted_buffer);
+      if (!frame)
+        return std::nullopt;
+      if (frame->empty())
+        break;
+      response_plaintext.insert(response_plaintext.end(), frame->begin(),
+                                frame->end());
+      if (acp::airplay::complete_response_size(response_plaintext))
+        return acp::airplay::parse_response(response_plaintext);
+    }
+    pollfd descriptor{socket_fd, POLLIN, 0};
+    if (poll(&descriptor, 1, 100) <= 0)
+      continue;
+    const auto count = recv(socket_fd, buffer.data(), buffer.size(), 0);
+    if (count <= 0)
+      return std::nullopt;
+    encrypted_buffer.insert(encrypted_buffer.end(), buffer.begin(),
+                            buffer.begin() + count);
+  }
+  return std::nullopt;
+}
+
+const acp::airplay::PlistValue::Dictionary *
+dictionary_of(const std::optional<acp::airplay::PlistValue> &value) {
+  return value ? std::get_if<acp::airplay::PlistValue::Dictionary>(&value->data)
+               : nullptr;
+}
+
+std::optional<std::uint64_t>
+integer_at(const acp::airplay::PlistValue::Dictionary &dictionary,
+           const std::string_view key) {
+  const auto item = dictionary.find(std::string(key));
+  if (item == dictionary.end())
+    return std::nullopt;
+  const auto *value = std::get_if<std::uint64_t>(&item->second.data);
+  return value ? std::optional<std::uint64_t>(*value) : std::nullopt;
 }
 
 } // namespace
@@ -390,7 +444,6 @@ int main(int argc, char **argv) {
     response_bytes.insert(response_bytes.end(), buffer.begin(),
                           buffer.begin() + count);
   }
-  close(socket_fd);
   const auto verify_m4_response = acp::airplay::parse_response(response_bytes);
   if (!verify_m4_response || verify_m4_response->status != 200) {
     std::cerr << "Pair-Verify M3 did not receive RTSP 200\n";
@@ -413,5 +466,133 @@ int main(int argc, char **argv) {
   }
   std::cout
       << "AirPlay: Pair-Verify M4 validated; encrypted control keys derived\n";
+
+  acp::airplay::ControlCipher control(control_read, control_write);
+  acp::airplay::Bytes encrypted_read_buffer;
+  const auto info_body =
+      acp::airplay::encode_bplist(acp::airplay::PlistValue::Dictionary{
+          {"name", acp::airplay::PlistValue("ACP-AA Bridge")},
+          {"deviceID", acp::airplay::PlistValue(controller_id.data())},
+          {"manufacturer", acp::airplay::PlistValue("ACP-AA Bridge")},
+          {"model", acp::airplay::PlistValue("AA2ACP")},
+          {"osVersion", acp::airplay::PlistValue("0.1")},
+      });
+  const auto info_response = send_encrypted(
+      socket_fd, control, encrypted_read_buffer,
+      acp::airplay::encode_request("POST", "/info", 6, info_body,
+                                   "application/x-apple-binary-plist"),
+      timeout_seconds);
+  const auto info_plist = info_response
+                              ? acp::airplay::decode_bplist(info_response->body)
+                              : std::nullopt;
+  if (!info_response || info_response->status != 200 ||
+      !dictionary_of(info_plist)) {
+    if (info_response) {
+      std::cerr << "Encrypted /info response status=" << info_response->status
+                << ", body=" << info_response->body.size() << "B\n";
+    } else {
+      std::cerr << "Encrypted /info had no decryptable RTSP response\n";
+    }
+    std::cerr << "Encrypted /info request failed\n";
+    close(socket_fd);
+    return 1;
+  }
+  std::cout << "AirPlay: encrypted /info capabilities received\n";
+
+  const auto session_body =
+      acp::airplay::encode_bplist(acp::airplay::PlistValue::Dictionary{
+          {"timingPort", acp::airplay::PlistValue(std::uint64_t{0})},
+          {"name", acp::airplay::PlistValue("ACP-AA Bridge")},
+          {"deviceID", acp::airplay::PlistValue(controller_id.data())},
+          {"model", acp::airplay::PlistValue("AA2ACP")},
+      });
+  const auto session_response =
+      send_encrypted(socket_fd, control, encrypted_read_buffer,
+                     acp::airplay::encode_request(
+                         "SETUP", "rtsp://127.0.0.1/stream", 7, session_body,
+                         "application/x-apple-binary-plist"),
+                     timeout_seconds);
+  const auto session_plist =
+      session_response ? acp::airplay::decode_bplist(session_response->body)
+                       : std::nullopt;
+  const auto session_info = dictionary_of(session_plist);
+  if (!session_response || session_response->status != 200 || !session_info ||
+      !integer_at(*session_info, "timingPort") ||
+      !integer_at(*session_info, "eventPort")) {
+    std::cerr << "Encrypted session SETUP failed\n";
+    close(socket_fd);
+    return 1;
+  }
+  std::cout << "AirPlay: session SETUP received timing/event ports\n";
+
+  constexpr std::string_view screen_stream_id =
+      "3A5B6C7D-8E9F-4012-A345-B678C901D234";
+  const auto screen_body =
+      acp::airplay::encode_bplist(acp::airplay::PlistValue::Dictionary{
+          {"streams",
+           acp::airplay::PlistValue::Array{acp::airplay::PlistValue::Dictionary{
+               {"type", acp::airplay::PlistValue(std::uint64_t{110})},
+               {"streamConnectionID",
+                acp::airplay::PlistValue(screen_stream_id.data())}}}},
+      });
+  const auto screen_response =
+      send_encrypted(socket_fd, control, encrypted_read_buffer,
+                     acp::airplay::encode_request(
+                         "SETUP", "rtsp://127.0.0.1/stream", 8, screen_body,
+                         "application/x-apple-binary-plist"),
+                     timeout_seconds);
+  const auto screen_plist =
+      screen_response ? acp::airplay::decode_bplist(screen_response->body)
+                      : std::nullopt;
+  const auto screen_info = dictionary_of(screen_plist);
+  const auto *stream_array = screen_info && screen_info->contains("streams")
+                                 ? std::get_if<acp::airplay::PlistValue::Array>(
+                                       &screen_info->at("streams").data)
+                                 : nullptr;
+  const auto *first_stream =
+      stream_array && !stream_array->empty()
+          ? std::get_if<acp::airplay::PlistValue::Dictionary>(
+                &stream_array->front().data)
+          : nullptr;
+  const auto screen_port =
+      first_stream ? integer_at(*first_stream, "dataPort") : std::nullopt;
+  if (!screen_response || screen_response->status != 200 || !screen_port ||
+      *screen_port == 0 || *screen_port > UINT16_MAX) {
+    if (screen_response) {
+      std::cerr << "Encrypted screen SETUP response status="
+                << screen_response->status
+                << ", body=" << screen_response->body.size() << "B\n";
+      if (screen_info) {
+        std::cerr << "Screen SETUP plist keys:";
+        for (const auto &[key, value] : *screen_info) {
+          std::cerr << ' ' << key;
+          if (const auto *number = std::get_if<std::uint64_t>(&value.data))
+            std::cerr << '=' << *number;
+        }
+        std::cerr << '\n';
+      } else {
+        std::cerr << "Screen SETUP plist could not be decoded\n";
+      }
+    } else {
+      std::cerr << "Encrypted screen SETUP had no decryptable RTSP response\n";
+    }
+    std::cerr << "Encrypted screen SETUP failed\n";
+    close(socket_fd);
+    return 1;
+  }
+  std::cout << "AirPlay: screen SETUP received data port " << *screen_port
+            << '\n';
+
+  const auto record_response = send_encrypted(
+      socket_fd, control, encrypted_read_buffer,
+      acp::airplay::encode_request("RECORD", "rtsp://127.0.0.1/stream", 9, {},
+                                   "application/octet-stream"),
+      timeout_seconds);
+  close(socket_fd);
+  if (!record_response || record_response->status != 200) {
+    std::cerr << "Encrypted RECORD failed\n";
+    return 1;
+  }
+  std::cout << "AirPlay: encrypted RECORD accepted\n";
   return 0;
 }

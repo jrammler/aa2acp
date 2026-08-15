@@ -12,10 +12,13 @@ namespace acp::airplay {
 struct PlistValue {
   using Array = std::vector<PlistValue>;
   using Dictionary = std::map<std::string, PlistValue>;
-  std::variant<bool, std::uint64_t, std::string, Bytes, Array, Dictionary> data;
+  std::variant<bool, std::uint64_t, double, std::string, Bytes, Array,
+               Dictionary>
+      data;
 
   PlistValue(bool value) : data(value) {}
   PlistValue(const std::uint64_t value) : data(value) {}
+  PlistValue(const double value) : data(value) {}
   PlistValue(std::string value) : data(std::move(value)) {}
   PlistValue(const char *value) : data(std::string(value)) {}
   PlistValue(Bytes value) : data(std::move(value)) {}
