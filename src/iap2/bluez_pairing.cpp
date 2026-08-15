@@ -298,7 +298,9 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
   // After a bond is removed, BlueZ removes its Device1 object too. test head unit can
   // take several inquiry intervals to reappear, so five seconds is not
   // enough for a real first-pairing attempt.
-  const auto discovery_seconds = std::max(12, timeout_seconds);
+  // The overall CarPlay phase permits a minute, but discovery should remain a
+  // bounded user-visible operation rather than consuming that whole budget.
+  const auto discovery_seconds = std::clamp(timeout_seconds, 12, 30);
   const auto discovery_deadline = std::chrono::steady_clock::now() +
                                   std::chrono::seconds(discovery_seconds);
   while (std::chrono::steady_clock::now() < discovery_deadline) {
