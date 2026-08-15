@@ -46,6 +46,12 @@ struct ManagementState {
 
 ManagementState management_state;
 
+bool is_unnamed(const acp::bridge::BluetoothDevice &device) {
+  // BlueZ commonly uses the address itself as Alias when no advertised name is
+  // available. Treat that as unnamed rather than displaying the address twice.
+  return device.name.empty() || device.name == device.address;
+}
+
 std::string html_escape(const std::string &value) {
   std::string escaped;
   for (const char character : value) {
@@ -258,11 +264,11 @@ std::string page(const acp::bridge::Config &config,
               "<option value=\"\">Keep the configured device (use manual field "
               "below)</option>";
     for (const auto &device : snapshot.bluetooth_devices) {
-      if (device.name.empty() && !snapshot.show_unnamed_bluetooth_devices)
+      if (is_unnamed(device) && !snapshot.show_unnamed_bluetooth_devices)
         continue;
       const auto selected =
           device.address == config.head_unit_mac ? " selected" : "";
-      auto name = device.name.empty() ? "Unnamed device" : device.name;
+      auto name = is_unnamed(device) ? "Unnamed device" : device.name;
       output += "<option value=\"" + html_escape(device.address) + "\"" +
                 selected + ">" + html_escape(name) + " — " +
                 html_escape(device.address) +
