@@ -432,7 +432,7 @@ public:
     response.mutable_channels()->Reserve(8);
     response.set_driver_position(
         aap_protobuf::service::control::message::DRIVER_POSITION_LEFT);
-    response.set_display_name("AA2ACP");
+    response.set_display_name("aa2acp");
     response.set_probe_for_support(false);
     auto *ping = response.mutable_connection_configuration()
                      ->mutable_ping_configuration();
@@ -441,12 +441,12 @@ public:
     ping->set_high_latency_threshold_ms(500);
     ping->set_tracked_ping_count(5);
     auto *head_unit = response.mutable_headunit_info();
-    head_unit->set_make("ACP");
-    head_unit->set_model("Android Auto to CarPlay Bridge");
+    head_unit->set_make("aa2acp");
+    head_unit->set_model("aa2acp");
     head_unit->set_year("2026");
     head_unit->set_vehicle_id("aa2acp");
-    head_unit->set_head_unit_make("ACP");
-    head_unit->set_head_unit_model("AA2ACP");
+    head_unit->set_head_unit_make("aa2acp");
+    head_unit->set_head_unit_model("aa2acp");
     head_unit->set_head_unit_software_build("1");
     head_unit->set_head_unit_software_version("0.1");
 
