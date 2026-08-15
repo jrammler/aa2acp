@@ -140,6 +140,8 @@ std::vector<acp::airplay::Bytes> h264_nalus(const std::string &path) {
         break;
       ++end;
     }
+    if (end + 3 > input.size())
+      end = input.size();
     if (start < end)
       result.emplace_back(input.begin() + static_cast<std::ptrdiff_t>(start),
                           input.begin() + static_cast<std::ptrdiff_t>(end));
@@ -174,6 +176,8 @@ h264_nalus(const std::span<const std::uint8_t> input) {
         break;
       ++end;
     }
+    if (end + 3 > input.size())
+      end = input.size();
     if (start < end)
       result.emplace_back(input.begin() + static_cast<std::ptrdiff_t>(start),
                           input.begin() + static_cast<std::ptrdiff_t>(end));
