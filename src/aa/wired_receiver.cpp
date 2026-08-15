@@ -26,6 +26,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -330,10 +331,12 @@ public:
   ControlSession(boost::asio::io_service &io_service,
                  aasdk::usb::IUSBWrapper &usb_wrapper,
                  aasdk::usb::DeviceHandle handle, Callback callback,
-                 WiredReceiver::VideoFrameCallback video_frame_callback)
+                 WiredReceiver::VideoFrameCallback video_frame_callback,
+                 std::function<void()> ended_callback)
       : io_service_(io_service), strand_(io_service), usb_wrapper_(usb_wrapper),
         handle_(std::move(handle)), callback_(std::move(callback)),
-        video_frame_callback_(std::move(video_frame_callback)) {}
+        video_frame_callback_(std::move(video_frame_callback)),
+        ended_callback_(std::move(ended_callback)) {}
 
   void start() {
     try {
@@ -713,8 +716,11 @@ private:
     receive_video_next();
   }
   void fail(const std::string &detail) {
+    if (failed_.exchange(true))
+      return;
     callback_({WiredReceiverEventType::error,
                "Android Auto control session: " + detail});
+    ended_callback_();
   }
 
   boost::asio::io_service &io_service_;
@@ -723,6 +729,7 @@ private:
   aasdk::usb::DeviceHandle handle_;
   Callback callback_;
   WiredReceiver::VideoFrameCallback video_frame_callback_;
+  std::function<void()> ended_callback_;
   aasdk::transport::ITransport::Pointer transport_;
   aasdk::messenger::ICryptor::Pointer cryptor_;
   aasdk::messenger::IMessenger::Pointer messenger_;
@@ -733,6 +740,7 @@ private:
   std::shared_ptr<SensorSession> sensor_;
   std::shared_ptr<MicrophoneSession> microphone_;
   int32_t video_session_id_ = 0;
+  std::atomic_bool failed_{false};
 };
 
 class WiredReceiver::Impl {
@@ -919,8 +927,22 @@ private:
   void start_control_session() {
     control_session_ = std::make_shared<ControlSession>(
         io_service_, *usb_wrapper_, active_handle_, callback_,
-        video_frame_callback_);
+        video_frame_callback_,
+        [this] { io_service_.post([this] { handle_control_session_end(); }); });
     control_session_->start();
+  }
+
+  void handle_control_session_end() {
+    if (stopping_ || !active_)
+      return;
+    control_session_.reset();
+    active_handle_.reset();
+    active_ = false;
+    emit({WiredReceiverEventType::disconnected,
+          "wired Android Auto control transport ended"});
+    arm_wait_for_phone();
+    emit({WiredReceiverEventType::waiting_for_phone,
+          "waiting for a wired Android Auto phone"});
   }
 
   void reset_locked() {

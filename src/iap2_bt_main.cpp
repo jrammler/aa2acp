@@ -130,6 +130,10 @@ private:
 } // namespace
 
 int main(int argc, char **argv) {
+  // bridge-daemon captures this process through a pipe. Keep protocol progress
+  // visible in the daemon log instead of waiting for process exit to flush it.
+  std::cout.setf(std::ios::unitbuf);
+  std::cerr.setf(std::ios::unitbuf);
   std::string address;
   std::uint8_t channel = 3;
   int timeout_seconds = 15;
