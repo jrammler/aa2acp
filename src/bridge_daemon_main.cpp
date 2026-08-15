@@ -108,11 +108,24 @@ std::optional<std::string> form_field(const std::string &body,
   return std::nullopt;
 }
 
+std::optional<std::string> query_field(const std::string &request,
+                                       const std::string &wanted) {
+  const auto path_end = request.find(' ');
+  const auto query_start = request.find('?');
+  if (path_end == std::string::npos || query_start == std::string::npos ||
+      query_start >= path_end)
+    return std::nullopt;
+  return form_field(request.substr(query_start + 1, path_end - query_start - 1),
+                    wanted);
+}
+
 bool send_response(const int client, const int status, const char *type,
                    const std::string &body, const std::string &extra = {}) {
   const std::string response =
       "HTTP/1.1 " + std::to_string(status) +
       (status == 200   ? " OK\r\n"
+       : status == 204 ? " No Content\r\n"
+       : status == 205 ? " Reset Content\r\n"
        : status == 303 ? " See Other\r\n"
                        : " Bad Request\r\n") +
       "Content-Type: " + type + "\r\n" + extra +
@@ -179,13 +192,6 @@ ManagementSnapshot management_snapshot(ManagementState &state) {
   return state.snapshot;
 }
 
-std::string scan_status_fragment(const ManagementSnapshot &snapshot) {
-  if (!snapshot.bluetooth_scan_running)
-    return "<span data-scan-running=\"0\"></span>";
-  return "<p class=\"status\" data-scan-running=\"1\">Bluetooth " +
-         html_escape(snapshot.bluetooth_scan_phase) + "…</p>";
-}
-
 void run_bluetooth_scan(ManagementState &state) {
   const auto set_phase = [&state](const std::string &phase) {
     std::lock_guard lock(state.mutex);
@@ -220,6 +226,7 @@ std::string page(const acp::bridge::Config &config,
       ".hint{color:#555}.status{padding:.6rem;background:#eef7ee}</style></"
       "head><body data-scan-running=\"" +
       std::string(snapshot.bluetooth_scan_running ? "1" : "0") +
+      "\" data-scan-phase=\"" + html_escape(snapshot.bluetooth_scan_phase) +
       "\">"
       "<h1>ACP-AA Bridge</h1><p>Configure the pinned CarPlay head unit.</p>";
   if (saved)
@@ -278,18 +285,13 @@ std::string page(const acp::bridge::Config &config,
       std::string(snapshot.show_unnamed_bluetooth_devices ? " checked" : "") +
       "> Show unnamed Bluetooth devices</label><button type=submit>Apply "
       "display filter</button></form>"
-      "<script>(()=>{const "
-      "form=document.querySelector('#scan-form');"
-      "const picker=document.querySelector('#bluetooth-picker');"
-      "const poll=async()=>{try{picker.innerHTML=await (await "
-      "fetch('/scan-status')).text();"
-      "if(picker.firstElementChild.dataset.scanRunning==='1'){setTimeout(poll,"
-      "1000);}"
-      "else location.reload();}catch{setTimeout(poll,2000);}};"
-      "form.addEventListener('submit',async "
-      "event=>{event.preventDefault();await "
-      "fetch('/scan',{method:'POST'});poll();});"
-      "if(document.body.dataset.scanRunning==='1')poll();})();</script></"
+      "<script>(()=>{if(document.body.dataset.scanRunning!=='1')return;"
+      "const phase=encodeURIComponent(document.body.dataset.scanPhase);"
+      "const poll=async()=>{try{const response=await "
+      "fetch('/scan-status?phase='+phase);"
+      "if(response.status===205){location.reload();return;}setTimeout(poll,"
+      "1000);"
+      "}catch{setTimeout(poll,2000);}};poll();})();</script></"
       "body></html>";
   return output;
 }
@@ -467,9 +469,15 @@ int main(int argc, char **argv) {
       send_response(client, 200, "text/html; charset=utf-8",
                     page(config, snapshot, saved));
     } else if (request.starts_with("GET /scan-status ")) {
-      send_response(
-          client, 200, "text/html; charset=utf-8",
-          scan_status_fragment(management_snapshot(management_state)));
+      const auto snapshot = management_snapshot(management_state);
+      const auto phase = query_field(request, "phase");
+      const int status = snapshot.bluetooth_scan_running && phase &&
+                                 *phase == snapshot.bluetooth_scan_phase
+                             ? 204
+                             : 205;
+      std::cout << "Management: GET /scan-status (phase="
+                << phase.value_or("none") << ", response=" << status << ")\n";
+      send_response(client, status, "text/plain", "");
     } else if (request.starts_with("POST /scan ")) {
       std::cout << "Management: Bluetooth scan requested\n";
       bool start_scan = false;
