@@ -1,3 +1,4 @@
+#include "acp/bridge/bluez_inventory.hpp"
 #include "acp/bridge/config.hpp"
 
 #include <arpa/inet.h>
@@ -10,14 +11,11 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include <algorithm>
 #include <array>
 #include <atomic>
-#include <cstdio>
+#include <cctype>
 #include <filesystem>
 #include <iostream>
-#include <map>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
@@ -28,125 +26,170 @@ extern char **environ;
 namespace {
 
 std::atomic_bool bluetooth_scan_running = false;
-std::mutex bluetooth_devices_mutex;
-std::map<std::string, std::string> scanned_bluetooth_devices;
 
-constexpr char kPage[] =
-    R"HTML(<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>ACP-AA Bridge</title><style>body{font:16px sans-serif;max-width:34rem;margin:3rem auto;padding:0 1rem}label,select,input{display:block;width:100%;box-sizing:border-box;margin:.5rem 0}button{padding:.6rem 1rem}</style><h1>ACP-AA Bridge</h1><p>Configure the pinned CarPlay head unit.</p><form><label>Head-unit Bluetooth device<select id="head_unit_mac" required></select></label><button type="button" id="scan">Scan for devices</button><label>Manual MAC fallback<input id="manual_mac" placeholder="[redacted-device-address]"></label><label>Wi-Fi interface<select id="wifi_interface" required></select></label><button>Save</button></form><p id="result"></p><script>const add=(id,items,current,bt)=>{let s=document.querySelector(id);s.innerHTML='';items.forEach(x=>{let [value,name]=bt?x.split('|'): [x,x],o=new Option(bt?name+' — '+value:name,value);if(value===current)o.selected=true;s.add(o)});if(!s.options.length)s.add(new Option('No devices found',''))};const devices=async(current=head_unit_mac.value)=>add('#head_unit_mac',await fetch('/api/bluetooth-devices').then(r=>r.json()),current,true);Promise.all([fetch('/api/config').then(r=>r.json()),fetch('/api/wifi-interfaces').then(r=>r.json())]).then(async([c,w])=>{manual_mac.value=c.head_unit_mac;await devices(c.head_unit_mac);add('#wifi_interface',w,c.wifi_interface,false)});scan.onclick=async()=>{scan.disabled=true;result.textContent='Scanning…';await fetch('/api/bluetooth-scan');for(let i=0;i<24;i++){await new Promise(r=>setTimeout(r,2000));await devices();if(!(await fetch('/api/bluetooth-scan-status').then(r=>r.json())).running)break}result.textContent='Scan complete.';scan.disabled=false};document.querySelector('form').onsubmit=async e=>{e.preventDefault();let c={head_unit_mac:manual_mac.value||head_unit_mac.value,wifi_interface:wifi_interface.value};let r=await fetch('/api/config',{method:'PUT',body:JSON.stringify(c)});result.textContent=r.ok?'Saved.':'Save failed.'}</script>)HTML";
-
-constexpr char kPageExtension[] = R"HTML(<script>
-const keepConfigured=()=>{if(!head_unit_mac.querySelector('option[value=""]'))head_unit_mac.add(new Option('Keep configured device',''),0)};
-setInterval(keepConfigured,250);keepConfigured();
-head_unit_mac.onchange=()=>{if(head_unit_mac.value)manual_mac.value=''};
-document.querySelector('form').onsubmit=async e=>{e.preventDefault();let c={head_unit_mac:manual_mac.value||head_unit_mac.value,wifi_interface:wifi_interface.value};let r=await fetch('/api/config',{method:'PUT',body:JSON.stringify(c)});result.textContent=r.ok?'Saved.':'Save failed.'};
-</script>)HTML";
-
-std::string json(const acp::bridge::Config &config) {
-  // Values are validated as single-line key/value data by the config store.
-  return "{\"head_unit_mac\":\"" + config.head_unit_mac +
-         "\",\"wifi_interface\":\"" + config.wifi_interface + "\"}";
+std::string html_escape(const std::string &value) {
+  std::string escaped;
+  for (const char character : value) {
+    switch (character) {
+    case '&':
+      escaped += "&amp;";
+      break;
+    case '<':
+      escaped += "&lt;";
+      break;
+    case '>':
+      escaped += "&gt;";
+      break;
+    case '\"':
+      escaped += "&quot;";
+      break;
+    case '\'':
+      escaped += "&#39;";
+      break;
+    default:
+      escaped += character;
+      break;
+    }
+  }
+  return escaped;
 }
 
-std::optional<std::string> field(const std::string &body,
-                                 const std::string &name) {
-  const auto prefix = "\"" + name + "\":\"";
-  const auto start = body.find(prefix);
-  if (start == std::string::npos)
-    return std::nullopt;
-  const auto value_start = start + prefix.size();
-  const auto end = body.find('"', value_start);
-  if (end == std::string::npos)
-    return std::nullopt;
-  return body.substr(value_start, end - value_start);
+std::string url_decode(const std::string &value) {
+  std::string decoded;
+  for (std::size_t index = 0; index < value.size(); ++index) {
+    if (value[index] == '+') {
+      decoded += ' ';
+    } else if (value[index] == '%' && index + 2 < value.size() &&
+               std::isxdigit(static_cast<unsigned char>(value[index + 1])) &&
+               std::isxdigit(static_cast<unsigned char>(value[index + 2]))) {
+      const auto hex = value.substr(index + 1, 2);
+      decoded += static_cast<char>(std::stoi(hex, nullptr, 16));
+      index += 2;
+    } else {
+      decoded += value[index];
+    }
+  }
+  return decoded;
+}
+
+std::optional<std::string> form_field(const std::string &body,
+                                      const std::string &wanted) {
+  std::size_t start = 0;
+  while (start <= body.size()) {
+    const auto end = body.find('&', start);
+    const auto field = body.substr(start, end - start);
+    const auto separator = field.find('=');
+    if (url_decode(field.substr(0, separator)) == wanted)
+      return separator == std::string::npos
+                 ? ""
+                 : url_decode(field.substr(separator + 1));
+    if (end == std::string::npos)
+      break;
+    start = end + 1;
+  }
+  return std::nullopt;
 }
 
 bool send_response(const int client, const int status, const char *type,
-                   const std::string &body) {
+                   const std::string &body, const std::string &extra = {}) {
   const std::string response =
       "HTTP/1.1 " + std::to_string(status) +
-      (status == 200 ? " OK\r\n" : " Bad Request\r\n") +
-      "Content-Type: " + type +
-      "\r\nContent-Length: " + std::to_string(body.size()) +
+      (status == 200   ? " OK\r\n"
+       : status == 303 ? " See Other\r\n"
+                       : " Bad Request\r\n") +
+      "Content-Type: " + type + "\r\n" + extra +
+      "Content-Length: " + std::to_string(body.size()) +
       "\r\nConnection: close\r\n\r\n" + body;
   return send(client, response.data(), response.size(), MSG_NOSIGNAL) ==
          static_cast<ssize_t>(response.size());
 }
 
-void capture_bluetooth_scan(const char *command) {
-  FILE *stream = popen(command, "r");
-  std::array<char, 512> line{};
-  while (stream != nullptr &&
-         fgets(line.data(), line.size(), stream) != nullptr) {
-    std::string value(line.data());
-    for (std::size_t index = 0; index < value.size();) {
-      if (static_cast<unsigned char>(value[index]) == 0x1b &&
-          index + 1 < value.size() && value[index + 1] == '[') {
-        auto end = index + 2;
-        while (end < value.size() && !(value[end] >= '@' && value[end] <= '~'))
-          ++end;
-        value.erase(index, std::min(end + 1, value.size()) - index);
-      } else {
-        ++index;
-      }
-    }
-    const auto marker = value.find("Device ");
-    if (marker == std::string::npos || value.size() < marker + 24)
-      continue;
-    const auto mac = value.substr(marker + 7, 17);
-    if (mac.find(':') == std::string::npos)
-      continue;
-    auto name = value.substr(marker + 25);
-    name.erase(
-        std::remove_if(name.begin(), name.end(),
-                       [](unsigned char character) { return character < 32; }),
-        name.end());
-    static constexpr std::array<std::string_view, 8> properties{
-        "RSSI",        "ManufacturerData", "AdvertisingFlags", "UUID",
-        "ServiceData", "Appearance",       "Modalias",         "TxPower"};
-    if (name.empty() || std::any_of(properties.begin(), properties.end(),
-                                    [&name](const auto property) {
-                                      return name.starts_with(property);
-                                    }))
-      continue;
-    std::lock_guard lock(bluetooth_devices_mutex);
-    scanned_bluetooth_devices.try_emplace(mac, name);
-  }
-  if (stream != nullptr)
-    pclose(stream);
-}
-
-std::string scanned_bluetooth_json() {
-  std::lock_guard lock(bluetooth_devices_mutex);
-  std::string output{"["};
-  for (const auto &[mac, name] : scanned_bluetooth_devices) {
-    if (output.size() != 1)
-      output += ',';
-    output += '"' + mac + "|" + name + '"';
-  }
-  return output + ']';
-}
-
-std::string command_json(const char *command) {
-  std::vector<std::string> values;
-  FILE *stream = popen(command, "r");
+std::vector<std::string> wifi_interfaces() {
+  std::vector<std::string> interfaces;
+  FILE *stream = popen("nmcli -t -f DEVICE,TYPE device status", "r");
   std::array<char, 256> line{};
   while (stream != nullptr &&
          fgets(line.data(), line.size(), stream) != nullptr) {
     std::string value(line.data());
-    while (!value.empty() && (value.back() == '\n' || value.back() == '\r'))
-      value.pop_back();
-    if (!value.empty())
-      values.push_back(value);
+    const auto separator = value.find(':');
+    if (separator != std::string::npos &&
+        value.substr(separator + 1).starts_with("wifi"))
+      interfaces.push_back(value.substr(0, separator));
   }
   if (stream != nullptr)
     pclose(stream);
-  std::string output{"["};
-  for (std::size_t index = 0; index < values.size(); ++index) {
-    if (index != 0)
-      output += ',';
-    output += '"' + values[index] + '"';
+  return interfaces;
+}
+
+std::string page(const acp::bridge::Config &config, const bool saved,
+                 const bool scan_requested) {
+  std::string error;
+  const auto devices = acp::bridge::list_bluez_devices(&error);
+  const auto interfaces = wifi_interfaces();
+  std::string output =
+      "<!doctype html><html><head><meta name=\"viewport\" "
+      "content=\"width=device-width,initial-scale=1\">"
+      "<title>ACP-AA Bridge</title><style>body{font:16px "
+      "sans-serif;max-width:38rem;margin:3rem auto;padding:0 1rem}"
+      "label,select,input{display:block;width:100%;box-sizing:border-box;"
+      "margin:.5rem 0}button{padding:.6rem 1rem;margin:.25rem 0}"
+      ".hint{color:#555}.status{padding:.6rem;background:#eef7ee}</style></"
+      "head><body>"
+      "<h1>ACP-AA Bridge</h1><p>Configure the pinned CarPlay head unit.</p>";
+  if (saved)
+    output += "<p class=status>Configuration saved.</p>";
+  if (scan_requested || bluetooth_scan_running)
+    output +=
+        "<p class=status>Bluetooth discovery is running in the background. "
+        "Refresh this page to see devices as BlueZ discovers them.</p>";
+  if (!error.empty())
+    output +=
+        "<p class=hint>BlueZ inventory unavailable: " + html_escape(error) +
+        "</p>";
+  output += "<form method=post action=\"/config\">"
+            "<label>Known or discovered Bluetooth device<select "
+            "name=\"head_unit_mac\">"
+            "<option value=\"\">Keep the configured device (use manual field "
+            "below)</option>";
+  for (const auto &device : devices) {
+    const auto selected =
+        device.address == config.head_unit_mac ? " selected" : "";
+    auto name = device.name.empty() ? "Unnamed device" : device.name;
+    output += "<option value=\"" + html_escape(device.address) + "\"" +
+              selected + ">" + html_escape(name) + " — " +
+              html_escape(device.address) + (device.paired ? " (paired)" : "") +
+              (device.connected ? " (connected)" : "") + "</option>";
   }
-  return output + ']';
+  output += "</select></label><p class=hint>Paired devices and discoveries "
+            "both come directly from BlueZ. A CarPlay capability filter is "
+            "deliberately not applied yet, because its advertised identifiers "
+            "are not sufficient to safely identify every head unit.</p>"
+            "<label>Manual Bluetooth MAC (leave unchanged to keep the saved "
+            "device)<input name=\"manual_mac\" value=\"" +
+            html_escape(config.head_unit_mac) +
+            "\" placeholder=\"[redacted-device-address]\"></label>"
+            "<label>Wi-Fi interface<select name=\"wifi_interface\">";
+  bool current_interface_present = false;
+  for (const auto &interface : interfaces) {
+    const auto selected = interface == config.wifi_interface ? " selected" : "";
+    current_interface_present =
+        current_interface_present || interface == config.wifi_interface;
+    output += "<option value=\"" + html_escape(interface) + "\"" + selected +
+              ">" + html_escape(interface) + "</option>";
+  }
+  if (!current_interface_present)
+    output += "<option selected value=\"" + html_escape(config.wifi_interface) +
+              "\">" + html_escape(config.wifi_interface) +
+              " (configured)</option>";
+  output +=
+      "</select></label><button type=submit>Save configuration</button></form>"
+      "<form method=post action=\"/scan\"><button type=submit" +
+      std::string(bluetooth_scan_running ? " disabled" : "") +
+      ">Scan Bluetooth devices (LE, then classic)</button></form>"
+      "<p class=hint>Discovery runs independently of the web request, so "
+      "reloading this page remains responsive. The Wi-Fi list is always "
+      "rendered with the page.</p></body></html>";
+  return output;
 }
 
 int run_carplay_session(const char *program_path,
@@ -186,9 +229,8 @@ int run_carplay_session(const char *program_path,
     pollfd signal_poll{signal_fd, POLLIN, 0};
     if (poll(&signal_poll, 1, 100) > 0 && (signal_poll.revents & POLLIN) != 0) {
       signalfd_siginfo signal_info{};
-      const auto signal_bytes =
-          read(signal_fd, &signal_info, sizeof(signal_info));
-      if (signal_bytes != static_cast<ssize_t>(sizeof(signal_info)))
+      if (read(signal_fd, &signal_info, sizeof(signal_info)) !=
+          static_cast<ssize_t>(sizeof(signal_info)))
         continue;
       std::cout << "Bridge daemon: stopping active CarPlay session\n";
       kill(child, SIGTERM);
@@ -218,9 +260,10 @@ int main(int argc, char **argv) {
       return 2;
     }
   }
-  auto config = acp::bridge::load_config(config_path)
-                    .value_or(acp::bridge::Config{
-                        "", "wlan0", "/var/lib/acp-aa-bridge/airplay"});
+  auto config =
+      acp::bridge::load_config(config_path)
+          .value_or(acp::bridge::Config{
+              "", "wlan0", "/var/lib/acp-aa-bridge/airplay-pairing.bin"});
   sigset_t signals;
   sigemptyset(&signals);
   sigaddset(&signals, SIGINT);
@@ -262,12 +305,12 @@ int main(int argc, char **argv) {
       continue;
     if ((descriptors[1].revents & POLLIN) != 0) {
       signalfd_siginfo signal_info{};
-      const auto signal_bytes =
-          read(signal_fd, &signal_info, sizeof(signal_info));
-      if (signal_bytes != static_cast<ssize_t>(sizeof(signal_info)))
-        continue;
-      std::cout << "Bridge daemon: graceful shutdown requested\n";
-      break;
+      if (read(signal_fd, &signal_info, sizeof(signal_info)) ==
+          static_cast<ssize_t>(sizeof(signal_info))) {
+        std::cout << "Bridge daemon: graceful shutdown requested\n";
+        break;
+      }
+      continue;
     }
     if ((descriptors[0].revents & POLLIN) == 0)
       continue;
@@ -276,78 +319,74 @@ int main(int argc, char **argv) {
       continue;
     std::array<char, 4096> buffer{};
     std::string request;
-    while (request.find("\r\n\r\n") == std::string::npos) {
+    while (request.find("\r\n\r\n") == std::string::npos &&
+           request.size() <= 16 * 1024) {
       const auto count = recv(client, buffer.data(), buffer.size(), 0);
       if (count <= 0)
         break;
       request.append(buffer.data(), static_cast<std::size_t>(count));
-      if (request.size() > 16 * 1024)
-        break;
     }
     const auto header_end = request.find("\r\n\r\n");
-    const auto content_length_marker = request.find("Content-Length: ");
+    const auto content_marker = request.find("Content-Length: ");
     if (header_end != std::string::npos &&
-        content_length_marker != std::string::npos) {
-      const auto length_start = content_length_marker + 16;
-      const auto length_end = request.find("\r\n", length_start);
-      const auto length =
-          length_end == std::string::npos
-              ? 0U
-              : static_cast<std::size_t>(std::stoul(
-                    request.substr(length_start, length_end - length_start)));
+        content_marker != std::string::npos) {
+      const auto start = content_marker + 16;
+      const auto end = request.find("\r\n", start);
+      const auto length = end == std::string::npos
+                              ? 0U
+                              : static_cast<std::size_t>(std::stoul(
+                                    request.substr(start, end - start)));
       while (request.size() < header_end + 4 + length) {
-        const auto more = recv(client, buffer.data(), buffer.size(), 0);
-        if (more <= 0)
+        const auto count = recv(client, buffer.data(), buffer.size(), 0);
+        if (count <= 0)
           break;
-        request.append(buffer.data(), static_cast<std::size_t>(more));
+        request.append(buffer.data(), static_cast<std::size_t>(count));
       }
     }
     const auto split = request.find("\r\n\r\n");
     const auto body =
         split == std::string::npos ? "" : request.substr(split + 4);
-    if (request.starts_with("GET / "))
+    if (request.starts_with("GET / ") || request.starts_with("GET /?")) {
+      const bool saved = request.find("saved=1") != std::string::npos;
+      std::cout << "Management: GET / ("
+                << acp::bridge::list_bluez_devices().size()
+                << " BlueZ devices)\n";
       send_response(client, 200, "text/html; charset=utf-8",
-                    std::string(kPage) + kPageExtension);
-    else if (request.starts_with("GET /api/config "))
-      send_response(client, 200, "application/json", json(config));
-    else if (request.starts_with("GET /api/bluetooth-devices ")) {
-      bool empty = false;
-      {
-        std::lock_guard lock(bluetooth_devices_mutex);
-        empty = scanned_bluetooth_devices.empty();
-      }
-      if (empty && !bluetooth_scan_running)
-        capture_bluetooth_scan("bluetoothctl devices");
-      send_response(client, 200, "application/json", scanned_bluetooth_json());
-    } else if (request.starts_with("GET /api/bluetooth-scan ")) {
+                    page(config, saved, false));
+    } else if (request.starts_with("POST /scan ")) {
+      std::cout << "Management: Bluetooth scan requested\n";
       if (!bluetooth_scan_running.exchange(true)) {
         std::thread([] {
-          capture_bluetooth_scan("bluetoothctl --timeout 30 scan le 2>&1");
-          capture_bluetooth_scan("bluetoothctl --timeout 15 scan bredr 2>&1");
+          const auto log = [](const std::string &message) {
+            std::cout << "Management Bluetooth: " << message << '\n';
+          };
+          acp::bridge::discover_bluez_devices("le", 30, log);
+          acp::bridge::discover_bluez_devices("bredr", 15, log);
           bluetooth_scan_running = false;
+          std::cout << "Management Bluetooth: discovery finished\n";
         }).detach();
       }
-      send_response(client, 200, "application/json", "{\"running\":true}");
-    } else if (request.starts_with("GET /api/bluetooth-scan-status ")) {
-      send_response(client, 200, "application/json",
-                    bluetooth_scan_running ? "{\"running\":true}"
-                                           : "{\"running\":false}");
-    } else if (request.starts_with("GET /api/wifi-interfaces "))
-      send_response(client, 200, "application/json",
-                    command_json("nmcli -t -f DEVICE,TYPE device status | awk "
-                                 "-F: '$2 == \"wifi\" {print $1}'"));
-    else if (request.starts_with("PUT /api/config ")) {
-      const auto mac = field(body, "head_unit_mac");
-      const auto wifi = field(body, "wifi_interface");
-      if (mac && wifi &&
+      send_response(client, 303, "text/plain", "", "Location: /?scan=1\r\n");
+    } else if (request.starts_with("POST /config ")) {
+      const auto manual = form_field(body, "manual_mac");
+      const auto selected = form_field(body, "head_unit_mac");
+      const auto wifi = form_field(body, "wifi_interface");
+      const auto mac = manual && !manual->empty()
+                           ? *manual
+                           : selected.value_or(config.head_unit_mac);
+      if (wifi && !mac.empty() &&
           acp::bridge::save_config(
-              config_path, {*mac, *wifi, config.airplay_pairing_store})) {
-        config = {*mac, *wifi, config.airplay_pairing_store};
-        send_response(client, 200, "application/json", json(config));
+              config_path, {mac, *wifi, config.airplay_pairing_store})) {
+        config = {mac, *wifi, config.airplay_pairing_store};
+        std::cout << "Management: saved head unit " << config.head_unit_mac
+                  << " on " << config.wifi_interface << '\n';
+        send_response(client, 303, "text/plain", "", "Location: /?saved=1\r\n");
       } else {
+        std::cout << "Management: rejected invalid configuration\n";
         send_response(client, 400, "text/plain", "Invalid configuration\n");
       }
     } else {
+      std::cout << "Management: unknown request\n";
       send_response(client, 400, "text/plain", "Unknown endpoint\n");
     }
     close(client);

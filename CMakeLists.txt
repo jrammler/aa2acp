@@ -43,6 +43,11 @@ add_library(bridge_config src/bridge/config.cpp)
 target_include_directories(bridge_config PUBLIC include)
 target_compile_options(bridge_config PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
+add_library(bluez_inventory src/bridge/bluez_inventory.cpp)
+target_include_directories(bluez_inventory PUBLIC include)
+target_link_libraries(bluez_inventory PUBLIC PkgConfig::DBUS)
+target_compile_options(bluez_inventory PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
 add_executable(airplay-pair-setup-probe src/airplay_pair_setup_probe_main.cpp)
 target_link_libraries(airplay-pair-setup-probe PRIVATE airplay_session)
 target_compile_options(airplay-pair-setup-probe PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -57,7 +62,7 @@ target_link_libraries(iap2-bt PRIVATE iap2_link airplay_session ${BLUETOOTH_LIBR
 target_compile_options(iap2-bt PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 add_executable(bridge-daemon src/bridge_daemon_main.cpp)
-target_link_libraries(bridge-daemon PRIVATE bridge_config)
+target_link_libraries(bridge-daemon PRIVATE bridge_config bluez_inventory)
 target_compile_options(bridge-daemon PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 enable_testing()
