@@ -65,6 +65,18 @@ AirPlay pairing record. It asks BlueZ to pair if needed, then preserves the
 BlueZ/NetworkManager records for fast reconnect while disconnecting test head unit's AP
 after the CarPlay session ends.
 
+## Next implementation steps
+
+1. Discover/cache the CarPlay display profile and use it in Android Auto's
+   video configuration, instead of relying only on the verified 1280×720
+   fallback.
+2. Forward Android Auto media, guidance, and system audio to CarPlay; return
+   microphone audio in the opposite direction.
+3. Map CarPlay physical-button events to Android Auto directional, select,
+   back, home, and media input events. The target car has no touchscreen.
+4. Add wireless Android Auto using a dedicated second Wi-Fi radio after the
+   wired projection path is complete and soak-tested.
+
 By default its configuration is `~/.local/state/acp-aa-bridge/config` (or
 `$XDG_STATE_HOME/acp-aa-bridge/config`) and its AirPlay pairing identity is
 stored beside it as `airplay-pairing.bin`. `--config PATH` remains available
