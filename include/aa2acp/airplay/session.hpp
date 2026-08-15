@@ -20,6 +20,9 @@ struct SessionOptions {
   // Supplies one Annex-B H.264 access unit at a time. Returning std::nullopt
   // ends the live stream. The callback may block while waiting for a frame.
   std::function<std::optional<std::vector<std::uint8_t>>()> next_video_frame;
+  // Supplies one 48 kHz stereo S16LE Android Auto media-audio packet at a
+  // time. Returning std::nullopt ends the live stream.
+  std::function<std::optional<std::vector<std::uint8_t>>()> next_media_audio;
   std::string pairing_store;
   std::filesystem::path display_profile_store;
   std::string head_unit_mac;

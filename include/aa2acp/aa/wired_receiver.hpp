@@ -34,16 +34,23 @@ struct DisplayProfile {
   std::uint32_t max_fps{};
 };
 
+enum class AudioStream { media, guidance, system };
+
 class WiredReceiver {
 public:
   using EventCallback = std::function<void(const WiredReceiverEvent &)>;
   // Invoked on the receiver's I/O thread for each Android Auto H.264 access
   // unit. The span is valid only for the duration of the callback.
   using VideoFrameCallback = std::function<void(std::span<const std::uint8_t>)>;
+  // Invoked on the receiver's I/O thread for an Android Auto PCM audio packet.
+  // The span is valid only for the duration of the callback.
+  using AudioFrameCallback =
+      std::function<void(AudioStream, std::span<const std::uint8_t>)>;
   using DisplayProfileProvider = std::function<std::optional<DisplayProfile>()>;
 
   explicit WiredReceiver(EventCallback callback,
                          VideoFrameCallback video_frame_callback = {},
+                         AudioFrameCallback audio_frame_callback = {},
                          DisplayProfileProvider display_profile_provider = {});
   ~WiredReceiver();
 

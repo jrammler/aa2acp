@@ -46,6 +46,28 @@ int connect_tcp(const std::string &host, const std::string &port) {
   return socket_fd;
 }
 
+int connect_udp(const std::string &host, const std::string &port) {
+  addrinfo hints{};
+  hints.ai_socktype = SOCK_DGRAM;
+  addrinfo *addresses = nullptr;
+  if (getaddrinfo(host.c_str(), port.c_str(), &hints, &addresses) != 0)
+    return -1;
+  int socket_fd = -1;
+  for (auto *address = addresses; address != nullptr;
+       address = address->ai_next) {
+    socket_fd =
+        socket(address->ai_family, address->ai_socktype, address->ai_protocol);
+    if (socket_fd >= 0 &&
+        connect(socket_fd, address->ai_addr, address->ai_addrlen) == 0)
+      break;
+    if (socket_fd >= 0)
+      close(socket_fd);
+    socket_fd = -1;
+  }
+  freeaddrinfo(addresses);
+  return socket_fd;
+}
+
 bool send_all(const int socket_fd, const std::span<const std::uint8_t> bytes) {
   for (std::size_t offset = 0; offset < bytes.size();) {
     const auto count = send(socket_fd, bytes.data() + offset,
@@ -685,6 +707,65 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   }
   std::cout << "AirPlay: session SETUP received timing/event ports\n";
 
+  constexpr std::string_view main_audio_stream_id =
+      "8B4C4DF6-AE7F-48F5-A36B-546EEAAEF4B5";
+  std::optional<std::uint64_t> audio_port;
+  aa2acp::airplay::Bytes audio_key;
+  if (options.next_media_audio) {
+    // Android Auto delivers media as 48 kHz stereo S16LE. LIVI accepts this
+    // direct LPCM stream, so retain it for the first audio milestone instead
+    // of adding an encoder and its latency to the bridge.
+    const auto audio_body =
+        aa2acp::airplay::encode_bplist(aa2acp::airplay::PlistValue::Dictionary{
+            {"streams",
+             aa2acp::airplay::PlistValue::Array{
+                 aa2acp::airplay::PlistValue::Dictionary{
+                     {"type", aa2acp::airplay::PlistValue(std::uint64_t{100})},
+                     {"audioType", aa2acp::airplay::PlistValue("media")},
+                     {"audioFormat",
+                      aa2acp::airplay::PlistValue(std::uint64_t{0x8000})},
+                     {"streamConnectionID",
+                      aa2acp::airplay::PlistValue(
+                          main_audio_stream_id.data())}}}},
+        });
+    const auto audio_response =
+        send_encrypted(socket_fd, control, encrypted_read_buffer,
+                       aa2acp::airplay::encode_request(
+                           "SETUP", "rtsp://127.0.0.1/stream", 8, audio_body,
+                           "application/x-apple-binary-plist"),
+                       timeout_seconds, options.stop_requested);
+    const auto audio_plist =
+        audio_response ? aa2acp::airplay::decode_bplist(audio_response->body)
+                       : std::nullopt;
+    const auto audio_info = dictionary_of(audio_plist);
+    const auto *audio_streams =
+        audio_info && audio_info->contains("streams")
+            ? std::get_if<aa2acp::airplay::PlistValue::Array>(
+                  &audio_info->at("streams").data)
+            : nullptr;
+    const auto *first_audio_stream =
+        audio_streams && !audio_streams->empty()
+            ? std::get_if<aa2acp::airplay::PlistValue::Dictionary>(
+                  &audio_streams->front().data)
+            : nullptr;
+    audio_port = first_audio_stream
+                     ? integer_at(*first_audio_stream, "dataPort")
+                     : std::nullopt;
+    audio_key = aa2acp::airplay::hkdf_sha512(
+        *shared,
+        std::string("DataStream-Salt") + std::string(main_audio_stream_id),
+        "DataStream-Output-Encryption-Key", 32);
+    if (!audio_response || audio_response->status != 200 || !audio_port ||
+        *audio_port == 0 || *audio_port > UINT16_MAX ||
+        audio_key.size() != 32) {
+      std::cerr << "Encrypted media-audio SETUP failed\n";
+      close(socket_fd);
+      return 1;
+    }
+    std::cout << "AirPlay: media-audio SETUP received data port " << *audio_port
+              << '\n';
+  }
+
   constexpr std::string_view screen_stream_id =
       "3A5B6C7D-8E9F-4012-A345-B678C901D234";
   const auto screen_body =
@@ -699,7 +780,7 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   const auto screen_response =
       send_encrypted(socket_fd, control, encrypted_read_buffer,
                      aa2acp::airplay::encode_request(
-                         "SETUP", "rtsp://127.0.0.1/stream", 8, screen_body,
+                         "SETUP", "rtsp://127.0.0.1/stream", 9, screen_body,
                          "application/x-apple-binary-plist"),
                      timeout_seconds, options.stop_requested);
   const auto screen_plist =
@@ -747,7 +828,7 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
 
   const auto record_response = send_encrypted(
       socket_fd, control, encrypted_read_buffer,
-      aa2acp::airplay::encode_request("RECORD", "rtsp://127.0.0.1/stream", 9,
+      aa2acp::airplay::encode_request("RECORD", "rtsp://127.0.0.1/stream", 10,
                                       {}, "application/octet-stream"),
       timeout_seconds, options.stop_requested);
   if (!record_response || record_response->status != 200) {
@@ -756,6 +837,65 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     return 1;
   }
   std::cout << "AirPlay: encrypted RECORD accepted\n";
+  std::jthread audio_sender;
+  if (options.next_media_audio && audio_port) {
+    audio_sender = std::jthread([&] {
+      const auto media_socket = connect_udp(
+          host, std::to_string(static_cast<std::uint16_t>(*audio_port)));
+      if (media_socket < 0) {
+        std::cerr << "Unable to establish encrypted media-audio stream\n";
+        return;
+      }
+      std::uint16_t sequence{};
+      std::uint32_t timestamp{};
+      std::uint64_t nonce_counter{};
+      std::size_t sent_packets{};
+      while (!options.stop_requested || !options.stop_requested()) {
+        const auto pcm = options.next_media_audio();
+        if (!pcm)
+          break;
+        if (pcm->empty() || pcm->size() % 4 != 0)
+          continue;
+        aa2acp::airplay::Bytes payload = *pcm;
+        for (std::size_t index = 0; index < payload.size(); index += 2)
+          std::swap(payload[index], payload[index + 1]);
+        std::array<std::uint8_t, 12> header{};
+        header[0] = 0x80;
+        header[1] = 100;
+        header[2] = static_cast<std::uint8_t>(sequence >> 8);
+        header[3] = static_cast<std::uint8_t>(sequence);
+        header[4] = static_cast<std::uint8_t>(timestamp >> 24);
+        header[5] = static_cast<std::uint8_t>(timestamp >> 16);
+        header[6] = static_cast<std::uint8_t>(timestamp >> 8);
+        header[7] = static_cast<std::uint8_t>(timestamp);
+        std::array<std::uint8_t, 8> nonce{};
+        store_le64(nonce, nonce_counter);
+        std::array<std::uint8_t, 12> nonce12{};
+        std::copy(nonce.begin(), nonce.end(), nonce12.begin() + 4);
+        const auto encrypted = aa2acp::airplay::seal_with_nonce(
+            audio_key, nonce12, payload, std::span(header).subspan(4, 8));
+        if (!encrypted) {
+          std::cerr << "Unable to encrypt Android Auto media audio\n";
+          break;
+        }
+        aa2acp::airplay::Bytes packet(header.begin(), header.end());
+        packet.insert(packet.end(), encrypted->begin(), encrypted->end());
+        packet.insert(packet.end(), nonce.begin(), nonce.end());
+        if (send(media_socket, packet.data(), packet.size(), MSG_NOSIGNAL) !=
+            static_cast<ssize_t>(packet.size())) {
+          std::cerr << "Unable to send encrypted Android Auto media audio\n";
+          break;
+        }
+        ++sequence;
+        timestamp += static_cast<std::uint32_t>(payload.size() / 4);
+        ++nonce_counter;
+        ++sent_packets;
+      }
+      close(media_socket);
+      std::cout << "AirPlay: encrypted Android Auto media audio sent "
+                << sent_packets << " packets\n";
+    });
+  }
   if (video_path.empty() && !options.next_video_frame) {
     close(socket_fd);
     return 0;

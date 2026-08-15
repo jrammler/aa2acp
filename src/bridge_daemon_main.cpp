@@ -698,6 +698,123 @@ private:
   std::ofstream dump_;
 };
 
+// Moves PCM off AASDK's I/O thread without allowing a slow CarPlay consumer to
+// block Android Auto acknowledgements. Frames use the same four-byte big-endian
+// length prefix as the video socket.
+class AudioSocketForwarder {
+public:
+  explicit AudioSocketForwarder(const std::filesystem::path &path)
+      : path_(path) {
+    listener_ = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (listener_ < 0 ||
+        path_.string().size() >= sizeof(sockaddr_un::sun_path)) {
+      close_listener();
+      return;
+    }
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    const auto value = path_.string();
+    std::copy(value.begin(), value.end(), address.sun_path);
+    unlink(value.c_str());
+    if (bind(listener_, reinterpret_cast<sockaddr *>(&address),
+             sizeof(address)) != 0 ||
+        listen(listener_, 1) != 0) {
+      close_listener();
+      unlink(value.c_str());
+      return;
+    }
+    worker_ =
+        std::jthread([this](const std::stop_token stop) { forward(stop); });
+  }
+
+  ~AudioSocketForwarder() {
+    worker_.request_stop();
+    close_listener();
+    frames_ready_.notify_all();
+    if (!path_.empty())
+      unlink(path_.c_str());
+  }
+
+  bool ready() const { return listener_ >= 0; }
+
+  void push(const std::span<const std::uint8_t> pcm) {
+    if (pcm.empty())
+      return;
+    std::lock_guard lock(mutex_);
+    if (frames_.size() >= 100)
+      frames_.pop_front();
+    frames_.emplace_back(pcm.begin(), pcm.end());
+    frames_ready_.notify_one();
+  }
+
+private:
+  using Bytes = std::vector<std::uint8_t>;
+
+  static bool send_all(const int socket_fd,
+                       const std::span<const std::uint8_t> bytes) {
+    for (std::size_t offset = 0; offset < bytes.size();) {
+      const auto count = send(socket_fd, bytes.data() + offset,
+                              bytes.size() - offset, MSG_NOSIGNAL);
+      if (count <= 0)
+        return false;
+      offset += static_cast<std::size_t>(count);
+    }
+    return true;
+  }
+
+  static bool send_frame(const int socket_fd, const Bytes &frame) {
+    const auto size = frame.size();
+    const std::array<std::uint8_t, 4> header{
+        static_cast<std::uint8_t>(size >> 24),
+        static_cast<std::uint8_t>(size >> 16),
+        static_cast<std::uint8_t>(size >> 8), static_cast<std::uint8_t>(size)};
+    return send_all(socket_fd, header) && send_all(socket_fd, frame);
+  }
+
+  void forward(const std::stop_token stop) {
+    while (!stop.stop_requested()) {
+      pollfd descriptor{listener_, POLLIN, 0};
+      if (poll(&descriptor, 1, 100) <= 0 || (descriptor.revents & POLLIN) == 0)
+        continue;
+      const auto client = accept4(listener_, nullptr, nullptr, SOCK_CLOEXEC);
+      if (client < 0)
+        continue;
+      std::cout
+          << "Bridge daemon: connected to Android Auto media audio source\n";
+      while (!stop.stop_requested()) {
+        Bytes frame;
+        {
+          std::unique_lock lock(mutex_);
+          frames_ready_.wait_for(lock, std::chrono::milliseconds(100), [&] {
+            return stop.stop_requested() || !frames_.empty();
+          });
+          if (frames_.empty())
+            continue;
+          frame = std::move(frames_.front());
+          frames_.pop_front();
+        }
+        if (!send_frame(client, frame))
+          break;
+      }
+      close(client);
+    }
+  }
+
+  void close_listener() {
+    if (listener_ >= 0) {
+      close(listener_);
+      listener_ = -1;
+    }
+  }
+
+  std::filesystem::path path_;
+  int listener_{-1};
+  std::jthread worker_;
+  std::mutex mutex_;
+  std::condition_variable frames_ready_;
+  std::deque<Bytes> frames_;
+};
+
 void stop_carplay_process_group(const pid_t child, int *status) {
   kill(-child, SIGTERM);
   const auto graceful_deadline =
@@ -719,7 +836,8 @@ int run_carplay_session(const char *program_path,
                         const std::stop_token stop,
                         const std::atomic_bool &phone_disconnected,
                         std::atomic<pid_t> &active_child,
-                        const std::string &video_socket = {}) {
+                        const std::string &video_socket = {},
+                        const std::string &audio_socket = {}) {
   if (config.head_unit_mac.empty()) {
     std::cerr << "Bridge daemon: configure a head-unit MAC first\n";
     return 2;
@@ -742,6 +860,10 @@ int run_carplay_session(const char *program_path,
   if (!video_socket.empty()) {
     arguments.push_back("--video-socket");
     arguments.push_back(video_socket);
+  }
+  if (!audio_socket.empty()) {
+    arguments.push_back("--audio-socket");
+    arguments.push_back(audio_socket);
   }
   std::vector<char *> argv;
   for (auto &argument : arguments)
@@ -836,9 +958,17 @@ int run_wired_android_auto_receiver(
   const auto video_socket =
       std::filesystem::path("/tmp") /
       ("aa2acp-video-" + std::to_string(getpid()) + ".sock");
+  const auto audio_socket =
+      std::filesystem::path("/tmp") /
+      ("aa2acp-audio-" + std::to_string(getpid()) + ".sock");
   VideoSocketForwarder forwarder(video_socket);
   if (!forwarder.ready()) {
     std::cerr << "Bridge daemon: unable to listen for Android Auto video\n";
+    return 1;
+  }
+  AudioSocketForwarder audio_forwarder(audio_socket);
+  if (!audio_forwarder.ready()) {
+    std::cerr << "Bridge daemon: unable to listen for Android Auto audio\n";
     return 1;
   }
   std::atomic_bool carplay_start_requested{};
@@ -895,6 +1025,11 @@ int run_wired_android_auto_receiver(
         for (const auto &access_unit : normalized)
           forwarder.push(access_unit);
       },
+      [&audio_forwarder](const aa2acp::aa::AudioStream stream,
+                         const std::span<const std::uint8_t> pcm) {
+        if (stream == aa2acp::aa::AudioStream::media)
+          audio_forwarder.push(pcm);
+      },
       [&config_provider]() -> std::optional<aa2acp::aa::DisplayProfile> {
         const auto config = config_provider();
         const auto deadline =
@@ -935,7 +1070,7 @@ int run_wired_android_auto_receiver(
     }
     const auto result =
         run_carplay_session(program_path, config, stop, phone_disconnected,
-                            active_carplay_child, video_socket);
+                            active_carplay_child, video_socket, audio_socket);
     if (stop.stop_requested())
       break;
     if (phone_disconnected.load()) {

@@ -43,8 +43,12 @@ public:
   AudioSinkSession(boost::asio::io_service::strand &strand,
                    aasdk::messenger::IMessenger::Pointer messenger,
                    aasdk::messenger::ChannelId channel_id,
-                   WiredReceiver::EventCallback callback)
+                   AudioStream audio_stream,
+                   WiredReceiver::EventCallback callback,
+                   WiredReceiver::AudioFrameCallback audio_frame_callback)
       : strand_(strand), callback_(std::move(callback)),
+        audio_frame_callback_(std::move(audio_frame_callback)),
+        audio_stream_(audio_stream),
         channel_(std::make_shared<
                  aasdk::channel::mediasink::audio::AudioMediaSinkService>(
             strand_, std::move(messenger), channel_id)) {}
@@ -96,11 +100,13 @@ public:
 
   void onMediaWithTimestampIndication(
       aasdk::messenger::Timestamp::ValueType,
-      const aasdk::common::DataConstBuffer &) override {
+      const aasdk::common::DataConstBuffer &data) override {
+    forward(data);
     acknowledge();
   }
 
-  void onMediaIndication(const aasdk::common::DataConstBuffer &) override {
+  void onMediaIndication(const aasdk::common::DataConstBuffer &data) override {
+    forward(data);
     acknowledge();
   }
 
@@ -116,6 +122,10 @@ private:
     sender(std::move(promise));
   }
   void receive_next() { channel_->receive(shared_from_this()); }
+  void forward(const aasdk::common::DataConstBuffer &data) {
+    if (audio_frame_callback_)
+      audio_frame_callback_(audio_stream_, {data.cdata, data.size});
+  }
   void acknowledge() {
     aap_protobuf::service::media::source::message::Ack acknowledgement;
     acknowledgement.set_session_id(session_id_);
@@ -132,6 +142,8 @@ private:
 
   boost::asio::io_service::strand &strand_;
   WiredReceiver::EventCallback callback_;
+  WiredReceiver::AudioFrameCallback audio_frame_callback_;
+  AudioStream audio_stream_;
   aasdk::channel::mediasink::audio::IAudioMediaSinkService::Pointer channel_;
   int32_t session_id_ = 0;
 };
@@ -332,11 +344,13 @@ public:
                  aasdk::usb::IUSBWrapper &usb_wrapper,
                  aasdk::usb::DeviceHandle handle, Callback callback,
                  WiredReceiver::VideoFrameCallback video_frame_callback,
+                 WiredReceiver::AudioFrameCallback audio_frame_callback,
                  WiredReceiver::DisplayProfileProvider display_profile_provider,
                  std::function<void()> ended_callback)
       : io_service_(io_service), strand_(io_service), usb_wrapper_(usb_wrapper),
         handle_(std::move(handle)), callback_(std::move(callback)),
         video_frame_callback_(std::move(video_frame_callback)),
+        audio_frame_callback_(std::move(audio_frame_callback)),
         display_profile_provider_(std::move(display_profile_provider)),
         ended_callback_(std::move(ended_callback)) {}
 
@@ -361,12 +375,16 @@ public:
       video_ = std::make_shared<
           aasdk::channel::mediasink::video::VideoMediaSinkService>(
           strand_, messenger_, aasdk::messenger::ChannelId::MEDIA_SINK_VIDEO);
-      for (const auto channel :
-           {aasdk::messenger::ChannelId::MEDIA_SINK_MEDIA_AUDIO,
-            aasdk::messenger::ChannelId::MEDIA_SINK_GUIDANCE_AUDIO,
-            aasdk::messenger::ChannelId::MEDIA_SINK_SYSTEM_AUDIO}) {
+      for (const auto &[channel, audio_stream] :
+           {std::pair{aasdk::messenger::ChannelId::MEDIA_SINK_MEDIA_AUDIO,
+                      AudioStream::media},
+            std::pair{aasdk::messenger::ChannelId::MEDIA_SINK_GUIDANCE_AUDIO,
+                      AudioStream::guidance},
+            std::pair{aasdk::messenger::ChannelId::MEDIA_SINK_SYSTEM_AUDIO,
+                      AudioStream::system}}) {
         audio_.push_back(std::make_shared<AudioSinkSession>(
-            strand_, messenger_, channel, callback_));
+            strand_, messenger_, channel, audio_stream, callback_,
+            audio_frame_callback_));
       }
       input_ = std::make_shared<InputSession>(strand_, messenger_, callback_);
       sensor_ = std::make_shared<SensorSession>(strand_, messenger_, callback_);
@@ -747,6 +765,7 @@ private:
   aasdk::usb::DeviceHandle handle_;
   Callback callback_;
   WiredReceiver::VideoFrameCallback video_frame_callback_;
+  WiredReceiver::AudioFrameCallback audio_frame_callback_;
   WiredReceiver::DisplayProfileProvider display_profile_provider_;
   std::function<void()> ended_callback_;
   aasdk::transport::ITransport::Pointer transport_;
@@ -765,9 +784,11 @@ private:
 class WiredReceiver::Impl {
 public:
   explicit Impl(EventCallback callback, VideoFrameCallback video_frame_callback,
+                AudioFrameCallback audio_frame_callback,
                 DisplayProfileProvider display_profile_provider)
       : callback_(std::move(callback)),
         video_frame_callback_(std::move(video_frame_callback)),
+        audio_frame_callback_(std::move(audio_frame_callback)),
         display_profile_provider_(std::move(display_profile_provider)) {}
 
   ~Impl() { stop(); }
@@ -948,7 +969,7 @@ private:
   void start_control_session() {
     control_session_ = std::make_shared<ControlSession>(
         io_service_, *usb_wrapper_, active_handle_, callback_,
-        video_frame_callback_, display_profile_provider_,
+        video_frame_callback_, audio_frame_callback_, display_profile_provider_,
         [this] { io_service_.post([this] { handle_control_session_end(); }); });
     control_session_->start();
   }
@@ -985,6 +1006,7 @@ private:
 
   EventCallback callback_;
   VideoFrameCallback video_frame_callback_;
+  AudioFrameCallback audio_frame_callback_;
   DisplayProfileProvider display_profile_provider_;
   std::mutex mutex_;
   std::atomic_bool stopping_{false};
@@ -1008,9 +1030,11 @@ private:
 
 WiredReceiver::WiredReceiver(EventCallback callback,
                              VideoFrameCallback video_frame_callback,
+                             AudioFrameCallback audio_frame_callback,
                              DisplayProfileProvider display_profile_provider)
     : impl_(std::make_unique<Impl>(std::move(callback),
                                    std::move(video_frame_callback),
+                                   std::move(audio_frame_callback),
                                    std::move(display_profile_provider))) {}
 
 WiredReceiver::~WiredReceiver() = default;

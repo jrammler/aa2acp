@@ -128,6 +128,44 @@ private:
   int socket_fd_{-1};
 };
 
+class AudioSocketReader {
+public:
+  explicit AudioSocketReader(std::string path) : path_(std::move(path)) {}
+  ~AudioSocketReader() {
+    if (socket_fd_ >= 0)
+      close(socket_fd_);
+  }
+
+  std::optional<std::vector<std::uint8_t>> next() {
+    if (socket_fd_ < 0) {
+      socket_fd_ = connect_unix(path_);
+      if (socket_fd_ < 0) {
+        std::cerr << "Unable to connect to Android Auto audio socket " << path_
+                  << '\n';
+        return std::nullopt;
+      }
+      std::cout << "Bridge: connected to Android Auto media audio source\n";
+    }
+    std::array<std::uint8_t, 4> header{};
+    if (!receive_all(socket_fd_, header))
+      return std::nullopt;
+    const auto size = (static_cast<std::size_t>(header[0]) << 24) |
+                      (static_cast<std::size_t>(header[1]) << 16) |
+                      (static_cast<std::size_t>(header[2]) << 8) | header[3];
+    if (size == 0 || size > 64 * 1024) {
+      std::cerr << "Invalid Android Auto PCM packet size " << size << '\n';
+      return std::nullopt;
+    }
+    std::vector<std::uint8_t> frame(size);
+    return receive_all(socket_fd_, frame) ? std::optional(std::move(frame))
+                                          : std::nullopt;
+  }
+
+private:
+  std::string path_;
+  int socket_fd_{-1};
+};
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -146,6 +184,7 @@ int main(int argc, char **argv) {
   bool bridge = false;
   std::string video_path;
   std::string video_socket;
+  std::string audio_socket;
   std::string pairing_store;
   std::string display_profile_store;
   std::string wifi_interface;
@@ -185,6 +224,8 @@ int main(int argc, char **argv) {
       display_profile_store = argv[++index];
     } else if (argument == "--video-socket" && index + 1 < argc) {
       video_socket = argv[++index];
+    } else if (argument == "--audio-socket" && index + 1 < argc) {
+      audio_socket = argv[++index];
     } else if (argument == "--pairing-store" && index + 1 < argc) {
       pairing_store = argv[++index];
     } else if (argument == "--wifi-interface" && index + 1 < argc) {
@@ -195,7 +236,8 @@ int main(int argc, char **argv) {
              "SECONDS] "
              "[--bootstrap] [--carplay] [--wifi-config] [--join-wifi] "
              "[--leave-wifi] [--wifi-interface IFACE] [--bridge] [--video "
-             "H264_FILE] [--video-socket PATH] [--pairing-store FILE]\n";
+             "H264_FILE] [--video-socket PATH] [--audio-socket PATH] "
+             "[--pairing-store FILE]\n";
       return 2;
     }
   }
@@ -320,6 +362,10 @@ int main(int argc, char **argv) {
           video_socket.empty()
               ? std::shared_ptr<VideoSocketReader>{}
               : std::make_shared<VideoSocketReader>(video_socket);
+      const auto live_audio =
+          audio_socket.empty()
+              ? std::shared_ptr<AudioSocketReader>{}
+              : std::make_shared<AudioSocketReader>(audio_socket);
       const aa2acp::airplay::SessionOptions options{
           .host = host,
           .port = static_cast<std::uint16_t>(carplay_probe.airplay_port()),
@@ -328,6 +374,10 @@ int main(int argc, char **argv) {
           .next_video_frame =
               live_video
                   ? [live_video] { return live_video->next(); }
+                  : std::function<std::optional<std::vector<std::uint8_t>>()>{},
+          .next_media_audio =
+              live_audio
+                  ? [live_audio] { return live_audio->next(); }
                   : std::function<std::optional<std::vector<std::uint8_t>>()>{},
           .pairing_store = pairing_store,
           .display_profile_store = display_profile_store,
