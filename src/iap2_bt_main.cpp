@@ -1,0 +1,136 @@
+#include "acp/iap2/link_layer.hpp"
+#include "acp/iap2/bootstrap.hpp"
+#include "acp/iap2/bluez_pairing.hpp"
+#include "acp/iap2/carplay_probe.hpp"
+
+#include <bluetooth/bluetooth.h>
+#include <bluetooth/rfcomm.h>
+
+#include <poll.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include <array>
+#include <chrono>
+#include <iostream>
+#include <string>
+
+namespace {
+
+bool send_all(const int socket_fd, const std::span<const std::uint8_t> bytes) {
+    std::size_t offset = 0;
+    while (offset < bytes.size()) {
+        const auto written = send(socket_fd, bytes.data() + offset, bytes.size() - offset, MSG_NOSIGNAL);
+        if (written <= 0) {
+            return false;
+        }
+        offset += static_cast<std::size_t>(written);
+    }
+    return true;
+}
+
+int connect_rfcomm(const std::string& address, const std::uint8_t channel) {
+    sockaddr_rc remote{};
+    remote.rc_family = AF_BLUETOOTH;
+    remote.rc_channel = channel;
+    if (str2ba(address.c_str(), &remote.rc_bdaddr) != 0) {
+        return -1;
+    }
+    const auto socket_fd = socket(AF_BLUETOOTH, SOCK_STREAM, BTPROTO_RFCOMM);
+    if (socket_fd < 0 || connect(socket_fd, reinterpret_cast<sockaddr*>(&remote), sizeof(remote)) != 0) {
+        if (socket_fd >= 0) {
+            close(socket_fd);
+        }
+        return -1;
+    }
+    return socket_fd;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    std::string address = "[redacted-device-address]";
+    std::uint8_t channel = 3;
+    int timeout_seconds = 15;
+    bool bootstrap = false;
+    bool carplay = false;
+    bool pair = false;
+    for (int index = 1; index < argc; ++index) {
+        const std::string argument = argv[index];
+        if (argument == "--mac" && index + 1 < argc) {
+            address = argv[++index];
+        } else if (argument == "--channel" && index + 1 < argc) {
+            channel = static_cast<std::uint8_t>(std::stoi(argv[++index]));
+        } else if (argument == "--timeout" && index + 1 < argc) {
+            timeout_seconds = std::stoi(argv[++index]);
+        } else if (argument == "--bootstrap") {
+            bootstrap = true;
+        } else if (argument == "--carplay") {
+            bootstrap = true;
+            carplay = true;
+        } else if (argument == "--pair") {
+            pair = true;
+        } else {
+            std::cerr << "usage: iap2-bt [--mac MAC] [--channel N] [--timeout SECONDS] [--pair] [--bootstrap] [--carplay]\n";
+            return 2;
+        }
+    }
+
+    if (pair && !acp::iap2::ensure_bluez_pairing(address, timeout_seconds)) {
+        return 1;
+    }
+
+    const auto socket_fd = connect_rfcomm(address, channel);
+    if (socket_fd < 0) {
+        std::cerr << "Unable to open RFCOMM channel " << static_cast<int>(channel) << " to " << address
+                  << "; ensure the device is paired and test head unit is advertising iAP2\n";
+        return 1;
+    }
+    std::cout << "RFCOMM connected to " << address << ':' << static_cast<int>(channel) << '\n';
+    acp::iap2::BootstrapSession session;
+    acp::iap2::CarPlayProbe carplay_probe(address);
+    acp::iap2::PhoneLink link(
+        [socket_fd](const std::span<const std::uint8_t> bytes) { return send_all(socket_fd, bytes); },
+        [](const char* message) { std::cout << message << '\n'; },
+        [&session, &carplay_probe, &carplay](const std::span<const std::uint8_t> bytes) {
+            if (carplay && session.done()) {
+                carplay_probe.receive(bytes);
+            } else {
+                session.receive(bytes);
+            }
+        });
+    session.attach(link);
+    carplay_probe.attach(link);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
+    link.start(std::chrono::steady_clock::now());
+
+    std::array<std::uint8_t, 1024> buffer{};
+    while (std::chrono::steady_clock::now() < deadline && link.state() != acp::iap2::State::Dead &&
+           (!bootstrap || (carplay ? (!carplay_probe.done() && !carplay_probe.failed())
+                                   : (!session.done() && !session.failed()))) &&
+           (bootstrap || link.state() != acp::iap2::State::Normal)) {
+        pollfd descriptor{socket_fd, POLLIN, 0};
+        const auto result = poll(&descriptor, 1, 100);
+        const auto now = std::chrono::steady_clock::now();
+        if (result > 0 && (descriptor.revents & POLLIN) != 0) {
+            const auto count = recv(socket_fd, buffer.data(), buffer.size(), 0);
+            if (count <= 0) {
+                std::cerr << "RFCOMM connection closed by accessory\n";
+                break;
+            }
+            link.receive(std::span(buffer).first(static_cast<std::size_t>(count)), now);
+        }
+        link.tick(now);
+        if (bootstrap && link.state() == acp::iap2::State::Normal && !session.started()) {
+            session.begin();
+        }
+        if (carplay && session.done() && !carplay_probe.started()) {
+            carplay_probe.begin();
+        }
+    }
+    close(socket_fd);
+    if (carplay) {
+        return carplay_probe.done() ? 0 : 1;
+    }
+    return bootstrap ? (session.done() ? 0 : 1) : (link.state() == acp::iap2::State::Normal ? 0 : 1);
+}
