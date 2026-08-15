@@ -2,9 +2,11 @@
 
 ## Video and display
 
-- [ ] Discover and cache the CarPlay display profile during session setup.
+- [ ] Prepare CarPlay as Android Auto connects, then discover and cache its
+  display profile before replying to Android Auto service discovery. Bind the
+  cache to the configured head unit and invalidate it when that device changes.
 - [ ] Configure Android Auto video from that profile; retain 1280×720 as a
-  conservative fallback.
+  bounded-timeout fallback.
 - [ ] Validate reconnect and display renegotiation against the target head unit.
 
 ## Audio and controls

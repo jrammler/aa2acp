@@ -25,8 +25,10 @@ Wi-Fi client connection.
 
 ## Next milestones
 
-1. Discover and cache the CarPlay display profile, then use it when configuring
-   Android Auto video. Keep 1280×720 as the conservative fallback.
+1. Prepare CarPlay as Android Auto connects and read its display profile before
+   replying to Android Auto service discovery. Cache the profile per head unit,
+   invalidate it if the configured device changes, and use it for Android Auto
+   video; keep 1280×720 as the bounded-timeout fallback.
 2. Forward Android Auto media, guidance, and system audio to CarPlay; return
    microphone audio to Android Auto.
 3. Translate CarPlay physical controls to Android Auto input. Prioritize

@@ -34,6 +34,10 @@ std::filesystem::path default_airplay_pairing_store() {
   return default_state_directory() / "airplay-pairing.bin";
 }
 
+std::filesystem::path default_display_profile_store() {
+  return default_state_directory() / "display-profile";
+}
+
 std::optional<Config> load_config(const std::filesystem::path &path) {
   std::ifstream stream(path);
   std::string line;

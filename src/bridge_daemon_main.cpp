@@ -1118,6 +1118,19 @@ int main(int argc, char **argv) {
       if (wifi && !mac.empty() &&
           aa2acp::bridge::save_config(
               config_path, {mac, *wifi, previous.airplay_pairing_store})) {
+        if (mac != previous.head_unit_mac) {
+          std::error_code error;
+          const auto profile_store =
+              aa2acp::bridge::default_display_profile_store();
+          if (std::filesystem::remove(profile_store, error)) {
+            std::cout << "Management: invalidated cached display profile after "
+                         "head-unit change\n";
+          } else if (error) {
+            std::cerr << "Management: unable to invalidate cached display "
+                         "profile: "
+                      << error.message() << '\n';
+          }
+        }
         {
           std::lock_guard lock(config_mutex);
           config = {mac, *wifi, previous.airplay_pairing_store};
