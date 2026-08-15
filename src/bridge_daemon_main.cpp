@@ -270,12 +270,12 @@ std::string page(const acp::bridge::Config &config,
                 (device.connected ? " (connected)" : "") + "</option>";
     }
     output +=
-        "</select></label><button form=\"scan-form\" type=submit>Rescan "
-        "Bluetooth devices</button><label><input form=\"display-form\" "
+        "</select></label><label><input id=\"show-unnamed\" "
+        "form=\"display-form\" "
         "type=checkbox name=\"show_unnamed\" value=\"1\"" +
         std::string(snapshot.show_unnamed_bluetooth_devices ? " checked" : "") +
-        ">Show unnamed Bluetooth devices</label><button form=\"display-form\" "
-        "type=submit>Apply display filter</button>";
+        ">Show unnamed Bluetooth devices</label><button form=\"scan-form\" "
+        "type=submit>Rescan Bluetooth devices</button>";
   }
   output +=
       "</div><label>Manual Bluetooth MAC<input name=\"manual_mac\" value=\"" +
@@ -296,7 +296,10 @@ std::string page(const acp::bridge::Config &config,
               " (configured)</option>";
   output +=
       "</select></label><button type=submit>Save configuration</button></form>"
-      "<script>(()=>{if(document.body.dataset.scanRunning!=='1')return;"
+      "<script>(()=>{const filter=document.querySelector('#show-unnamed');"
+      "if(filter)filter.addEventListener('change',()=>filter.form."
+      "requestSubmit());"
+      "if(document.body.dataset.scanRunning!=='1')return;"
       "const phase=encodeURIComponent(document.body.dataset.scanPhase);"
       "const poll=async()=>{try{const response=await "
       "fetch('/scan-status?phase='+phase);"
