@@ -49,6 +49,14 @@ as TCP once the RFCOMM link reaches `NORMAL`.
 `CarPlayStartSession`. It deliberately stops there: joining the AP and AirPlay
 are later milestones.
 
+`--wifi-config` additionally requests and parses the accessory Wi-Fi
+configuration, without changing the local network. `--join-wifi` is the
+explicit development-host test mode: it uses `nmcli` to join the supplied AP
+on `wlp15s0` (override with `--wifi-interface`), then sends
+`WirelessCarPlayUpdate(status=1)`. Do not use that backend as the production
+network manager. `--leave-wifi` disconnects an interface while retaining its
+saved NetworkManager profile, matching the intended end-of-session behaviour.
+
 Pass `--pair` to make the client register a temporary BlueZ
 `NoInputNoOutput` agent, scan, pair, and trust test head unit before opening RFCOMM.
 This is the intended Just-Works path for an unpaired device; it is opt-in so

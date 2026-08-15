@@ -11,6 +11,9 @@ namespace {
 
 constexpr std::uint16_t kCarPlayAvailability = 0x4300;
 constexpr std::uint16_t kCarPlayStartSession = 0x4301;
+constexpr std::uint16_t kRequestAccessoryWifiConfiguration = 0x5702;
+constexpr std::uint16_t kAccessoryWifiConfiguration = 0x5703;
+constexpr std::uint16_t kWirelessCarPlayUpdate = 0x4e0d;
 
 void append_u16(std::vector<std::uint8_t>& output, const std::uint16_t value) {
     output.push_back(static_cast<std::uint8_t>(value >> 8));
@@ -55,12 +58,24 @@ std::uint32_t u32_parameter(const csm::Message& message, const std::uint16_t id)
            (static_cast<std::uint32_t>((*value)[2]) << 8) | (*value)[3];
 }
 
+std::uint8_t u8_parameter(const csm::Message& message, const std::uint16_t id) {
+    const auto value = csm::first_bytes_parameter(message.payload, id);
+    return value && value->size() == 1 ? (*value)[0] : 0;
+}
+
 }  // namespace
 
 CarPlayProbe::CarPlayProbe(std::string bluetooth_identifier)
     : bluetooth_identifier_(std::move(bluetooth_identifier)) {}
 
 void CarPlayProbe::attach(PhoneLink& link) { link_ = &link; }
+
+void CarPlayProbe::request_wifi_configuration(const bool enabled) { request_wifi_ = enabled; }
+
+void CarPlayProbe::set_wifi_join_handler(std::function<bool(const AccessoryWifiConfiguration&)> handler) {
+    wifi_join_handler_ = std::move(handler);
+    request_wifi_ = true;
+}
 
 void CarPlayProbe::begin() {
     if (link_ == nullptr) {
@@ -107,6 +122,42 @@ void CarPlayProbe::handle(const csm::Message& message) {
         const auto version = string_parameter(message, 5);
         std::cout << "CarPlayStartSession: port=" << port << " device=" << device
                   << " source_version=" << version << '\n';
+        if (!request_wifi_) {
+            done_ = true;
+            return;
+        }
+        if (link_ == nullptr || !link_->send_control(csm::encode(kRequestAccessoryWifiConfiguration))) {
+            fail("unable to request accessory Wi-Fi configuration");
+            return;
+        }
+        awaiting_wifi_configuration_ = true;
+        std::cout << "CSM: requested accessory Wi-Fi configuration\n";
+        return;
+    }
+    if (message.id == kAccessoryWifiConfiguration && awaiting_wifi_configuration_) {
+        const AccessoryWifiConfiguration configuration{
+            string_parameter(message, 1), string_parameter(message, 2), u8_parameter(message, 3),
+            u8_parameter(message, 4)};
+        if (configuration.ssid.empty()) {
+            fail("accessory Wi-Fi configuration has no SSID");
+            return;
+        }
+        std::cout << "Wi-Fi: received SSID '" << configuration.ssid << "' (security "
+                  << static_cast<int>(configuration.security_type) << ", channel "
+                  << static_cast<int>(configuration.channel) << ")\n";
+        if (wifi_join_handler_ && !wifi_join_handler_(configuration)) {
+            fail("failed to join accessory Wi-Fi");
+            return;
+        }
+        if (wifi_join_handler_) {
+            constexpr std::array<std::uint8_t, 1> joined{1};
+            if (link_ == nullptr || !link_->send_control(
+                                        csm::encode_bytes_parameter(kWirelessCarPlayUpdate, 0, joined))) {
+                fail("unable to send WirelessCarPlayUpdate");
+                return;
+            }
+            std::cout << "CSM: sent WirelessCarPlayUpdate(status=1)\n";
+        }
         done_ = true;
     }
 }

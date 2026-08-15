@@ -59,6 +59,7 @@ int main(int argc, char** argv) {
     int timeout_seconds = 10;
     bool bootstrap = false;
     bool carplay = false;
+    bool wifi_config = false;
     for (int index = 1; index < argc; ++index) {
         const std::string argument = argv[index];
         if (argument == "--host" && index + 1 < argc) {
@@ -72,8 +73,12 @@ int main(int argc, char** argv) {
         } else if (argument == "--carplay") {
             bootstrap = true;
             carplay = true;
+        } else if (argument == "--wifi-config") {
+            bootstrap = true;
+            carplay = true;
+            wifi_config = true;
         } else {
-            std::cerr << "usage: iap2-tcp [--host HOST] [--port PORT] [--timeout SECONDS] [--bootstrap] [--carplay]\n";
+            std::cerr << "usage: iap2-tcp [--host HOST] [--port PORT] [--timeout SECONDS] [--bootstrap] [--carplay] [--wifi-config]\n";
             return 2;
         }
     }
@@ -98,6 +103,7 @@ int main(int argc, char** argv) {
         });
     session.attach(link);
     carplay_probe.attach(link);
+    carplay_probe.request_wifi_configuration(wifi_config);
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
     link.start(std::chrono::steady_clock::now());
 

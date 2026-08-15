@@ -16,6 +16,7 @@ add_library(iap2_link
     src/iap2/csm.cpp
     src/iap2/bootstrap.cpp
     src/iap2/carplay_probe.cpp
+    src/iap2/network_manager.cpp
 )
 target_include_directories(iap2_link PUBLIC include)
 target_link_libraries(iap2_link PUBLIC OpenSSL::Crypto)

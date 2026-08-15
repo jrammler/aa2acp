@@ -55,6 +55,10 @@ int main(int argc, char** argv) {
     bool bootstrap = false;
     bool carplay = false;
     bool pair = false;
+    bool wifi_config = false;
+    bool join_wifi = false;
+    bool leave_wifi = false;
+    std::string wifi_interface = "wlp15s0";
     for (int index = 1; index < argc; ++index) {
         const std::string argument = argv[index];
         if (argument == "--mac" && index + 1 < argc) {
@@ -70,10 +74,27 @@ int main(int argc, char** argv) {
             carplay = true;
         } else if (argument == "--pair") {
             pair = true;
+        } else if (argument == "--wifi-config") {
+            bootstrap = true;
+            carplay = true;
+            wifi_config = true;
+        } else if (argument == "--join-wifi") {
+            bootstrap = true;
+            carplay = true;
+            wifi_config = true;
+            join_wifi = true;
+        } else if (argument == "--leave-wifi") {
+            leave_wifi = true;
+        } else if (argument == "--wifi-interface" && index + 1 < argc) {
+            wifi_interface = argv[++index];
         } else {
-            std::cerr << "usage: iap2-bt [--mac MAC] [--channel N] [--timeout SECONDS] [--pair] [--bootstrap] [--carplay]\n";
+            std::cerr << "usage: iap2-bt [--mac MAC] [--channel N] [--timeout SECONDS] [--pair] [--bootstrap] [--carplay] [--wifi-config] [--join-wifi] [--leave-wifi] [--wifi-interface IFACE]\n";
             return 2;
         }
+    }
+
+    if (leave_wifi) {
+        return acp::iap2::leave_with_networkmanager(wifi_interface) ? 0 : 1;
     }
 
     if (pair && !acp::iap2::ensure_bluez_pairing(address, timeout_seconds)) {
@@ -101,6 +122,12 @@ int main(int argc, char** argv) {
         });
     session.attach(link);
     carplay_probe.attach(link);
+    carplay_probe.request_wifi_configuration(wifi_config);
+    if (join_wifi) {
+        carplay_probe.set_wifi_join_handler([&wifi_interface](const acp::iap2::AccessoryWifiConfiguration& configuration) {
+            return acp::iap2::join_with_networkmanager(configuration, wifi_interface);
+        });
+    }
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
     link.start(std::chrono::steady_clock::now());
 
