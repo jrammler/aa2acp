@@ -111,10 +111,13 @@ std::optional<std::string> form_field(const std::string &body,
 
 std::optional<std::string> query_field(const std::string &request,
                                        const std::string &wanted) {
-  const auto path_end = request.find(' ');
+  const auto method_end = request.find(' ');
+  const auto path_end = method_end == std::string::npos
+                            ? std::string::npos
+                            : request.find(' ', method_end + 1);
   const auto query_start = request.find('?');
-  if (path_end == std::string::npos || query_start == std::string::npos ||
-      query_start >= path_end)
+  if (method_end == std::string::npos || path_end == std::string::npos ||
+      query_start == std::string::npos || query_start >= path_end)
     return std::nullopt;
   return form_field(request.substr(query_start + 1, path_end - query_start - 1),
                     wanted);
