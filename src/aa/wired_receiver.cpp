@@ -145,17 +145,31 @@ public:
   }
 
   void onAudioFocusRequest(
-      const aap_protobuf::service::control::message::AudioFocusRequest &)
+      const aap_protobuf::service::control::message::AudioFocusRequest &request)
       override {
+    aap_protobuf::service::control::message::AudioFocusNotification response;
+    response.set_focus_state(
+        request.audio_focus_type() ==
+                aap_protobuf::service::control::message::AUDIO_FOCUS_RELEASE
+            ? aap_protobuf::service::control::message::AUDIO_FOCUS_STATE_LOSS
+            : aap_protobuf::service::control::message::AUDIO_FOCUS_STATE_GAIN);
+    response.set_unsolicited(false);
+    send([this, response](aasdk::channel::SendPromise::Pointer promise) {
+      control_->sendAudioFocusResponse(response, std::move(promise));
+    });
     receive_next();
   }
   void onByeByeRequest(
       const aap_protobuf::service::control::message::ByeByeRequest &) override {
+    callback_({WiredReceiverEventType::disconnected,
+               "phone ended the Android Auto control session"});
     stop();
   }
   void onByeByeResponse(
       const aap_protobuf::service::control::message::ByeByeResponse &)
       override {
+    callback_({WiredReceiverEventType::disconnected,
+               "phone acknowledged Android Auto control-session shutdown"});
     stop();
   }
   void onBatteryStatusNotification(
