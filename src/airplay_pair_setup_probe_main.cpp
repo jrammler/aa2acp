@@ -1,4 +1,5 @@
 #include "acp/airplay/rtsp.hpp"
+#include "acp/airplay/srp.hpp"
 
 #include <netdb.h>
 #include <poll.h>
@@ -79,7 +80,6 @@ int main(int argc, char** argv) {
         if (count <= 0) break;
         response_bytes.insert(response_bytes.end(), buffer.begin(), buffer.begin() + count);
     }
-    close(socket_fd);
     const auto response = acp::airplay::parse_response(response_bytes);
     if (!response || response->status != 200) {
         std::cerr << "Pair-Setup M1 did not receive RTSP 200\n";
@@ -96,5 +96,43 @@ int main(int argc, char** argv) {
     }
     std::cout << "AirPlay: Pair-Setup M2 received (salt=" << salt->second.size()
               << "B, SRP public key=" << public_key->second.size() << "B)\n";
+    acp::airplay::SrpClient srp;
+    if (!srp.process_challenge(salt->second, public_key->second)) {
+        std::cerr << "Unable to process Pair-Setup SRP challenge\n";
+        close(socket_fd);
+        return 1;
+    }
+    const auto m3 = acp::airplay::encode_tlv8(
+        {{0x06, {3}}, {0x03, srp.public_key()}, {0x04, srp.client_proof()}});
+    const auto m3_request = acp::airplay::encode_request("POST", "/pair-setup", 2, m3, "application/pairing+tlv8");
+    if (!send_all(socket_fd, m3_request)) {
+        std::cerr << "Unable to send Pair-Setup M3\n";
+        close(socket_fd);
+        return 1;
+    }
+    response_bytes.clear();
+    const auto m4_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
+    while (std::chrono::steady_clock::now() < m4_deadline && !acp::airplay::complete_response_size(response_bytes)) {
+        pollfd descriptor{socket_fd, POLLIN, 0};
+        if (poll(&descriptor, 1, 100) <= 0) continue;
+        const auto count = recv(socket_fd, buffer.data(), buffer.size(), 0);
+        if (count <= 0) break;
+        response_bytes.insert(response_bytes.end(), buffer.begin(), buffer.begin() + count);
+    }
+    close(socket_fd);
+    const auto m4_response = acp::airplay::parse_response(response_bytes);
+    if (!m4_response || m4_response->status != 200) {
+        std::cerr << "Pair-Setup M3 did not receive RTSP 200\n";
+        return 1;
+    }
+    const auto m4_fields = acp::airplay::decode_tlv8(m4_response->body);
+    const auto m4_state = m4_fields.find(0x06);
+    const auto server_proof = m4_fields.find(0x04);
+    if (m4_state == m4_fields.end() || m4_state->second != acp::airplay::Bytes{4} ||
+        server_proof == m4_fields.end() || !srp.verify_server(server_proof->second)) {
+        std::cerr << "Pair-Setup M4 server proof validation failed\n";
+        return 1;
+    }
+    std::cout << "AirPlay: Pair-Setup M4 server proof validated\n";
     return 0;
 }

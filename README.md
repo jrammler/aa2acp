@@ -20,9 +20,10 @@ path and real RFCOMM from the development device. It does not yet join test head
 start AirPlay.
 
 `airplay-pair-setup-probe` is the first AirPlay C++ milestone. It speaks the
-unencrypted RTSP Pair-Setup M1/M2 exchange and validates test head unit's returned SRP
-salt and public key. It was verified against test head unit on 2026-08-15 (16-byte salt,
-384-byte SRP public key); SRP proof, pair-verify, encrypted RTSP, and media
+RTSP Pair-Setup M1–M4 exchange: it validates test head unit's returned SRP salt/public
+key, computes the M3 client proof, and cryptographically verifies M4. It was
+verified against test head unit on 2026-08-15 (16-byte salt, 384-byte SRP public key).
+Encrypted identity exchange M5/M6, Pair-Verify, encrypted RTSP, and media
 follow.
 
 Build and run tests from the repository root:
