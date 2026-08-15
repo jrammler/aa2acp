@@ -65,6 +65,14 @@ bool join_with_networkmanager(const AccessoryWifiConfiguration &configuration,
   std::cout << "Wi-Fi: joining SSID '" << configuration.ssid << "' on "
             << interface_name << " (channel "
             << static_cast<int>(configuration.channel) << ")\n";
+  // Reuse the saved AP profile first. It avoids a fresh scan race while test head unit is
+  // bringing its AP up and is the desired fast-reconnect behaviour after a
+  // completed session.
+  if (run_nmcli({"nmcli", "--wait", "30", "connection", "up", "id",
+                 configuration.ssid, "ifname", interface_name},
+                false, true)) {
+    return true;
+  }
   std::vector<std::string> arguments{
       "nmcli", "--wait", "30", "device", "wifi", "connect", configuration.ssid};
   if (!configuration.passphrase.empty()) {
@@ -73,7 +81,50 @@ bool join_with_networkmanager(const AccessoryWifiConfiguration &configuration,
   }
   arguments.emplace_back("ifname");
   arguments.push_back(interface_name);
-  return run_nmcli(std::move(arguments));
+  if (run_nmcli(std::move(arguments), false, true)) {
+    return true;
+  }
+  // NetworkManager sometimes creates a profile before refusing the initial
+  // connect because WPA parameters were implicit. Repair it using the iAP2
+  // security type, then bring the profile up explicitly.
+  std::string key_management;
+  switch (configuration.security_type) {
+  case 0:
+    key_management = "none";
+    break;
+  case 1:
+    key_management = "wep";
+    break;
+  case 2:
+  case 3:
+    key_management = "wpa-psk";
+    break;
+  case 4:
+    key_management = "sae";
+    break;
+  default:
+    std::cerr << "Wi-Fi: unsupported security type "
+              << static_cast<int>(configuration.security_type) << '\n';
+    return false;
+  }
+  std::vector<std::string> modify{"nmcli",
+                                  "connection",
+                                  "modify",
+                                  configuration.ssid,
+                                  "802-11-wireless-security.key-mgmt",
+                                  key_management};
+  if (configuration.security_type == 2 || configuration.security_type == 3) {
+    modify.emplace_back("802-11-wireless-security.proto");
+    modify.emplace_back("rsn");
+  }
+  if (!configuration.passphrase.empty()) {
+    modify.emplace_back("wifi-sec.psk");
+    modify.push_back(configuration.passphrase);
+  }
+  return run_nmcli(std::move(modify), false, true) &&
+         run_nmcli({"nmcli", "--wait", "30", "connection", "up", "id",
+                    configuration.ssid, "ifname", interface_name},
+                   false, true);
 }
 
 bool leave_with_networkmanager(const std::string &interface_name) {

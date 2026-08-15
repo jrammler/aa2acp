@@ -7,13 +7,19 @@
 #include <bluetooth/rfcomm.h>
 
 #include <poll.h>
+#include <spawn.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <array>
 #include <chrono>
+#include <filesystem>
 #include <iostream>
 #include <string>
+#include <vector>
+
+extern char **environ;
 
 namespace {
 
@@ -48,6 +54,39 @@ int connect_rfcomm(const std::string &address, const std::uint8_t channel) {
   return socket_fd;
 }
 
+bool run_airplay_probe(const std::string &program_path, const std::string &host,
+                       const std::uint32_t port, const std::string &video_path,
+                       const int timeout_seconds) {
+  const auto probe_path = (std::filesystem::path(program_path).parent_path() /
+                           "airplay-pair-setup-probe")
+                              .string();
+  std::vector<std::string> arguments{probe_path,
+                                     "--host",
+                                     host,
+                                     "--port",
+                                     std::to_string(port),
+                                     "--timeout",
+                                     std::to_string(timeout_seconds)};
+  if (!video_path.empty()) {
+    arguments.emplace_back("--video");
+    arguments.push_back(video_path);
+  }
+  std::vector<char *> argv;
+  for (auto &argument : arguments)
+    argv.push_back(argument.data());
+  argv.push_back(nullptr);
+  pid_t child{};
+  if (posix_spawn(&child, argv.front(), nullptr, nullptr, argv.data(),
+                  environ) != 0) {
+    std::cerr << "Unable to launch AirPlay bridge phase at " << probe_path
+              << '\n';
+    return false;
+  }
+  int status{};
+  return waitpid(child, &status, 0) >= 0 && WIFEXITED(status) &&
+         WEXITSTATUS(status) == 0;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -60,6 +99,8 @@ int main(int argc, char **argv) {
   bool wifi_config = false;
   bool join_wifi = false;
   bool leave_wifi = false;
+  bool bridge = false;
+  std::string video_path;
   std::string wifi_interface = "wlp15s0";
   for (int index = 1; index < argc; ++index) {
     const std::string argument = argv[index];
@@ -87,13 +128,22 @@ int main(int argc, char **argv) {
       join_wifi = true;
     } else if (argument == "--leave-wifi") {
       leave_wifi = true;
+    } else if (argument == "--bridge") {
+      bootstrap = true;
+      carplay = true;
+      wifi_config = true;
+      join_wifi = true;
+      bridge = true;
+    } else if (argument == "--video" && index + 1 < argc) {
+      video_path = argv[++index];
     } else if (argument == "--wifi-interface" && index + 1 < argc) {
       wifi_interface = argv[++index];
     } else {
       std::cerr
           << "usage: iap2-bt [--mac MAC] [--channel N] [--timeout SECONDS] "
              "[--pair] [--bootstrap] [--carplay] [--wifi-config] [--join-wifi] "
-             "[--leave-wifi] [--wifi-interface IFACE]\n";
+             "[--leave-wifi] [--wifi-interface IFACE] [--bridge] [--video "
+             "H264_FILE]\n";
       return 2;
     }
   }
@@ -174,6 +224,25 @@ int main(int argc, char **argv) {
     }
   }
   close(socket_fd);
+  if (bridge && carplay_probe.done()) {
+    // In a Bluetooth-originated wireless CarPlay session, the StartSession
+    // device identifier is the head unit's BT identity, not an IP address.
+    // AirPlay moves to its advertised AP gateway after WirelessCarPlayUpdate.
+    const std::string host = "10.10.0.1";
+    if (carplay_probe.airplay_port() == 0) {
+      std::cerr << "CarPlayStartSession did not provide an AirPlay port\n";
+      return 1;
+    }
+    std::cout << "Bridge: starting AirPlay on " << host << ':'
+              << carplay_probe.airplay_port() << '\n';
+    const auto result =
+        run_airplay_probe(argv[0], host, carplay_probe.airplay_port(),
+                          video_path, timeout_seconds);
+    if (!result) {
+      std::cerr << "Bridge: AirPlay phase failed\n";
+    }
+    return result ? 0 : 1;
+  }
   if (carplay) {
     return carplay_probe.done() ? 0 : 1;
   }

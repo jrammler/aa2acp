@@ -30,6 +30,8 @@ public:
   [[nodiscard]] bool done() const;
   [[nodiscard]] bool failed() const;
   [[nodiscard]] bool started() const;
+  [[nodiscard]] std::uint32_t airplay_port() const;
+  [[nodiscard]] const std::string &airplay_host() const;
 
 private:
   void fail(const char *message);
@@ -44,6 +46,8 @@ private:
   bool started_{};
   bool done_{};
   bool failed_{};
+  std::uint32_t airplay_port_{};
+  std::string airplay_host_;
 };
 
 } // namespace acp::iap2

@@ -116,6 +116,8 @@ void CarPlayProbe::receive(const std::span<const std::uint8_t> bytes) {
 bool CarPlayProbe::done() const { return done_; }
 bool CarPlayProbe::failed() const { return failed_; }
 bool CarPlayProbe::started() const { return started_; }
+std::uint32_t CarPlayProbe::airplay_port() const { return airplay_port_; }
+const std::string &CarPlayProbe::airplay_host() const { return airplay_host_; }
 
 void CarPlayProbe::fail(const char *message) {
   failed_ = true;
@@ -130,6 +132,8 @@ void CarPlayProbe::handle(const csm::Message &message) {
     const auto version = string_parameter(message, 5);
     std::cout << "CarPlayStartSession: port=" << port << " device=" << device
               << " source_version=" << version << '\n';
+    airplay_port_ = port;
+    airplay_host_ = device;
     if (!request_wifi_) {
       done_ = true;
       return;
