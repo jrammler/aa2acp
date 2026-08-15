@@ -329,9 +329,11 @@ public:
 
   ControlSession(boost::asio::io_service &io_service,
                  aasdk::usb::IUSBWrapper &usb_wrapper,
-                 aasdk::usb::DeviceHandle handle, Callback callback)
+                 aasdk::usb::DeviceHandle handle, Callback callback,
+                 WiredReceiver::VideoFrameCallback video_frame_callback)
       : io_service_(io_service), strand_(io_service), usb_wrapper_(usb_wrapper),
-        handle_(std::move(handle)), callback_(std::move(callback)) {}
+        handle_(std::move(handle)), callback_(std::move(callback)),
+        video_frame_callback_(std::move(video_frame_callback)) {}
 
   void start() {
     try {
@@ -639,11 +641,16 @@ public:
 
   void onMediaWithTimestampIndication(
       aasdk::messenger::Timestamp::ValueType,
-      const aasdk::common::DataConstBuffer &) override {
+      const aasdk::common::DataConstBuffer &buffer) override {
+    if (video_frame_callback_)
+      video_frame_callback_(std::span(buffer.cdata, buffer.size));
     acknowledge_video_frame();
   }
 
-  void onMediaIndication(const aasdk::common::DataConstBuffer &) override {
+  void
+  onMediaIndication(const aasdk::common::DataConstBuffer &buffer) override {
+    if (video_frame_callback_)
+      video_frame_callback_(std::span(buffer.cdata, buffer.size));
     acknowledge_video_frame();
   }
 
@@ -706,6 +713,7 @@ private:
   aasdk::usb::IUSBWrapper &usb_wrapper_;
   aasdk::usb::DeviceHandle handle_;
   Callback callback_;
+  WiredReceiver::VideoFrameCallback video_frame_callback_;
   aasdk::transport::ITransport::Pointer transport_;
   aasdk::messenger::ICryptor::Pointer cryptor_;
   aasdk::messenger::IMessenger::Pointer messenger_;
@@ -720,7 +728,9 @@ private:
 
 class WiredReceiver::Impl {
 public:
-  explicit Impl(EventCallback callback) : callback_(std::move(callback)) {}
+  explicit Impl(EventCallback callback, VideoFrameCallback video_frame_callback)
+      : callback_(std::move(callback)),
+        video_frame_callback_(std::move(video_frame_callback)) {}
 
   ~Impl() { stop(); }
 
@@ -899,7 +909,8 @@ private:
 
   void start_control_session() {
     control_session_ = std::make_shared<ControlSession>(
-        io_service_, *usb_wrapper_, active_handle_, callback_);
+        io_service_, *usb_wrapper_, active_handle_, callback_,
+        video_frame_callback_);
     control_session_->start();
   }
 
@@ -921,6 +932,7 @@ private:
   }
 
   EventCallback callback_;
+  VideoFrameCallback video_frame_callback_;
   std::mutex mutex_;
   std::atomic_bool stopping_{false};
   bool running_{};
@@ -941,8 +953,10 @@ private:
   std::thread usb_thread_;
 };
 
-WiredReceiver::WiredReceiver(EventCallback callback)
-    : impl_(std::make_unique<Impl>(std::move(callback))) {}
+WiredReceiver::WiredReceiver(EventCallback callback,
+                             VideoFrameCallback video_frame_callback)
+    : impl_(std::make_unique<Impl>(std::move(callback),
+                                   std::move(video_frame_callback))) {}
 
 WiredReceiver::~WiredReceiver() = default;
 

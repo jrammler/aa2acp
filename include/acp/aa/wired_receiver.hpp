@@ -1,7 +1,9 @@
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <memory>
+#include <span>
 #include <string>
 
 namespace acp::aa {
@@ -26,8 +28,12 @@ struct WiredReceiverEvent {
 class WiredReceiver {
 public:
   using EventCallback = std::function<void(const WiredReceiverEvent &)>;
+  // Invoked on the receiver's I/O thread for each Android Auto H.264 access
+  // unit. The span is valid only for the duration of the callback.
+  using VideoFrameCallback = std::function<void(std::span<const std::uint8_t>)>;
 
-  explicit WiredReceiver(EventCallback callback);
+  explicit WiredReceiver(EventCallback callback,
+                         VideoFrameCallback video_frame_callback = {});
   ~WiredReceiver();
 
   WiredReceiver(const WiredReceiver &) = delete;
