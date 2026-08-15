@@ -463,13 +463,17 @@ public:
         display_profile_provider_ ? display_profile_provider_() : std::nullopt;
     using Resolution =
         aap_protobuf::service::media::sink::message::VideoCodecResolutionType;
-    const auto resolution =
-        profile && profile->width_pixels == 800 && profile->height_pixels == 480
-            ? Resolution::VIDEO_800x480
-        : profile && profile->width_pixels == 1920 &&
-                profile->height_pixels == 1080
-            ? Resolution::VIDEO_1920x1080
-            : Resolution::VIDEO_1280x720;
+    auto resolution = Resolution::VIDEO_1280x720;
+    std::string resolution_detail = "1280x720 fallback";
+    if (profile && profile->width_pixels == 800 &&
+        profile->height_pixels == 480) {
+      resolution = Resolution::VIDEO_800x480;
+      resolution_detail = "800x480 cached profile";
+    } else if (profile && profile->width_pixels == 1920 &&
+               profile->height_pixels == 1080) {
+      resolution = Resolution::VIDEO_1920x1080;
+      resolution_detail = "1920x1080 cached profile";
+    }
     auto *video_config = media_sink->add_video_configs();
     video_config->set_codec_resolution(resolution);
     video_config->set_frame_rate(
@@ -536,10 +540,12 @@ public:
 
     auto promise = aasdk::channel::SendPromise::defer(strand_);
     promise->then(
-        [self = shared_from_this(), count = response.channels_size()] {
+        [self = shared_from_this(), count = response.channels_size(),
+         resolution_detail = std::move(resolution_detail)] {
           self->callback_({WiredReceiverEventType::control_session_ready,
                            "sent Android Auto service discovery (" +
-                               std::to_string(count) + " channels)"});
+                               std::to_string(count) + " channels; " +
+                               resolution_detail + ")"});
         },
         [self = shared_from_this()](const auto &error) {
           self->fail(error.what());
