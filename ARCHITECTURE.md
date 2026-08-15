@@ -33,8 +33,8 @@ Wi-Fi client connection.
    directional, select, back, home, and media controls for non-touch cars.
 4. Soak-test connect, unplug, replug, shutdown, reconnect, and persisted state.
 5. Add wireless Android Auto using a dedicated second Wi-Fi radio.
-6. Package the daemon in a minimal appliance image with ignition/power handling
-   and persistent state.
+6. Package the daemon as a minimal Raspberry Pi image with ignition/power
+   handling and persistent state.
 
 Any development-only head-unit authentication setup is external test
 infrastructure; it is not part of this repository or a production

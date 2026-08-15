@@ -19,7 +19,7 @@
 - [ ] Soak-test first pairing, existing pairing, unplug, replug, daemon
   shutdown, restart, and retained state.
 - [ ] Add wireless Android Auto with a dedicated second Wi-Fi radio.
-- [ ] Package the daemon in a minimal appliance image with ignition/power
+- [ ] Package the daemon as a minimal Raspberry Pi image with ignition/power
   handling and persistent state.
 
 ## Boundaries
