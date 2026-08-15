@@ -24,6 +24,10 @@
 
 ## Reliability and deployment
 
+- [ ] Add a dedicated management Wi-Fi hotspot on a second radio, using
+  NetworkManager shared mode for DHCP. Bind the management UI to that network;
+  provide SSID and WPA2 password settings in the UI while keeping the
+  car-facing Wi-Fi radio dedicated to wireless CarPlay.
 - [ ] Soak-test first pairing, existing pairing, unplug, replug, daemon
   shutdown, restart, and retained state.
 - [ ] Add wireless Android Auto with a dedicated second Wi-Fi radio.
