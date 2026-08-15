@@ -2,12 +2,14 @@
 
 ## Video and display
 
-- [ ] Prepare CarPlay as Android Auto connects, then discover and cache its
-  display profile before replying to Android Auto service discovery. Bind the
-  cache to the configured head unit and invalidate it when that device changes.
-- [ ] Configure Android Auto video from that profile; retain 1280×720 as a
+- [x] Prepare CarPlay as Android Auto connects, then discover and cache its
+  display profile before replying to Android Auto service discovery. The cache
+  is bound to the configured head unit and is invalidated when that device
+  changes.
+- [x] Configure Android Auto video from that profile, with 1280×720 as a
   bounded-timeout fallback.
-- [ ] Validate reconnect and display renegotiation against the target head unit.
+- [x] Validate cached reconnect and a cold display-profile negotiation against
+  the target head unit at 1920×1080.
 
 ## Audio and controls
 
