@@ -371,7 +371,6 @@ private:
           emit({WiredReceiverEventType::aoap_transport_ready,
                 "AOAP transport ready on USB " + std::to_string(bus) + ":" +
                     std::to_string(address)});
-          start_control_session();
         });
   }
 
