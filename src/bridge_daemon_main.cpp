@@ -46,10 +46,22 @@ struct ManagementState {
 
 ManagementState management_state;
 
+std::string normalized_bluetooth_address(const std::string &value) {
+  std::string normalized;
+  for (const unsigned char character : value) {
+    if (std::isxdigit(character))
+      normalized += static_cast<char>(std::toupper(character));
+  }
+  return normalized;
+}
+
 bool is_unnamed(const acp::bridge::BluetoothDevice &device) {
   // BlueZ commonly uses the address itself as Alias when no advertised name is
-  // available. Treat that as unnamed rather than displaying the address twice.
-  return device.name.empty() || device.name == device.address;
+  // available, with either colons or hyphens as separators. Treat that as
+  // unnamed rather than displaying the address twice.
+  return device.name.empty() ||
+         normalized_bluetooth_address(device.name) ==
+             normalized_bluetooth_address(device.address);
 }
 
 std::string html_escape(const std::string &value) {
