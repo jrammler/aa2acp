@@ -618,7 +618,7 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
           {"name", aa2acp::airplay::PlistValue("AA2ACP")},
           {"deviceID", aa2acp::airplay::PlistValue(pairing.controller_id)},
           {"manufacturer", aa2acp::airplay::PlistValue("AA2ACP")},
-          {"model", aa2acp::airplay::PlistValue("AA2ACP")},
+          {"model", aa2acp::airplay::PlistValue("RaspberryPi")},
           {"osVersion", aa2acp::airplay::PlistValue("0.1")},
       });
   const auto info_response = send_encrypted(
@@ -648,7 +648,7 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
           {"timingPort", aa2acp::airplay::PlistValue(std::uint64_t{0})},
           {"name", aa2acp::airplay::PlistValue("AA2ACP")},
           {"deviceID", aa2acp::airplay::PlistValue(pairing.controller_id)},
-          {"model", aa2acp::airplay::PlistValue("AA2ACP")},
+          {"model", aa2acp::airplay::PlistValue("RaspberryPi")},
       });
   const auto session_response =
       send_encrypted(socket_fd, control, encrypted_read_buffer,

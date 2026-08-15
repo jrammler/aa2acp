@@ -1,7 +1,7 @@
 # AA2ACP
 
-AA2ACP is a C++20 bridge that receives Android Auto from an Android
-phone and presents it to a car as a wireless CarPlay phone.
+AA2ACP is a C++20 Raspberry Pi bridge that receives Android Auto from an
+Android phone and presents it to a car as a wireless CarPlay phone.
 
 > **Work in progress:** this is an experimental development project, not a
 > finished consumer product. It has a verified video path, but audio, physical
