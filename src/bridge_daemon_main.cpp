@@ -502,7 +502,7 @@ private:
 
 int run_carplay_session(const char *program_path,
                         const acp::bridge::Config &config,
-                        const std::stop_token stop,
+                        const std::function<bool()> &stop_requested,
                         const std::string &video_socket = {}) {
   if (config.head_unit_mac.empty()) {
     std::cerr << "Bridge daemon: configure a head-unit MAC first\n";
@@ -539,7 +539,7 @@ int run_carplay_session(const char *program_path,
     int status{};
     if (waitpid(child, &status, WNOHANG) == child)
       return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
-    if (stop.stop_requested()) {
+    if (stop_requested()) {
       std::cout << "Bridge daemon: stopping active CarPlay session\n";
       kill(child, SIGTERM);
       waitpid(child, &status, 0);
@@ -562,14 +562,16 @@ int run_wired_android_auto_receiver(
     return 1;
   }
   std::atomic_bool carplay_start_requested{};
+  std::atomic_bool phone_disconnected{};
   acp::aa::WiredReceiver receiver(
-      [&carplay_start_requested](const auto &event) {
+      [&carplay_start_requested, &phone_disconnected](const auto &event) {
         switch (event.type) {
         case acp::aa::WiredReceiverEventType::waiting_for_phone:
           std::cout << "Bridge daemon: Android Auto USB idle: " << event.detail
                     << '\n';
           break;
         case acp::aa::WiredReceiverEventType::aoap_transport_ready:
+          phone_disconnected = false;
           std::cout << "Bridge daemon: Android Auto USB transport ready: "
                     << event.detail << '\n';
           break;
@@ -587,6 +589,7 @@ int run_wired_android_auto_receiver(
           break;
         case acp::aa::WiredReceiverEventType::disconnected:
           std::cout << "Bridge daemon: Android Auto USB disconnected\n";
+          phone_disconnected = true;
           break;
         case acp::aa::WiredReceiverEventType::error:
           std::cerr << "Bridge daemon: " << event.detail << '\n';
@@ -615,10 +618,19 @@ int run_wired_android_auto_receiver(
                    "interface first\n";
       continue;
     }
-    const auto result =
-        run_carplay_session(program_path, config, stop, video_socket);
-    if (result == 128 + SIGTERM)
+    const auto result = run_carplay_session(
+        program_path, config,
+        [stop, &phone_disconnected] {
+          return stop.stop_requested() || phone_disconnected.load();
+        },
+        video_socket);
+    if (stop.stop_requested())
       break;
+    if (phone_disconnected.load()) {
+      std::cout << "Bridge daemon: CarPlay session stopped after Android Auto "
+                   "disconnect\n";
+      continue;
+    }
     if (result != 0)
       std::cerr << "Bridge daemon: CarPlay video session ended with " << result
                 << '\n';

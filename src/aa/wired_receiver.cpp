@@ -619,6 +619,15 @@ public:
     send_video([this, response](aasdk::channel::SendPromise::Pointer promise) {
       video_->sendChannelSetupResponse(response, std::move(promise));
     });
+    // Android's ProjectionWindowManager waits for the head unit to declare
+    // projected focus before it sends VideoStart and H.264 access units.
+    aap_protobuf::service::media::video::message::VideoFocusNotification focus;
+    focus.set_focus(
+        aap_protobuf::service::media::video::message::VIDEO_FOCUS_PROJECTED);
+    focus.set_unsolicited(true);
+    send_video([this, focus](aasdk::channel::SendPromise::Pointer promise) {
+      video_->sendVideoFocusIndication(focus, std::move(promise));
+    });
     receive_video_next();
   }
 
