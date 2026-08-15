@@ -118,10 +118,27 @@ public:
       const aap_protobuf::service::control::message::ServiceDiscoveryRequest &)
       override {
     aap_protobuf::service::control::message::ServiceDiscoveryResponse response;
+    response.mutable_channels()->Reserve(8);
+    response.set_driver_position(
+        aap_protobuf::service::control::message::DRIVER_POSITION_LEFT);
     response.set_display_name("ACP-AA Bridge");
-    // Advertise the primary Android Auto projection channel. The next media
-    // milestone attaches a decoder/forwarder to this same channel; declaring
-    // it here lets the phone accept this as a projection-capable head unit.
+    response.set_probe_for_support(false);
+    auto *ping = response.mutable_connection_configuration()
+                     ->mutable_ping_configuration();
+    ping->set_timeout_ms(5000);
+    ping->set_interval_ms(1500);
+    ping->set_high_latency_threshold_ms(500);
+    ping->set_tracked_ping_count(5);
+    auto *head_unit = response.mutable_headunit_info();
+    head_unit->set_make("ACP");
+    head_unit->set_model("Android Auto to CarPlay Bridge");
+    head_unit->set_year("2026");
+    head_unit->set_vehicle_id("acp-aa-bridge");
+    head_unit->set_head_unit_make("ACP");
+    head_unit->set_head_unit_model("Pi Bridge");
+    head_unit->set_head_unit_software_build("1");
+    head_unit->set_head_unit_software_version("0.1");
+
     auto *video_service = response.add_channels();
     video_service->set_id(
         static_cast<int>(aasdk::messenger::ChannelId::MEDIA_SINK_VIDEO));
@@ -135,12 +152,77 @@ public:
     video_config->set_frame_rate(
         aap_protobuf::service::media::sink::message::VIDEO_FPS_30);
     video_config->set_density(180);
-    send([this, response](aasdk::channel::SendPromise::Pointer promise) {
-      control_->sendServiceDiscoveryResponse(response, std::move(promise));
-    });
-    callback_(
-        {WiredReceiverEventType::control_session_ready,
-         "TLS authentication and Android Auto service discovery completed"});
+
+    const auto add_audio_service =
+        [&response](
+            aasdk::messenger::ChannelId channel,
+            aap_protobuf::service::media::sink::message::AudioStreamType stream,
+            uint32_t sample_rate, uint32_t channels) {
+          auto *service = response.add_channels();
+          service->set_id(static_cast<int>(channel));
+          auto *media_sink = service->mutable_media_sink_service();
+          media_sink->set_available_type(aap_protobuf::service::media::shared::
+                                             message::MEDIA_CODEC_AUDIO_PCM);
+          media_sink->set_audio_type(stream);
+          media_sink->set_available_while_in_call(true);
+          auto *audio_config = media_sink->add_audio_configs();
+          audio_config->set_sampling_rate(sample_rate);
+          audio_config->set_number_of_bits(16);
+          audio_config->set_number_of_channels(channels);
+        };
+    add_audio_service(
+        aasdk::messenger::ChannelId::MEDIA_SINK_MEDIA_AUDIO,
+        aap_protobuf::service::media::sink::message::AUDIO_STREAM_MEDIA, 48000,
+        2);
+    add_audio_service(
+        aasdk::messenger::ChannelId::MEDIA_SINK_GUIDANCE_AUDIO,
+        aap_protobuf::service::media::sink::message::AUDIO_STREAM_GUIDANCE,
+        16000, 1);
+    add_audio_service(
+        aasdk::messenger::ChannelId::MEDIA_SINK_SYSTEM_AUDIO,
+        aap_protobuf::service::media::sink::message::AUDIO_STREAM_SYSTEM_AUDIO,
+        16000, 1);
+
+    auto *microphone_service = response.add_channels();
+    microphone_service->set_id(
+        static_cast<int>(aasdk::messenger::ChannelId::MEDIA_SOURCE_MICROPHONE));
+    auto *microphone = microphone_service->mutable_media_source_service();
+    microphone->set_available_type(
+        aap_protobuf::service::media::shared::message::MEDIA_CODEC_AUDIO_PCM);
+    auto *microphone_config = microphone->mutable_audio_config();
+    microphone_config->set_sampling_rate(16000);
+    microphone_config->set_number_of_bits(16);
+    microphone_config->set_number_of_channels(1);
+
+    auto *sensor_service = response.add_channels();
+    sensor_service->set_id(
+        static_cast<int>(aasdk::messenger::ChannelId::SENSOR));
+    sensor_service->mutable_sensor_source_service()
+        ->add_sensors()
+        ->set_sensor_type(aap_protobuf::service::sensorsource::message::
+                              SENSOR_DRIVING_STATUS_DATA);
+
+    auto *input_service = response.add_channels();
+    input_service->set_id(
+        static_cast<int>(aasdk::messenger::ChannelId::INPUT_SOURCE));
+    auto *touchscreen =
+        input_service->mutable_input_source_service()->add_touchscreen();
+    touchscreen->set_width(1280);
+    touchscreen->set_height(720);
+    touchscreen->set_type(
+        aap_protobuf::service::inputsource::message::CAPACITIVE);
+
+    auto promise = aasdk::channel::SendPromise::defer(strand_);
+    promise->then(
+        [self = shared_from_this(), count = response.channels_size()] {
+          self->callback_({WiredReceiverEventType::control_session_ready,
+                           "sent Android Auto service discovery (" +
+                               std::to_string(count) + " channels)"});
+        },
+        [self = shared_from_this()](const auto &error) {
+          self->fail(error.what());
+        });
+    control_->sendServiceDiscoveryResponse(response, std::move(promise));
     receive_next();
   }
 
