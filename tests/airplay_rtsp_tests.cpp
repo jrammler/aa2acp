@@ -1,7 +1,7 @@
 #include "aa2acp/airplay/bplist.hpp"
 #include "aa2acp/airplay/control_cipher.hpp"
 #include "aa2acp/airplay/crypto.hpp"
-#include "aa2acp/airplay/display_profile.hpp"
+#include "aa2acp/airplay/head_unit_capabilities.hpp"
 #include "aa2acp/airplay/pairing_store.hpp"
 #include "aa2acp/airplay/rtsp.hpp"
 
@@ -79,15 +79,37 @@ int main() {
                 aa2acp::airplay::PlistValue(std::uint64_t{1920})},
                {"heightPixels",
                 aa2acp::airplay::PlistValue(std::uint64_t{720})},
-               {"maxFPS", aa2acp::airplay::PlistValue(std::uint64_t{60})}}}}};
-  const auto display = aa2acp::airplay::main_display_profile(info, "AA:BB:CC");
+               {"maxFPS", aa2acp::airplay::PlistValue(std::uint64_t{60})}}}},
+      {"audioFormats",
+       aa2acp::airplay::PlistValue::Array{
+           aa2acp::airplay::PlistValue::Dictionary{
+               {"type", aa2acp::airplay::PlistValue(std::uint64_t{100})},
+               {"audioType", aa2acp::airplay::PlistValue("media")},
+               {"audioOutputFormats",
+                aa2acp::airplay::PlistValue(std::uint64_t{0x8000})}},
+           aa2acp::airplay::PlistValue::Dictionary{
+               {"type", aa2acp::airplay::PlistValue(std::uint64_t{100})},
+               {"audioType", aa2acp::airplay::PlistValue("default")},
+               {"audioOutputFormats",
+                aa2acp::airplay::PlistValue(std::uint64_t{0x10})}},
+           aa2acp::airplay::PlistValue::Dictionary{
+               {"type", aa2acp::airplay::PlistValue(std::uint64_t{100})},
+               {"audioType", aa2acp::airplay::PlistValue("alert")},
+               {"audioOutputFormats",
+                aa2acp::airplay::PlistValue(std::uint64_t{0x10})}}}}};
+  const auto display =
+      aa2acp::airplay::head_unit_capabilities(info, "AA:BB:CC");
   assert(display && display->width_pixels == 1920 &&
-         display->height_pixels == 720 && display->max_fps == 60);
-  const auto display_path =
-      std::filesystem::temp_directory_path() / "aa2acp-display-profile-test";
-  assert(aa2acp::airplay::save_display_profile(display_path, *display));
-  assert(aa2acp::airplay::load_display_profile(display_path, "AA:BB:CC"));
-  assert(!aa2acp::airplay::load_display_profile(display_path, "DD:EE:FF"));
+         display->height_pixels == 720 && display->max_fps == 60 &&
+         display->media_pcm_48k_stereo && display->guidance_pcm_16k_mono &&
+         display->system_pcm_16k_mono);
+  const auto display_path = std::filesystem::temp_directory_path() /
+                            "aa2acp-head-unit-capabilities-test";
+  assert(aa2acp::airplay::save_head_unit_capabilities(display_path, *display));
+  assert(
+      aa2acp::airplay::load_head_unit_capabilities(display_path, "AA:BB:CC"));
+  assert(
+      !aa2acp::airplay::load_head_unit_capabilities(display_path, "DD:EE:FF"));
   std::filesystem::remove(display_path);
 
   const auto identity = aa2acp::airplay::ed25519_generate();

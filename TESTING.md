@@ -81,9 +81,10 @@ pairing or the Wi-Fi handover.
 - To capture the Android Auto elementary H.264 stream during a run, set
   `AA2ACP_DUMP_H264=/tmp/android-auto.h264` before launching the daemon. This
   is for diagnosis only; it can produce a large file.
-- The bridge caches the main display profile advertised by CarPlay in
-  `$XDG_STATE_HOME/aa2acp/display-profile` (normally
-  `~/.local/state/aa2acp/display-profile`) and uses a supported cached
+- The bridge caches CarPlay's head-unit capabilities (the main display and
+  supported direct-PCM audio routes) in
+  `$XDG_STATE_HOME/aa2acp/head-unit-capabilities` (normally
+  `~/.local/state/aa2acp/head-unit-capabilities`) and uses a supported cached
   resolution for Android Auto. The first connection, unavailable cache, or an
   unsupported profile waits up to 30 seconds for CarPlay discovery before using
   the conservative 1280x720 fallback.

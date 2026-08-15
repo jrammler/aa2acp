@@ -24,7 +24,7 @@ struct SessionOptions {
   // time. Returning std::nullopt ends the live stream.
   std::function<std::optional<std::vector<std::uint8_t>>()> next_media_audio;
   std::string pairing_store;
-  std::filesystem::path display_profile_store;
+  std::filesystem::path head_unit_capabilities_store;
   std::string head_unit_mac;
   std::function<bool()> stop_requested;
 };

@@ -38,7 +38,7 @@ add_library(airplay_rtsp
     src/airplay/crypto.cpp
     src/airplay/control_cipher.cpp
     src/airplay/bplist.cpp
-    src/airplay/display_profile.cpp
+    src/airplay/head_unit_capabilities.cpp
     src/airplay/pairing_store.cpp
 )
 target_include_directories(airplay_rtsp PUBLIC include)

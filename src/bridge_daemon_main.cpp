@@ -1,5 +1,5 @@
 #include "aa2acp/aa/wired_receiver.hpp"
-#include "aa2acp/airplay/display_profile.hpp"
+#include "aa2acp/airplay/head_unit_capabilities.hpp"
 #include "aa2acp/bridge/bluez_inventory.hpp"
 #include "aa2acp/bridge/config.hpp"
 #include "aa2acp/bridge/h264_normalizer.hpp"
@@ -859,8 +859,8 @@ int run_carplay_session(const char *program_path,
       config.wifi_interface,
       "--pairing-store",
       config.airplay_pairing_store.string(),
-      "--display-profile-store",
-      aa2acp::bridge::default_display_profile_store().string(),
+      "--head-unit-capabilities-store",
+      aa2acp::bridge::default_head_unit_capabilities_store().string(),
       "--timeout",
       "60"};
   if (!video_socket.empty()) {
@@ -1036,21 +1036,26 @@ int run_wired_android_auto_receiver(
         if (stream == aa2acp::aa::AudioStream::media)
           audio_forwarder.push(pcm);
       },
-      [&config_provider]() -> std::optional<aa2acp::aa::DisplayProfile> {
+      [&config_provider]() -> std::optional<aa2acp::aa::HeadUnitCapabilities> {
         const auto config = config_provider();
         const auto deadline =
             std::chrono::steady_clock::now() + std::chrono::seconds(30);
         do {
-          const auto profile = aa2acp::airplay::load_display_profile(
-              aa2acp::bridge::default_display_profile_store(),
-              config.head_unit_mac);
-          if (profile)
-            return aa2acp::aa::DisplayProfile{profile->width_pixels,
-                                              profile->height_pixels,
-                                              profile->max_fps};
+          const auto capabilities =
+              aa2acp::airplay::load_head_unit_capabilities(
+                  aa2acp::bridge::default_head_unit_capabilities_store(),
+                  config.head_unit_mac);
+          if (capabilities)
+            return aa2acp::aa::HeadUnitCapabilities{
+                capabilities->width_pixels,
+                capabilities->height_pixels,
+                capabilities->max_fps,
+                capabilities->media_pcm_48k_stereo,
+                capabilities->guidance_pcm_16k_mono,
+                capabilities->system_pcm_16k_mono};
           std::this_thread::sleep_for(std::chrono::milliseconds(50));
         } while (std::chrono::steady_clock::now() < deadline);
-        std::cerr << "Bridge daemon: CarPlay display profile was unavailable "
+        std::cerr << "Bridge daemon: CarPlay capabilities were unavailable "
                      "before Android Auto service discovery deadline; using "
                      "1280x720\n";
         return std::nullopt;
@@ -1285,14 +1290,15 @@ int main(int argc, char **argv) {
               config_path, {mac, *wifi, previous.airplay_pairing_store})) {
         if (mac != previous.head_unit_mac) {
           std::error_code error;
-          const auto profile_store =
-              aa2acp::bridge::default_display_profile_store();
-          if (std::filesystem::remove(profile_store, error)) {
-            std::cout << "Management: invalidated cached display profile after "
-                         "head-unit change\n";
+          const auto capabilities_store =
+              aa2acp::bridge::default_head_unit_capabilities_store();
+          if (std::filesystem::remove(capabilities_store, error)) {
+            std::cout
+                << "Management: invalidated cached head-unit capabilities "
+                   "after head-unit change\n";
           } else if (error) {
-            std::cerr << "Management: unable to invalidate cached display "
-                         "profile: "
+            std::cerr << "Management: unable to invalidate cached head-unit "
+                         "capabilities: "
                       << error.message() << '\n';
           }
         }

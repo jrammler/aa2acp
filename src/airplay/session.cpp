@@ -2,7 +2,7 @@
 #include "aa2acp/airplay/bplist.hpp"
 #include "aa2acp/airplay/control_cipher.hpp"
 #include "aa2acp/airplay/crypto.hpp"
-#include "aa2acp/airplay/display_profile.hpp"
+#include "aa2acp/airplay/head_unit_capabilities.hpp"
 #include "aa2acp/airplay/pairing_store.hpp"
 #include "aa2acp/airplay/rtsp.hpp"
 #include "aa2acp/airplay/srp.hpp"
@@ -666,18 +666,24 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   }
   std::cout << "AirPlay: encrypted /info capabilities received\n";
   const auto *info = dictionary_of(info_plist);
-  if (!options.display_profile_store.empty() &&
+  const auto carplay_capabilities =
+      info ? aa2acp::airplay::head_unit_capabilities(*info,
+                                                     options.head_unit_mac)
+           : std::nullopt;
+  if (!options.head_unit_capabilities_store.empty() &&
       !options.head_unit_mac.empty()) {
-    const auto profile = main_display_profile(*info, options.head_unit_mac);
-    if (!profile) {
+    if (!carplay_capabilities) {
       std::cerr
-          << "AirPlay: /info did not provide a valid main display profile\n";
-    } else if (!save_display_profile(options.display_profile_store, *profile)) {
-      std::cerr << "AirPlay: unable to cache main display profile\n";
+          << "AirPlay: /info did not provide valid head-unit capabilities\n";
+    } else if (!save_head_unit_capabilities(
+                   options.head_unit_capabilities_store,
+                   *carplay_capabilities)) {
+      std::cerr << "AirPlay: unable to cache head-unit capabilities\n";
     } else {
-      std::cout << "AirPlay: cached main display profile "
-                << profile->width_pixels << 'x' << profile->height_pixels
-                << " at up to " << profile->max_fps << " FPS\n";
+      std::cout << "AirPlay: cached head-unit capabilities: display "
+                << carplay_capabilities->width_pixels << 'x'
+                << carplay_capabilities->height_pixels << " at up to "
+                << carplay_capabilities->max_fps << " FPS\n";
     }
   }
 
@@ -711,7 +717,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
       "8B4C4DF6-AE7F-48F5-A36B-546EEAAEF4B5";
   std::optional<std::uint64_t> audio_port;
   aa2acp::airplay::Bytes audio_key;
-  if (options.next_media_audio) {
+  if (options.next_media_audio && carplay_capabilities &&
+      carplay_capabilities->media_pcm_48k_stereo) {
     // Android Auto delivers media as 48 kHz stereo S16LE. LIVI accepts this
     // direct LPCM stream, so retain it for the first audio milestone instead
     // of adding an encoder and its latency to the bridge.

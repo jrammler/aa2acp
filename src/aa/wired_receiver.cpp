@@ -345,13 +345,15 @@ public:
                  aasdk::usb::DeviceHandle handle, Callback callback,
                  WiredReceiver::VideoFrameCallback video_frame_callback,
                  WiredReceiver::AudioFrameCallback audio_frame_callback,
-                 WiredReceiver::DisplayProfileProvider display_profile_provider,
+                 WiredReceiver::HeadUnitCapabilitiesProvider
+                     head_unit_capabilities_provider,
                  std::function<void()> ended_callback)
       : io_service_(io_service), strand_(io_service), usb_wrapper_(usb_wrapper),
         handle_(std::move(handle)), callback_(std::move(callback)),
         video_frame_callback_(std::move(video_frame_callback)),
         audio_frame_callback_(std::move(audio_frame_callback)),
-        display_profile_provider_(std::move(display_profile_provider)),
+        head_unit_capabilities_provider_(
+            std::move(head_unit_capabilities_provider)),
         ended_callback_(std::move(ended_callback)) {}
 
   void start() {
@@ -477,8 +479,9 @@ public:
     media_sink->set_available_type(aap_protobuf::service::media::shared::
                                        message::MEDIA_CODEC_VIDEO_H264_BP);
     media_sink->set_available_while_in_call(true);
-    const auto profile =
-        display_profile_provider_ ? display_profile_provider_() : std::nullopt;
+    const auto profile = head_unit_capabilities_provider_
+                             ? head_unit_capabilities_provider_()
+                             : std::nullopt;
     using Resolution =
         aap_protobuf::service::media::sink::message::VideoCodecResolutionType;
     auto resolution = Resolution::VIDEO_1280x720;
@@ -515,29 +518,12 @@ public:
           audio_config->set_number_of_bits(16);
           audio_config->set_number_of_channels(channels);
         };
-    add_audio_service(
-        aasdk::messenger::ChannelId::MEDIA_SINK_MEDIA_AUDIO,
-        aap_protobuf::service::media::sink::message::AUDIO_STREAM_MEDIA, 48000,
-        2);
-    add_audio_service(
-        aasdk::messenger::ChannelId::MEDIA_SINK_GUIDANCE_AUDIO,
-        aap_protobuf::service::media::sink::message::AUDIO_STREAM_GUIDANCE,
-        16000, 1);
-    add_audio_service(
-        aasdk::messenger::ChannelId::MEDIA_SINK_SYSTEM_AUDIO,
-        aap_protobuf::service::media::sink::message::AUDIO_STREAM_SYSTEM_AUDIO,
-        16000, 1);
-
-    auto *microphone_service = response.add_channels();
-    microphone_service->set_id(
-        static_cast<int>(aasdk::messenger::ChannelId::MEDIA_SOURCE_MICROPHONE));
-    auto *microphone = microphone_service->mutable_media_source_service();
-    microphone->set_available_type(
-        aap_protobuf::service::media::shared::message::MEDIA_CODEC_AUDIO_PCM);
-    auto *microphone_config = microphone->mutable_audio_config();
-    microphone_config->set_sampling_rate(16000);
-    microphone_config->set_number_of_bits(16);
-    microphone_config->set_number_of_channels(1);
+    if (profile && profile->media_audio) {
+      add_audio_service(
+          aasdk::messenger::ChannelId::MEDIA_SINK_MEDIA_AUDIO,
+          aap_protobuf::service::media::sink::message::AUDIO_STREAM_MEDIA,
+          48000, 2);
+    }
 
     auto *sensor_service = response.add_channels();
     sensor_service->set_id(
@@ -766,7 +752,7 @@ private:
   Callback callback_;
   WiredReceiver::VideoFrameCallback video_frame_callback_;
   WiredReceiver::AudioFrameCallback audio_frame_callback_;
-  WiredReceiver::DisplayProfileProvider display_profile_provider_;
+  WiredReceiver::HeadUnitCapabilitiesProvider head_unit_capabilities_provider_;
   std::function<void()> ended_callback_;
   aasdk::transport::ITransport::Pointer transport_;
   aasdk::messenger::ICryptor::Pointer cryptor_;
@@ -785,11 +771,12 @@ class WiredReceiver::Impl {
 public:
   explicit Impl(EventCallback callback, VideoFrameCallback video_frame_callback,
                 AudioFrameCallback audio_frame_callback,
-                DisplayProfileProvider display_profile_provider)
+                HeadUnitCapabilitiesProvider head_unit_capabilities_provider)
       : callback_(std::move(callback)),
         video_frame_callback_(std::move(video_frame_callback)),
         audio_frame_callback_(std::move(audio_frame_callback)),
-        display_profile_provider_(std::move(display_profile_provider)) {}
+        head_unit_capabilities_provider_(
+            std::move(head_unit_capabilities_provider)) {}
 
   ~Impl() { stop(); }
 
@@ -969,7 +956,8 @@ private:
   void start_control_session() {
     control_session_ = std::make_shared<ControlSession>(
         io_service_, *usb_wrapper_, active_handle_, callback_,
-        video_frame_callback_, audio_frame_callback_, display_profile_provider_,
+        video_frame_callback_, audio_frame_callback_,
+        head_unit_capabilities_provider_,
         [this] { io_service_.post([this] { handle_control_session_end(); }); });
     control_session_->start();
   }
@@ -1007,7 +995,7 @@ private:
   EventCallback callback_;
   VideoFrameCallback video_frame_callback_;
   AudioFrameCallback audio_frame_callback_;
-  DisplayProfileProvider display_profile_provider_;
+  HeadUnitCapabilitiesProvider head_unit_capabilities_provider_;
   std::mutex mutex_;
   std::atomic_bool stopping_{false};
   bool running_{};
@@ -1028,14 +1016,14 @@ private:
   std::thread usb_thread_;
 };
 
-WiredReceiver::WiredReceiver(EventCallback callback,
-                             VideoFrameCallback video_frame_callback,
-                             AudioFrameCallback audio_frame_callback,
-                             DisplayProfileProvider display_profile_provider)
-    : impl_(std::make_unique<Impl>(std::move(callback),
-                                   std::move(video_frame_callback),
-                                   std::move(audio_frame_callback),
-                                   std::move(display_profile_provider))) {}
+WiredReceiver::WiredReceiver(
+    EventCallback callback, VideoFrameCallback video_frame_callback,
+    AudioFrameCallback audio_frame_callback,
+    HeadUnitCapabilitiesProvider head_unit_capabilities_provider)
+    : impl_(std::make_unique<Impl>(
+          std::move(callback), std::move(video_frame_callback),
+          std::move(audio_frame_callback),
+          std::move(head_unit_capabilities_provider))) {}
 
 WiredReceiver::~WiredReceiver() = default;
 

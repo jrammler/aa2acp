@@ -186,7 +186,7 @@ int main(int argc, char **argv) {
   std::string video_socket;
   std::string audio_socket;
   std::string pairing_store;
-  std::string display_profile_store;
+  std::string head_unit_capabilities_store;
   std::string wifi_interface;
   for (int index = 1; index < argc; ++index) {
     const std::string argument = argv[index];
@@ -220,8 +220,9 @@ int main(int argc, char **argv) {
       bridge = true;
     } else if (argument == "--video" && index + 1 < argc) {
       video_path = argv[++index];
-    } else if (argument == "--display-profile-store" && index + 1 < argc) {
-      display_profile_store = argv[++index];
+    } else if (argument == "--head-unit-capabilities-store" &&
+               index + 1 < argc) {
+      head_unit_capabilities_store = argv[++index];
     } else if (argument == "--video-socket" && index + 1 < argc) {
       video_socket = argv[++index];
     } else if (argument == "--audio-socket" && index + 1 < argc) {
@@ -237,7 +238,7 @@ int main(int argc, char **argv) {
              "[--bootstrap] [--carplay] [--wifi-config] [--join-wifi] "
              "[--leave-wifi] [--wifi-interface IFACE] [--bridge] [--video "
              "H264_FILE] [--video-socket PATH] [--audio-socket PATH] "
-             "[--pairing-store FILE]\n";
+             "[--pairing-store FILE] [--head-unit-capabilities-store FILE]\n";
       return 2;
     }
   }
@@ -380,7 +381,7 @@ int main(int argc, char **argv) {
                   ? [live_audio] { return live_audio->next(); }
                   : std::function<std::optional<std::vector<std::uint8_t>>()>{},
           .pairing_store = pairing_store,
-          .display_profile_store = display_profile_store,
+          .head_unit_capabilities_store = head_unit_capabilities_store,
           .head_unit_mac = address,
           .stop_requested = [] { return shutdown_requested != 0; },
       };

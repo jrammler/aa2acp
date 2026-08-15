@@ -17,12 +17,13 @@ end with [LIVI](https://github.com/f-io/LIVI):
 - Bluetooth iAP2, pairing, MFi test authentication, and CarPlay Wi-Fi handover;
 - encrypted AirPlay control and H.264 video forwarding;
 - lossless H.264 SPS metadata normalization for decoder compatibility;
-- head-unit-bound display-profile caching, including a 30-second cold-start
+- head-unit-bound capabilities caching, including a 30-second cold-start
   negotiation window before Android Auto video setup;
 - persisted configuration/pairing state, rotating logs, and clean disconnect
   handling.
 
-Audio and physical-control forwarding are not implemented yet. See
+Media audio forwarding is verified with LIVI; the remaining audio streams and
+physical-control forwarding are not implemented yet. See
 [TODO.md](TODO.md) for the active task list and
 [ARCHITECTURE.md](ARCHITECTURE.md) for the system design. The verified
 end-to-end runbook and external test-rig assumptions are in

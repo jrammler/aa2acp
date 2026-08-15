@@ -28,10 +28,13 @@ struct WiredReceiverEvent {
   std::string detail;
 };
 
-struct DisplayProfile {
+struct HeadUnitCapabilities {
   std::uint32_t width_pixels{};
   std::uint32_t height_pixels{};
   std::uint32_t max_fps{};
+  bool media_audio{};
+  bool guidance_audio{};
+  bool system_audio{};
 };
 
 enum class AudioStream { media, guidance, system };
@@ -46,12 +49,13 @@ public:
   // The span is valid only for the duration of the callback.
   using AudioFrameCallback =
       std::function<void(AudioStream, std::span<const std::uint8_t>)>;
-  using DisplayProfileProvider = std::function<std::optional<DisplayProfile>()>;
+  using HeadUnitCapabilitiesProvider =
+      std::function<std::optional<HeadUnitCapabilities>()>;
 
-  explicit WiredReceiver(EventCallback callback,
-                         VideoFrameCallback video_frame_callback = {},
-                         AudioFrameCallback audio_frame_callback = {},
-                         DisplayProfileProvider display_profile_provider = {});
+  explicit WiredReceiver(
+      EventCallback callback, VideoFrameCallback video_frame_callback = {},
+      AudioFrameCallback audio_frame_callback = {},
+      HeadUnitCapabilitiesProvider head_unit_capabilities_provider = {});
   ~WiredReceiver();
 
   WiredReceiver(const WiredReceiver &) = delete;

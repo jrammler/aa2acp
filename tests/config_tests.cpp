@@ -16,6 +16,6 @@ int main() {
   assert(aa2acp::bridge::default_config_path().filename() == "config");
   assert(aa2acp::bridge::default_airplay_pairing_store().filename() ==
          "airplay-pairing.bin");
-  assert(aa2acp::bridge::default_display_profile_store().filename() ==
-         "display-profile");
+  assert(aa2acp::bridge::default_head_unit_capabilities_store().filename() ==
+         "head-unit-capabilities");
 }
