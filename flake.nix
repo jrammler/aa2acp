@@ -3,7 +3,7 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     nixpkgs-aasdk.url = "github:NixOS/nixpkgs/nixos-24.11";
     aasdk = {
-      url = "github:opencardev/aasdk/9bf6adf933665dee26532201719fac14a047ccf1";
+      url = "github:opencardev/aasdk";
       flake = false;
     };
   };
