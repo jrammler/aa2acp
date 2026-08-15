@@ -204,6 +204,37 @@ bool call_set_trusted(DBusConnection *connection, const std::string &path,
   return result;
 }
 
+bool call_set_le_discovery_filter(DBusConnection *connection, std::string &name,
+                                  std::string &detail) {
+  DBusMessage *message =
+      new_call(kAdapterPath, kAdapterInterface, "SetDiscoveryFilter");
+  if (message == nullptr) {
+    detail = "unable to allocate D-Bus message";
+    return false;
+  }
+  DBusMessageIter arguments;
+  DBusMessageIter dictionary;
+  DBusMessageIter entry;
+  DBusMessageIter variant;
+  const char *key = "Transport";
+  const char *transport = "le";
+  dbus_message_iter_init_append(message, &arguments);
+  dbus_message_iter_open_container(&arguments, DBUS_TYPE_ARRAY, "{sv}",
+                                   &dictionary);
+  dbus_message_iter_open_container(&dictionary, DBUS_TYPE_DICT_ENTRY, nullptr,
+                                   &entry);
+  dbus_message_iter_append_basic(&entry, DBUS_TYPE_STRING, &key);
+  dbus_message_iter_open_container(&entry, DBUS_TYPE_VARIANT,
+                                   DBUS_TYPE_STRING_AS_STRING, &variant);
+  dbus_message_iter_append_basic(&variant, DBUS_TYPE_STRING, &transport);
+  dbus_message_iter_close_container(&entry, &variant);
+  dbus_message_iter_close_container(&dictionary, &entry);
+  dbus_message_iter_close_container(&arguments, &dictionary);
+  const bool result = await_call(connection, message, 5000, name, detail);
+  dbus_message_unref(message);
+  return result;
+}
+
 void write_log(const PairingLogFunction &log, const std::string &message) {
   if (log) {
     log(message);
@@ -243,6 +274,9 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
     write_log(log, "RequestDefaultAgent failed: " + name + " " + detail);
   }
 
+  if (!call_set_le_discovery_filter(connection, name, detail)) {
+    write_log(log, "SetDiscoveryFilter(le) failed: " + name + " " + detail);
+  }
   if (!call_no_arguments(connection, kAdapterPath, kAdapterInterface,
                          "StartDiscovery", 5000, name, detail)) {
     write_log(log, "StartDiscovery failed: " + name + " " + detail);

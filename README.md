@@ -61,8 +61,8 @@ test (including video) is:
 ## Bluetooth bootstrap test
 
 `iap2-bt` opens test head unit's iAP2 RFCOMM channel (3) after the Pi is paired with the
-test head unit adapter. Pairing is intentionally left to BlueZ tooling for this first
-transport milestone; the production daemon will own an agent and pairing flow.
+test head unit adapter. Its optional `--pair` mode owns the first-pairing flow through a
+temporary BlueZ `NoInputNoOutput` agent.
 `--bootstrap` runs the same CSM identification and software-MFi validation flow
 as TCP once the RFCOMM link reaches `NORMAL`.
 
@@ -83,9 +83,16 @@ Pass `--pair` to make the client register a temporary BlueZ
 This is the intended Just-Works path for an unpaired device; it is opt-in so
 ordinary runs do not touch persistent BlueZ pairing state.
 
-This path was acceptance-tested on 2026-08-15 from a bond removed on **both**
-the development device and test head unit: discovery → pair → trust → RFCOMM → iAP2 `NORMAL`
-completed without `bluetoothctl` pairing commands.
+test head unit is intermittently visible to this host only through an explicit BlueZ LE
+scan. `--pair` therefore selects the LE discovery filter before scanning. This
+is an observed test head unit/BlueZ test-environment behaviour, not a claim that every
+wireless-CarPlay head unit is LE-only; future hardware support needs discovery
+fallbacks for Classic/BREDR-only accessories.
+
+The first-pairing path was acceptance-tested on 2026-08-15 from a bond removed
+on **both** the development host and test head unit: LE discovery → pair → trust →
+RFCOMM → iAP2 `NORMAL` → Wi-Fi join → AirPlay Pair Setup/Pair Verify →
+encrypted RTSP `RECORD` completed without `bluetoothctl` pairing commands.
 
 ```bash
 bluetoothctl
@@ -97,3 +104,32 @@ bluetoothctl
 # CarPlay control-session probe:
 ./pi-bridge/build/iap2-bt --mac [redacted-device-address] --carplay --timeout 30
 ```
+
+## Integrated bridge and state matrix
+
+`--bridge` combines iAP2, the received Wi-Fi configuration, the
+`WirelessCarPlayUpdate`, and the AirPlay client. `--pairing-store` persists the
+AirPlay controller identity and accessory public key (mode `0600`), so later
+sessions run Pair Verify only. BlueZ owns the Bluetooth bond and NetworkManager
+owns the saved AP profile; the bridge deliberately does not duplicate either.
+
+```bash
+nix develop --command ./pi-bridge/build/iap2-bt \
+  --mac [redacted-device-address] --pair --bridge \
+  --wifi-interface wlp15s0 \
+  --pairing-store ~/.local/state/acp-aa-bridge/airplay-pairing.bin \
+  --timeout 60
+```
+
+The following state combinations were exercised against test head unit on 2026-08-15:
+
+| Bluetooth bond | NetworkManager `test head unit` profile | AirPlay record | Result |
+| --- | --- | --- | --- |
+| Present | Present | Absent | iAP2 and Wi-Fi reconnect, then Pair Setup + Pair Verify succeed. |
+| Present | Present | Present | iAP2 and Wi-Fi reconnect, then Pair Verify-only AirPlay session succeeds. |
+| Present | Absent | Present | iAP2 supplies fresh credentials, NetworkManager recreates the profile, then Pair Verify-only succeeds. |
+| Absent on both devices | Absent | Absent | Native LE discovery, Just-Works pair/trust, Wi-Fi join, Pair Setup, Pair Verify, and encrypted `RECORD` all succeed. |
+
+After a normal session, call `--leave-wifi` to disconnect from the car AP while
+preserving its NetworkManager profile for a faster later handover. The future
+daemon will do this automatically before restoring its idle management AP.
