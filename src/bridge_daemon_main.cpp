@@ -23,7 +23,7 @@ extern char **environ;
 namespace {
 
 constexpr char kPage[] =
-    R"HTML(<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>ACP-AA Bridge</title><style>body{font:16px sans-serif;max-width:34rem;margin:3rem auto;padding:0 1rem}label,input{display:block;width:100%;box-sizing:border-box;margin:.5rem 0}button{padding:.6rem 1rem}</style><h1>ACP-AA Bridge</h1><p>Configure the pinned CarPlay head unit.</p><form><label>Head-unit Bluetooth MAC<input id="head_unit_mac" list="bluetooth_devices" required><datalist id="bluetooth_devices"></datalist></label><label>Wi-Fi interface<input id="wifi_interface" list="wifi_interfaces" required><datalist id="wifi_interfaces"></datalist></label><button>Save</button></form><p id="result"></p><script>const ids=['head_unit_mac','wifi_interface'];const fill=(id,x)=>document.querySelector(id).innerHTML=x.map(v=>'<option value="'+v+'">').join('');Promise.all([fetch('/api/config').then(r=>r.json()),fetch('/api/bluetooth-devices').then(r=>r.json()),fetch('/api/wifi-interfaces').then(r=>r.json())]).then(([c,b,w])=>{ids.forEach(i=>document.getElementById(i).value=c[i]);fill('#bluetooth_devices',b);fill('#wifi_interfaces',w)});document.querySelector('form').onsubmit=async e=>{e.preventDefault();let c=Object.fromEntries(ids.map(i=>[i,document.getElementById(i).value]));let r=await fetch('/api/config',{method:'PUT',body:JSON.stringify(c)});document.querySelector('#result').textContent=r.ok?'Saved.':'Save failed.'}</script>)HTML";
+    R"HTML(<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>ACP-AA Bridge</title><style>body{font:16px sans-serif;max-width:34rem;margin:3rem auto;padding:0 1rem}label,select{display:block;width:100%;box-sizing:border-box;margin:.5rem 0}button{padding:.6rem 1rem}</style><h1>ACP-AA Bridge</h1><p>Configure the pinned CarPlay head unit.</p><form><label>Head-unit Bluetooth device<select id="head_unit_mac" required></select></label><label>Wi-Fi interface<select id="wifi_interface" required></select></label><button>Save</button></form><p id="result"></p><script>const add=(id,items,current,bt)=>{let s=document.querySelector(id);s.innerHTML='';items.forEach(x=>{let [value,name]=bt?x.split('|'): [x,x],o=new Option(bt?name+' — '+value:name,value);if(value===current)o.selected=true;s.add(o)});if(!s.options.length)s.add(new Option('No devices found',''))};Promise.all([fetch('/api/config').then(r=>r.json()),fetch('/api/bluetooth-devices').then(r=>r.json()),fetch('/api/wifi-interfaces').then(r=>r.json())]).then(([c,b,w])=>{add('#head_unit_mac',b,c.head_unit_mac,true);add('#wifi_interface',w,c.wifi_interface,false)});document.querySelector('form').onsubmit=async e=>{e.preventDefault();let c={head_unit_mac:head_unit_mac.value,wifi_interface:wifi_interface.value};let r=await fetch('/api/config',{method:'PUT',body:JSON.stringify(c)});result.textContent=r.ok?'Saved.':'Save failed.'}</script>)HTML";
 
 std::string json(const acp::bridge::Config &config) {
   // Values are validated as single-line key/value data by the config store.
@@ -241,7 +241,8 @@ int main(int argc, char **argv) {
       send_response(client, 200, "application/json", json(config));
     else if (request.starts_with("GET /api/bluetooth-devices "))
       send_response(client, 200, "application/json",
-                    command_json("bluetoothctl devices | awk '{print $2}'"));
+                    command_json("bluetoothctl devices | sed -n 's/^Device "
+                                 "\\([0-9A-F:]*\\) \\(.*\\)$/\\1|\\2/p'"));
     else if (request.starts_with("GET /api/wifi-interfaces "))
       send_response(client, 200, "application/json",
                     command_json("nmcli -t -f DEVICE,TYPE device status | awk "
