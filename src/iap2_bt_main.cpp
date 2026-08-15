@@ -18,6 +18,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <thread>
 
 namespace {
 
@@ -314,25 +315,34 @@ int main(int argc, char **argv) {
     }
     std::cout << "Bridge: starting AirPlay on " << host << ':'
               << carplay_probe.airplay_port() << '\n';
-    const auto live_video =
-        video_socket.empty()
-            ? std::shared_ptr<VideoSocketReader>{}
-            : std::make_shared<VideoSocketReader>(video_socket);
-    const aa2acp::airplay::SessionOptions options{
-        .host = host,
-        .port = static_cast<std::uint16_t>(carplay_probe.airplay_port()),
-        .timeout_seconds = timeout_seconds,
-        .video_path = video_path,
-        .next_video_frame =
-            live_video
-                ? [live_video] { return live_video->next(); }
-                : std::function<std::optional<std::vector<std::uint8_t>>()>{},
-        .pairing_store = pairing_store,
-        .display_profile_store = display_profile_store,
-        .head_unit_mac = address,
-        .stop_requested = [] { return shutdown_requested != 0; },
+    const auto run_airplay = [&] {
+      const auto live_video =
+          video_socket.empty()
+              ? std::shared_ptr<VideoSocketReader>{}
+              : std::make_shared<VideoSocketReader>(video_socket);
+      const aa2acp::airplay::SessionOptions options{
+          .host = host,
+          .port = static_cast<std::uint16_t>(carplay_probe.airplay_port()),
+          .timeout_seconds = timeout_seconds,
+          .video_path = video_path,
+          .next_video_frame =
+              live_video
+                  ? [live_video] { return live_video->next(); }
+                  : std::function<std::optional<std::vector<std::uint8_t>>()>{},
+          .pairing_store = pairing_store,
+          .display_profile_store = display_profile_store,
+          .head_unit_mac = address,
+          .stop_requested = [] { return shutdown_requested != 0; },
+      };
+      return aa2acp::airplay::run_session(options);
     };
-    const auto result = aa2acp::airplay::run_session(options);
+    auto result = run_airplay();
+    if (result != 0 && shutdown_requested == 0) {
+      std::cerr << "Bridge: AirPlay attempt failed; retrying once\n";
+      std::this_thread::sleep_for(std::chrono::seconds(1));
+      if (shutdown_requested == 0)
+        result = run_airplay();
+    }
     // The profile and credentials remain in NetworkManager for fast reconnect,
     // but the car AP must not remain the active idle network.
     const auto left_wifi =

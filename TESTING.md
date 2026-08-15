@@ -55,7 +55,7 @@ Then plug in the Android phone. The normal successful sequence includes:
 
 ```text
 Android Auto video stream started
-starting CarPlay for Android Auto video
+ preparing CarPlay for Android Auto
 CarPlay session started
 ... link established (NORMAL)
 ... Wi-Fi: joining SSID ...
@@ -67,6 +67,10 @@ The daemon keeps configuration, the AirPlay pairing identity, and up to 30
 launch-rotated logs in `$XDG_STATE_HOME/aa2acp` (normally
 `~/.local/state/aa2acp`). Inspect `logs/` first when a failed session is no
 longer visible in the terminal.
+
+If the first AirPlay connection after Wi-Fi handover fails, the bridge waits
+one second and retries the AirPlay phase once without repeating Bluetooth
+pairing or the Wi-Fi handover.
 
 ## Useful diagnostics
 
