@@ -373,10 +373,16 @@ public:
     {
       std::lock_guard lock(mutex_);
       bool keyframe = false;
-      for (const auto &nalu : nalus(frame)) {
+      const auto frame_nalus = nalus(frame);
+      std::string nalu_summary;
+      for (const auto &nalu : frame_nalus) {
         if (nalu.empty())
           continue;
         const auto type = nalu[0] & 0x1f;
+        if (!nalu_summary.empty())
+          nalu_summary += ',';
+        nalu_summary +=
+            std::to_string(type) + ":" + std::to_string(nalu.size());
         if (type == 7)
           sps_ = nalu;
         else if (type == 8)
@@ -384,11 +390,11 @@ public:
         else if (type == 5)
           keyframe = true;
       }
-      if (!received_video_) {
-        std::cout << "Bridge daemon: received first Android Auto H.264 access "
-                     "unit ("
-                  << frame.size() << " bytes)\n";
-        received_video_ = true;
+      ++received_video_count_;
+      if (received_video_count_ <= 5 || received_video_count_ % 60 == 0) {
+        std::cout << "Bridge daemon: Android Auto H.264 access unit #"
+                  << received_video_count_ << " (" << frame.size()
+                  << " bytes; NAL type:size=" << nalu_summary << ")\n";
       }
       if (keyframe) {
         // CarPlay setup can take longer than the ordinary frame queue. Keep
@@ -529,7 +535,7 @@ private:
   Bytes sps_;
   Bytes pps_;
   Bytes keyframe_;
-  bool received_video_{};
+  std::size_t received_video_count_{};
 };
 
 int run_carplay_session(const char *program_path,
