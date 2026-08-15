@@ -524,6 +524,18 @@ public:
           aap_protobuf::service::media::sink::message::AUDIO_STREAM_MEDIA,
           48000, 2);
     }
+    if (profile && profile->guidance_audio) {
+      add_audio_service(
+          aasdk::messenger::ChannelId::MEDIA_SINK_GUIDANCE_AUDIO,
+          aap_protobuf::service::media::sink::message::AUDIO_STREAM_GUIDANCE,
+          16000, 1);
+    }
+    if (profile && profile->system_audio) {
+      add_audio_service(aasdk::messenger::ChannelId::MEDIA_SINK_SYSTEM_AUDIO,
+                        aap_protobuf::service::media::sink::message::
+                            AUDIO_STREAM_SYSTEM_AUDIO,
+                        16000, 1);
+    }
 
     // Android Auto opens this source as part of its normal projection
     // negotiation, even though the return path is not bridged yet. Keep the

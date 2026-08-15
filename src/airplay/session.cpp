@@ -773,6 +773,69 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
               << '\n';
   }
 
+  struct AuxiliaryAudioStream {
+    std::uint64_t port{};
+    aa2acp::airplay::Bytes key;
+  };
+  const auto setup_auxiliary_audio =
+      [&](const std::function<std::optional<std::vector<std::uint8_t>>()> &next,
+          const bool supported, const std::string_view name,
+          const std::string_view audio_type, const std::string_view stream_id)
+      -> std::optional<AuxiliaryAudioStream> {
+    if (!next || !supported)
+      return std::nullopt;
+    const auto body =
+        aa2acp::airplay::encode_bplist(aa2acp::airplay::PlistValue::Dictionary{
+            {"streams",
+             aa2acp::airplay::PlistValue::Array{
+                 aa2acp::airplay::PlistValue::Dictionary{
+                     {"type", aa2acp::airplay::PlistValue(std::uint64_t{100})},
+                     {"audioType",
+                      aa2acp::airplay::PlistValue(std::string(audio_type))},
+                     {"audioFormat",
+                      aa2acp::airplay::PlistValue(std::uint64_t{0x10})},
+                     {"streamConnectionID",
+                      aa2acp::airplay::PlistValue(std::string(stream_id))}}}}});
+    const auto response =
+        send_encrypted(socket_fd, control, encrypted_read_buffer,
+                       aa2acp::airplay::encode_request(
+                           "SETUP", "rtsp://127.0.0.1/stream", 8, body,
+                           "application/x-apple-binary-plist"),
+                       timeout_seconds, options.stop_requested);
+    const auto plist = response ? aa2acp::airplay::decode_bplist(response->body)
+                                : std::nullopt;
+    const auto info = dictionary_of(plist);
+    const auto *streams = info && info->contains("streams")
+                              ? std::get_if<aa2acp::airplay::PlistValue::Array>(
+                                    &info->at("streams").data)
+                              : nullptr;
+    const auto *stream =
+        streams && !streams->empty()
+            ? std::get_if<aa2acp::airplay::PlistValue::Dictionary>(
+                  &streams->front().data)
+            : nullptr;
+    const auto port = stream ? integer_at(*stream, "dataPort") : std::nullopt;
+    const auto key = aa2acp::airplay::hkdf_sha512(
+        *shared, std::string("DataStream-Salt") + std::string(stream_id),
+        "DataStream-Output-Encryption-Key", 32);
+    if (!response || response->status != 200 || !port || *port == 0 ||
+        *port > UINT16_MAX || key.size() != 32) {
+      std::cerr << "Encrypted " << name << "-audio SETUP failed\n";
+      return std::nullopt;
+    }
+    std::cout << "AirPlay: " << name << "-audio SETUP received data port "
+              << *port << '\n';
+    return AuxiliaryAudioStream{*port, key};
+  };
+  const auto guidance_audio = setup_auxiliary_audio(
+      options.next_guidance_audio,
+      carplay_capabilities && carplay_capabilities->guidance_pcm_16k_mono,
+      "guidance", "default", "9B4C4DF6-AE7F-48F5-A36B-546EEAAEF4B5");
+  const auto system_audio = setup_auxiliary_audio(
+      options.next_system_audio,
+      carplay_capabilities && carplay_capabilities->system_pcm_16k_mono,
+      "system", "alert", "AB4C4DF6-AE7F-48F5-A36B-546EEAAEF4B5");
+
   constexpr std::string_view screen_stream_id =
       "3A5B6C7D-8E9F-4012-A345-B678C901D234";
   const auto screen_body =
@@ -907,6 +970,65 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
                 << sent_packets << " packets\n";
     });
   }
+  const auto launch_auxiliary_audio =
+      [&](const std::optional<AuxiliaryAudioStream> &stream,
+          const std::function<std::optional<std::vector<std::uint8_t>>()> &next,
+          const std::string_view name) -> std::jthread {
+    if (!stream)
+      return {};
+    return std::jthread([&, stream, next, name] {
+      const auto fd = connect_udp(
+          host, std::to_string(static_cast<std::uint16_t>(stream->port)));
+      if (fd < 0)
+        return;
+      std::uint16_t sequence{};
+      std::uint32_t timestamp{};
+      std::uint64_t counter{};
+      while (!options.stop_requested || !options.stop_requested()) {
+        const auto pcm = next();
+        if (!pcm)
+          break;
+        if (pcm->empty() || pcm->size() % 2 != 0)
+          continue;
+        auto payload = aa2acp::airplay::Bytes(*pcm);
+        for (std::size_t index = 0; index < payload.size(); index += 2)
+          std::swap(payload[index], payload[index + 1]);
+        std::array<std::uint8_t, 12> header{
+            0x80,
+            100,
+            static_cast<std::uint8_t>(sequence >> 8),
+            static_cast<std::uint8_t>(sequence),
+            static_cast<std::uint8_t>(timestamp >> 24),
+            static_cast<std::uint8_t>(timestamp >> 16),
+            static_cast<std::uint8_t>(timestamp >> 8),
+            static_cast<std::uint8_t>(timestamp)};
+        std::array<std::uint8_t, 8> nonce{};
+        store_le64(nonce, counter);
+        std::array<std::uint8_t, 12> nonce12{};
+        std::copy(nonce.begin(), nonce.end(), nonce12.begin() + 4);
+        const auto encrypted = aa2acp::airplay::seal_with_nonce(
+            stream->key, nonce12, payload, std::span(header).subspan(4, 8));
+        if (!encrypted)
+          break;
+        aa2acp::airplay::Bytes packet(header.begin(), header.end());
+        packet.insert(packet.end(), encrypted->begin(), encrypted->end());
+        packet.insert(packet.end(), nonce.begin(), nonce.end());
+        if (send(fd, packet.data(), packet.size(), MSG_NOSIGNAL) !=
+            static_cast<ssize_t>(packet.size()))
+          break;
+        ++sequence;
+        timestamp += static_cast<std::uint32_t>(payload.size() / 2);
+        ++counter;
+      }
+      close(fd);
+      std::cout << "AirPlay: encrypted Android Auto " << name
+                << " audio ended\n";
+    });
+  };
+  auto guidance_sender = launch_auxiliary_audio(
+      guidance_audio, options.next_guidance_audio, "guidance");
+  auto system_sender =
+      launch_auxiliary_audio(system_audio, options.next_system_audio, "system");
   if (video_path.empty() && !options.next_video_frame) {
     close(socket_fd);
     return 0;
