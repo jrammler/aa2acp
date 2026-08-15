@@ -17,7 +17,9 @@ AA2ACP has been tested end to end with a wired Android Auto phone and
 5. Unplugging the Android phone stops the CarPlay session and returns the head
    unit to its normal screen.
 
-Audio and input/control forwarding are not implemented. The active work is in
+Media and guidance-audio forwarding are verified; system audio awaits a
+phone-side test trigger. Call audio and input/control forwarding are not
+implemented. The active work is in
 [TODO.md](TODO.md).
 
 ## Prerequisites

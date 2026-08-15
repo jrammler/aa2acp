@@ -22,8 +22,9 @@ end with [LIVI](https://github.com/f-io/LIVI):
 - persisted configuration/pairing state, rotating logs, and clean disconnect
   handling.
 
-Media audio forwarding is verified with LIVI; the remaining audio streams and
-physical-control forwarding are not implemented yet. See
+Media and guidance audio forwarding are verified with LIVI; system-audio
+forwarding is implemented but not yet exercised with a phone-side trigger.
+Call audio and physical-control forwarding are not implemented yet. See
 [TODO.md](TODO.md) for the active task list and
 [ARCHITECTURE.md](ARCHITECTURE.md) for the system design. The verified
 end-to-end runbook and external test-rig assumptions are in

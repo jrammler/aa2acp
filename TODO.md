@@ -13,7 +13,8 @@
 
 ## Audio and controls
 
-- [ ] Forward Android Auto guidance and system audio to CarPlay.
+- [x] Forward Android Auto media and guidance audio to CarPlay. System-audio
+  forwarding is implemented but still needs a phone-side test trigger.
 - [ ] Bridge call audio: forward Android Auto telephony audio to CarPlay and
   return microphone audio from CarPlay to Android Auto.
 - [ ] Translate CarPlay physical controls to Android Auto input: directional,
