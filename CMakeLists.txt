@@ -22,7 +22,7 @@ target_include_directories(iap2_link PUBLIC include)
 target_link_libraries(iap2_link PUBLIC OpenSSL::Crypto)
 target_compile_options(iap2_link PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
-add_library(airplay_rtsp src/airplay/rtsp.cpp src/airplay/srp.cpp)
+add_library(airplay_rtsp src/airplay/rtsp.cpp src/airplay/srp.cpp src/airplay/crypto.cpp)
 target_include_directories(airplay_rtsp PUBLIC include)
 target_link_libraries(airplay_rtsp PUBLIC OpenSSL::Crypto)
 target_compile_options(airplay_rtsp PRIVATE -Wall -Wextra -Wpedantic -Werror)

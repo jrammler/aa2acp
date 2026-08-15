@@ -21,27 +21,31 @@ constexpr std::uint16_t kAuthenticationFailed = 0xaa04;
 constexpr std::uint16_t kAuthenticationSucceeded = 0xaa05;
 
 struct Message {
-    std::uint16_t id{};
-    std::vector<std::uint8_t> payload;
+  std::uint16_t id{};
+  std::vector<std::uint8_t> payload;
 };
 
-std::vector<std::uint8_t> encode(std::uint16_t id, std::span<const std::uint8_t> payload = {});
-std::vector<std::uint8_t> encode_bytes_parameter(std::uint16_t id, std::uint16_t parameter_id,
-                                                  std::span<const std::uint8_t> value);
-std::optional<std::vector<std::uint8_t>> first_bytes_parameter(std::span<const std::uint8_t> payload,
-                                                                std::uint16_t parameter_id);
+std::vector<std::uint8_t> encode(std::uint16_t id,
+                                 std::span<const std::uint8_t> payload = {});
+std::vector<std::uint8_t>
+encode_bytes_parameter(std::uint16_t id, std::uint16_t parameter_id,
+                       std::span<const std::uint8_t> value);
+std::optional<std::vector<std::uint8_t>>
+first_bytes_parameter(std::span<const std::uint8_t> payload,
+                      std::uint16_t parameter_id);
 bool verify_ecdsa_sha256(std::span<const std::uint8_t> challenge,
                          std::span<const std::uint8_t> signature,
                          std::span<const std::uint8_t> certificate_der);
 
-// Incrementally parses complete CSM messages from an iAP2 control-session stream.
+// Incrementally parses complete CSM messages from an iAP2 control-session
+// stream.
 class Decoder {
-  public:
-    void push(std::span<const std::uint8_t> bytes);
-    [[nodiscard]] std::optional<Message> next();
+public:
+  void push(std::span<const std::uint8_t> bytes);
+  [[nodiscard]] std::optional<Message> next();
 
-  private:
-    std::vector<std::uint8_t> buffer_;
+private:
+  std::vector<std::uint8_t> buffer_;
 };
 
-}  // namespace acp::iap2::csm
+} // namespace acp::iap2::csm

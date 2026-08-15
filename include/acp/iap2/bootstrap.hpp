@@ -14,27 +14,34 @@ class PhoneLink;
 // The minimum CSM exchange needed to prove the iAP2 control session and
 // test head unit's development-only software-MFi implementation work end-to-end.
 class BootstrapSession {
-  public:
-    void attach(PhoneLink& link);
-    void begin();
-    void receive(std::span<const std::uint8_t> bytes);
+public:
+  void attach(PhoneLink &link);
+  void begin();
+  void receive(std::span<const std::uint8_t> bytes);
 
-    [[nodiscard]] bool done() const;
-    [[nodiscard]] bool failed() const;
-    [[nodiscard]] bool started() const;
+  [[nodiscard]] bool done() const;
+  [[nodiscard]] bool failed() const;
+  [[nodiscard]] bool started() const;
 
-  private:
-    enum class Stage { Idle, AwaitIdentification, AwaitCertificate, AwaitResponse, Done, Failed };
+private:
+  enum class Stage {
+    Idle,
+    AwaitIdentification,
+    AwaitCertificate,
+    AwaitResponse,
+    Done,
+    Failed
+  };
 
-    void send_empty(std::uint16_t id);
-    void fail(const char* message);
-    void handle(const csm::Message& message);
+  void send_empty(std::uint16_t id);
+  void fail(const char *message);
+  void handle(const csm::Message &message);
 
-    csm::Decoder decoder_;
-    PhoneLink* link_{};
-    std::array<std::uint8_t, 32> challenge_{};
-    std::vector<std::uint8_t> certificate_;
-    Stage stage_{Stage::Idle};
+  csm::Decoder decoder_;
+  PhoneLink *link_{};
+  std::array<std::uint8_t, 32> challenge_{};
+  std::vector<std::uint8_t> certificate_;
+  Stage stage_{Stage::Idle};
 };
 
-}  // namespace acp::iap2
+} // namespace acp::iap2
