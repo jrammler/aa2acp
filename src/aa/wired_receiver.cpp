@@ -609,7 +609,7 @@ public:
       fail("phone requested an unsupported Android Auto video codec");
       return;
     }
-    callback_({WiredReceiverEventType::control_session_ready,
+    callback_({WiredReceiverEventType::video_stream_configured,
                "phone selected H.264 video configuration"});
     aap_protobuf::service::media::shared::message::Config response;
     response.set_status(

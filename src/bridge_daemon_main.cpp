@@ -580,9 +580,13 @@ int run_wired_android_auto_receiver(const char *program_path,
           std::cout << "Bridge daemon: Android Auto control session ready: "
                     << event.detail << '\n';
           break;
+        case acp::aa::WiredReceiverEventType::video_stream_configured:
+          std::cout << "Bridge daemon: Android Auto video configured: "
+                    << event.detail << '\n';
+          carplay_start_requested = true;
+          break;
         case acp::aa::WiredReceiverEventType::video_stream_started:
           std::cout << "Bridge daemon: Android Auto video stream started\n";
-          carplay_start_requested = true;
           break;
         case acp::aa::WiredReceiverEventType::disconnected:
           std::cout << "Bridge daemon: Android Auto USB disconnected\n";
