@@ -20,14 +20,14 @@ flow control for those services.
 This was verified with the development Android phone on 2026-08-15: Android
 Auto accepted the head unit, displayed its welcome flow, opened the H.264 video
 channel, selected 1280×720@30 Baseline H.264, and started the video stream.
-`bridge-daemon --run` is now the first live video bridge path: once Android
-Auto starts H.264 projection, it starts an authenticated wireless CarPlay
+`bridge-daemon` is the live video bridge daemon: it serves the management UI
+while idle and watches for Android Auto. Once Android Auto configures H.264,
+it starts an authenticated wireless CarPlay
 session, joins test head unit's AP, and forwards the phone's Annex-B H.264 access units
 through the established encrypted AirPlay data stream. A bounded local queue
 keeps USB processing independent from CarPlay setup; it retains SPS/PPS so a
 late CarPlay connection still receives the required video configuration.
 Audio and head-unit input forwarding are not implemented yet.
-`--run-carplay` preserves the old direct-CarPlay diagnostic mode.
 
 The process needs read/write access to the phone's USB device node. Install the
 provided udev rule once (and ensure the service/developer user belongs to
@@ -47,8 +47,8 @@ is an appliance-image security decision, not a developer-machine default.
 
 ```bash
 nix develop --command ./pi-bridge/build/android-auto-usb
-# Live wired Android Auto → CarPlay video bridge; stop with SIGTERM/SIGINT:
-nix develop --command ./pi-bridge/build/bridge-daemon --run
+# Management UI plus live wired Android Auto → CarPlay video bridge:
+nix develop --command ./pi-bridge/build/bridge-daemon
 ```
 
 The daemon uses the configured head-unit MAC, Wi-Fi interface, and persistent
@@ -116,9 +116,9 @@ test (including video) is:
 
 ## Bluetooth bootstrap test
 
-`iap2-bt` opens test head unit's iAP2 RFCOMM channel (3) after the Pi is paired with the
-test head unit adapter. Its optional `--pair` mode owns the first-pairing flow through a
-temporary BlueZ `NoInputNoOutput` agent.
+`iap2-bt` opens test head unit's iAP2 RFCOMM channel (3). It reuses an existing BlueZ
+bond, or performs the first pairing through a temporary BlueZ
+`NoInputNoOutput` agent when no bond exists.
 `--bootstrap` runs the same CSM identification and software-MFi validation flow
 as TCP once the RFCOMM link reaches `NORMAL`.
 
@@ -134,13 +134,9 @@ on `wlp15s0` (override with `--wifi-interface`), then sends
 network manager. `--leave-wifi` disconnects an interface while retaining its
 saved NetworkManager profile, matching the intended end-of-session behaviour.
 
-Pass `--pair` to make the client register a temporary BlueZ
-`NoInputNoOutput` agent, scan, pair, and trust test head unit before opening RFCOMM.
-This is the intended Just-Works path for an unpaired device; it is opt-in so
-ordinary runs do not touch persistent BlueZ pairing state.
-
 test head unit is intermittently visible to this host only through an explicit BlueZ LE
-scan. `--pair` therefore selects the LE discovery filter before scanning. This
+scan. The automatic first-pair path therefore selects the LE discovery filter
+before scanning. This
 is an observed test head unit/BlueZ test-environment behaviour, not a claim that every
 wireless-CarPlay head unit is LE-only; future hardware support needs discovery
 fallbacks for Classic/BREDR-only accessories.
@@ -153,10 +149,7 @@ encrypted RTSP `RECORD` completed without `bluetoothctl` pairing commands.
 ```bash
 bluetoothctl
 # In bluetoothctl: agent NoInputNoOutput; default-agent;
-# scan on; pair [redacted-device-address]; trust [redacted-device-address]
 ./pi-bridge/build/iap2-bt --mac [redacted-device-address] --bootstrap --timeout 30
-# Pair/trust first when the device is new or its bond was removed:
-./pi-bridge/build/iap2-bt --mac [redacted-device-address] --pair --bootstrap --timeout 60
 # CarPlay control-session probe:
 ./pi-bridge/build/iap2-bt --mac [redacted-device-address] --carplay --timeout 30
 ```
@@ -171,7 +164,7 @@ owns the saved AP profile; the bridge deliberately does not duplicate either.
 
 ```bash
 nix develop --command ./pi-bridge/build/iap2-bt \
-  --mac [redacted-device-address] --pair --bridge \
+  --mac [redacted-device-address] --bridge \
   --wifi-interface wlp15s0 \
   --pairing-store ~/.local/state/acp-aa-bridge/airplay-pairing.bin \
   --timeout 60

@@ -130,7 +130,7 @@ private:
 } // namespace
 
 int main(int argc, char **argv) {
-  std::string address = "[redacted-device-address]";
+  std::string address;
   std::uint8_t channel = 3;
   int timeout_seconds = 15;
   bool bootstrap = false;
@@ -142,7 +142,7 @@ int main(int argc, char **argv) {
   std::string video_path;
   std::string video_socket;
   std::string pairing_store;
-  std::string wifi_interface = "wlp15s0";
+  std::string wifi_interface;
   for (int index = 1; index < argc; ++index) {
     const std::string argument = argv[index];
     if (argument == "--mac" && index + 1 < argc) {
@@ -192,7 +192,20 @@ int main(int argc, char **argv) {
   }
 
   if (leave_wifi) {
+    if (wifi_interface.empty()) {
+      std::cerr << "--leave-wifi requires --wifi-interface\n";
+      return 2;
+    }
     return acp::iap2::leave_with_networkmanager(wifi_interface) ? 0 : 1;
+  }
+
+  if (address.empty()) {
+    std::cerr << "--mac is required\n";
+    return 2;
+  }
+  if ((wifi_config || join_wifi || bridge) && wifi_interface.empty()) {
+    std::cerr << "--wifi-interface is required for a CarPlay Wi-Fi session\n";
+    return 2;
   }
 
   if (bridge) {

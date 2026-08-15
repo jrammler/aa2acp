@@ -10,7 +10,7 @@ namespace acp::bridge {
 // BlueZ owns the BT bond and NetworkManager owns the Wi-Fi secret/profile.
 struct Config {
   std::string head_unit_mac;
-  std::string wifi_interface{"wlan0"};
+  std::string wifi_interface;
   // Empty selects the daemon's deterministic state-directory default. This is
   // intentionally an advanced override, not a normal UI setting.
   std::filesystem::path airplay_pairing_store;

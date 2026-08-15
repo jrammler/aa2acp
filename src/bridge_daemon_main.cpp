@@ -21,6 +21,7 @@
 #include <condition_variable>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <map>
 #include <mutex>
@@ -302,6 +303,9 @@ std::string page(const acp::bridge::Config &config,
       "\" placeholder=\"[redacted-device-address]\"></label>"
       "<label>Wi-Fi interface<select name=\"wifi_interface\">";
   bool current_interface_present = false;
+  if (config.wifi_interface.empty())
+    output += "<option selected disabled value=\"\">Select a Wi-Fi "
+              "interface</option>";
   for (const auto &interface : snapshot.wifi_interfaces) {
     const auto selected = interface == config.wifi_interface ? " selected" : "";
     current_interface_present =
@@ -309,7 +313,7 @@ std::string page(const acp::bridge::Config &config,
     output += "<option value=\"" + html_escape(interface) + "\"" + selected +
               ">" + html_escape(interface) + "</option>";
   }
-  if (!current_interface_present)
+  if (!config.wifi_interface.empty() && !current_interface_present)
     output += "<option selected value=\"" + html_escape(config.wifi_interface) +
               "\">" + html_escape(config.wifi_interface) +
               " (configured)</option>";
@@ -497,7 +501,8 @@ private:
 };
 
 int run_carplay_session(const char *program_path,
-                        const acp::bridge::Config &config, const int signal_fd,
+                        const acp::bridge::Config &config,
+                        const std::stop_token stop,
                         const std::string &video_socket = {}) {
   if (config.head_unit_mac.empty()) {
     std::cerr << "Bridge daemon: configure a head-unit MAC first\n";
@@ -534,27 +539,20 @@ int run_carplay_session(const char *program_path,
     int status{};
     if (waitpid(child, &status, WNOHANG) == child)
       return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
-    pollfd signal_poll{signal_fd, POLLIN, 0};
-    if (poll(&signal_poll, 1, 100) > 0 && (signal_poll.revents & POLLIN) != 0) {
-      signalfd_siginfo signal_info{};
-      if (read(signal_fd, &signal_info, sizeof(signal_info)) !=
-          static_cast<ssize_t>(sizeof(signal_info)))
-        continue;
+    if (stop.stop_requested()) {
       std::cout << "Bridge daemon: stopping active CarPlay session\n";
       kill(child, SIGTERM);
       waitpid(child, &status, 0);
       return 128 + SIGTERM;
     }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
 }
 
-int run_wired_android_auto_receiver(const char *program_path,
-                                    const acp::bridge::Config &config,
-                                    const int signal_fd) {
-  if (config.head_unit_mac.empty()) {
-    std::cerr << "Bridge daemon: configure a head-unit MAC first\n";
-    return 2;
-  }
+int run_wired_android_auto_receiver(
+    const char *program_path,
+    const std::function<acp::bridge::Config()> &config_provider,
+    const std::stop_token stop) {
   const auto video_socket =
       std::filesystem::path("/tmp") /
       ("acp-aa-bridge-video-" + std::to_string(getpid()) + ".sock");
@@ -605,19 +603,20 @@ int run_wired_android_auto_receiver(const char *program_path,
     return 1;
   }
   std::cout << "Bridge daemon: wired Android Auto receiver started\n";
-  for (;;) {
-    pollfd signal_poll{signal_fd, POLLIN, 0};
-    if (poll(&signal_poll, 1, 100) > 0 && (signal_poll.revents & POLLIN) != 0) {
-      signalfd_siginfo signal_info{};
-      if (read(signal_fd, &signal_info, sizeof(signal_info)) ==
-          static_cast<ssize_t>(sizeof(signal_info)))
-        break;
-    }
-    if (!carplay_start_requested.exchange(false))
+  while (!stop.stop_requested()) {
+    if (!carplay_start_requested.exchange(false)) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
       continue;
+    }
     std::cout << "Bridge daemon: starting CarPlay for Android Auto video\n";
+    const auto config = config_provider();
+    if (config.head_unit_mac.empty() || config.wifi_interface.empty()) {
+      std::cerr << "Bridge daemon: configure a head-unit MAC and Wi-Fi "
+                   "interface first\n";
+      continue;
+    }
     const auto result =
-        run_carplay_session(program_path, config, signal_fd, video_socket);
+        run_carplay_session(program_path, config, stop, video_socket);
     if (result == 128 + SIGTERM)
       break;
     if (result != 0)
@@ -636,30 +635,23 @@ int run_wired_android_auto_receiver(const char *program_path,
 int main(int argc, char **argv) {
   std::filesystem::path config_path = acp::bridge::default_config_path();
   int port = 8080;
-  bool run_session = false;
-  bool run_carplay = false;
   for (int index = 1; index < argc; ++index) {
     const std::string argument = argv[index];
     if (argument == "--config" && index + 1 < argc)
       config_path = argv[++index];
     else if (argument == "--port" && index + 1 < argc)
       port = std::stoi(argv[++index]);
-    else if (argument == "--run")
-      run_session = true;
-    else if (argument == "--run-carplay")
-      run_carplay = true;
     else {
-      std::cerr << "usage: bridge-daemon [--config PATH] [--port PORT] [--run] "
-                   "[--run-carplay]\n";
+      std::cerr << "usage: bridge-daemon [--config PATH] [--port PORT]\n";
       return 2;
     }
   }
-  auto config =
-      acp::bridge::load_config(config_path)
-          .value_or(acp::bridge::Config{
-              "", "wlan0", acp::bridge::default_airplay_pairing_store()});
+  auto config = acp::bridge::load_config(config_path)
+                    .value_or(acp::bridge::Config{
+                        "", "", acp::bridge::default_airplay_pairing_store()});
   if (config.airplay_pairing_store.empty())
     config.airplay_pairing_store = acp::bridge::default_airplay_pairing_store();
+  std::mutex config_mutex;
   refresh_bluetooth_inventory(management_state);
   refresh_wifi_inventory(management_state);
   std::jthread wifi_refresh_worker([](std::stop_token stop_token) {
@@ -682,17 +674,16 @@ int main(int argc, char **argv) {
     std::cerr << "Unable to create shutdown signal descriptor\n";
     return 1;
   }
-  if (run_session) {
-    const auto result =
-        run_wired_android_auto_receiver(argv[0], config, signal_fd);
-    close(signal_fd);
-    return result;
-  }
-  if (run_carplay) {
-    const auto result = run_carplay_session(argv[0], config, signal_fd);
-    close(signal_fd);
-    return result;
-  }
+  std::jthread android_auto_worker([program_path = argv[0], &config,
+                                    &config_mutex](const std::stop_token stop) {
+    run_wired_android_auto_receiver(
+        program_path,
+        [&config, &config_mutex] {
+          std::lock_guard lock(config_mutex);
+          return config;
+        },
+        stop);
+  });
   const int listener = socket(AF_INET, SOCK_STREAM, 0);
   int enabled = 1;
   setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &enabled, sizeof(enabled));
@@ -768,7 +759,12 @@ int main(int argc, char **argv) {
     if (request.starts_with("GET / ") || request.starts_with("GET /?")) {
       const bool saved = request.find("saved=1") != std::string::npos;
       const auto snapshot = management_snapshot(management_state);
-      respond(200, "text/html; charset=utf-8", page(config, snapshot, saved));
+      const auto configuration = [&] {
+        std::lock_guard lock(config_mutex);
+        return config;
+      }();
+      respond(200, "text/html; charset=utf-8",
+              page(configuration, snapshot, saved));
     } else if (request.starts_with("GET /scan-status")) {
       const auto snapshot = management_snapshot(management_state);
       const auto phase = query_field(request, "phase");
@@ -806,15 +802,22 @@ int main(int argc, char **argv) {
       const auto manual = form_field(body, "manual_mac");
       const auto selected = form_field(body, "head_unit_mac");
       const auto wifi = form_field(body, "wifi_interface");
+      const auto previous = [&] {
+        std::lock_guard lock(config_mutex);
+        return config;
+      }();
       const auto mac = selected && !selected->empty() ? *selected
                        : manual && !manual->empty()   ? *manual
-                                                      : config.head_unit_mac;
+                                                      : previous.head_unit_mac;
       if (wifi && !mac.empty() &&
           acp::bridge::save_config(
-              config_path, {mac, *wifi, config.airplay_pairing_store})) {
-        config = {mac, *wifi, config.airplay_pairing_store};
-        std::cout << "Management: saved head unit " << config.head_unit_mac
-                  << " on " << config.wifi_interface << '\n';
+              config_path, {mac, *wifi, previous.airplay_pairing_store})) {
+        {
+          std::lock_guard lock(config_mutex);
+          config = {mac, *wifi, previous.airplay_pairing_store};
+        }
+        std::cout << "Management: saved head unit " << mac << " on " << *wifi
+                  << '\n';
         respond(303, "text/plain", "", "Location: /?saved=1\r\n");
       } else {
         std::cout << "Management: rejected invalid configuration\n";
@@ -827,6 +830,8 @@ int main(int argc, char **argv) {
     close(client);
   }
   close(listener);
+  android_auto_worker.request_stop();
+  android_auto_worker.join();
   close(signal_fd);
   std::cout << "Bridge daemon: stopped\n";
 }
