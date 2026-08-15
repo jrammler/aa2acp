@@ -10,20 +10,29 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdio>
 #include <filesystem>
 #include <iostream>
+#include <map>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 extern char **environ;
 
 namespace {
 
+std::atomic_bool bluetooth_scan_running = false;
+std::mutex bluetooth_devices_mutex;
+std::map<std::string, std::string> scanned_bluetooth_devices;
+
 constexpr char kPage[] =
-    R"HTML(<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>ACP-AA Bridge</title><style>body{font:16px sans-serif;max-width:34rem;margin:3rem auto;padding:0 1rem}label,select{display:block;width:100%;box-sizing:border-box;margin:.5rem 0}button{padding:.6rem 1rem}</style><h1>ACP-AA Bridge</h1><p>Configure the pinned CarPlay head unit.</p><form><label>Head-unit Bluetooth device<select id="head_unit_mac" required></select></label><button type="button" id="scan">Scan for devices</button><label>Wi-Fi interface<select id="wifi_interface" required></select></label><button>Save</button></form><p id="result"></p><script>const add=(id,items,current,bt)=>{let s=document.querySelector(id);s.innerHTML='';items.forEach(x=>{let [value,name]=bt?x.split('|'): [x,x],o=new Option(bt?name+' — '+value:name,value);if(value===current)o.selected=true;s.add(o)});if(!s.options.length)s.add(new Option('No devices found',''))};const devices=async(current=head_unit_mac.value)=>add('#head_unit_mac',await fetch('/api/bluetooth-devices').then(r=>r.json()),current,true);Promise.all([fetch('/api/config').then(r=>r.json()),fetch('/api/wifi-interfaces').then(r=>r.json())]).then(async([c,w])=>{await devices(c.head_unit_mac);add('#wifi_interface',w,c.wifi_interface,false)});scan.onclick=async()=>{scan.disabled=true;result.textContent='Scanning…';await fetch('/api/bluetooth-scan');await devices();result.textContent='Scan complete.';scan.disabled=false};document.querySelector('form').onsubmit=async e=>{e.preventDefault();let c={head_unit_mac:head_unit_mac.value,wifi_interface:wifi_interface.value};let r=await fetch('/api/config',{method:'PUT',body:JSON.stringify(c)});result.textContent=r.ok?'Saved.':'Save failed.'}</script>)HTML";
+    R"HTML(<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>ACP-AA Bridge</title><style>body{font:16px sans-serif;max-width:34rem;margin:3rem auto;padding:0 1rem}label,select,input{display:block;width:100%;box-sizing:border-box;margin:.5rem 0}button{padding:.6rem 1rem}</style><h1>ACP-AA Bridge</h1><p>Configure the pinned CarPlay head unit.</p><form><label>Head-unit Bluetooth device<select id="head_unit_mac" required></select></label><button type="button" id="scan">Scan for devices</button><label>Manual MAC fallback<input id="manual_mac" placeholder="[redacted-device-address]"></label><label>Wi-Fi interface<select id="wifi_interface" required></select></label><button>Save</button></form><p id="result"></p><script>const add=(id,items,current,bt)=>{let s=document.querySelector(id);s.innerHTML='';items.forEach(x=>{let [value,name]=bt?x.split('|'): [x,x],o=new Option(bt?name+' — '+value:name,value);if(value===current)o.selected=true;s.add(o)});if(!s.options.length)s.add(new Option('No devices found',''))};const devices=async(current=head_unit_mac.value)=>add('#head_unit_mac',await fetch('/api/bluetooth-devices').then(r=>r.json()),current,true);Promise.all([fetch('/api/config').then(r=>r.json()),fetch('/api/wifi-interfaces').then(r=>r.json())]).then(async([c,w])=>{manual_mac.value=c.head_unit_mac;await devices(c.head_unit_mac);add('#wifi_interface',w,c.wifi_interface,false)});scan.onclick=async()=>{scan.disabled=true;result.textContent='Scanning…';await fetch('/api/bluetooth-scan');for(let i=0;i<24;i++){await new Promise(r=>setTimeout(r,2000));await devices();if(!(await fetch('/api/bluetooth-scan-status').then(r=>r.json())).running)break}result.textContent='Scan complete.';scan.disabled=false};document.querySelector('form').onsubmit=async e=>{e.preventDefault();let c={head_unit_mac:manual_mac.value||head_unit_mac.value,wifi_interface:wifi_interface.value};let r=await fetch('/api/config',{method:'PUT',body:JSON.stringify(c)});result.textContent=r.ok?'Saved.':'Save failed.'}</script>)HTML";
 
 std::string json(const acp::bridge::Config &config) {
   // Values are validated as single-line key/value data by the config store.
@@ -54,6 +63,41 @@ bool send_response(const int client, const int status, const char *type,
       "\r\nConnection: close\r\n\r\n" + body;
   return send(client, response.data(), response.size(), MSG_NOSIGNAL) ==
          static_cast<ssize_t>(response.size());
+}
+
+void capture_bluetooth_scan(const char *command) {
+  FILE *stream = popen(command, "r");
+  std::array<char, 512> line{};
+  while (stream != nullptr &&
+         fgets(line.data(), line.size(), stream) != nullptr) {
+    std::string value(line.data());
+    const auto marker = value.find("Device ");
+    if (marker == std::string::npos || value.size() < marker + 24)
+      continue;
+    const auto mac = value.substr(marker + 7, 17);
+    if (mac.find(':') == std::string::npos)
+      continue;
+    auto name = value.substr(marker + 25);
+    name.erase(
+        std::remove_if(name.begin(), name.end(),
+                       [](unsigned char character) { return character < 32; }),
+        name.end());
+    std::lock_guard lock(bluetooth_devices_mutex);
+    scanned_bluetooth_devices[mac] = name.empty() ? mac : name;
+  }
+  if (stream != nullptr)
+    pclose(stream);
+}
+
+std::string scanned_bluetooth_json() {
+  std::lock_guard lock(bluetooth_devices_mutex);
+  std::string output{"["};
+  for (const auto &[mac, name] : scanned_bluetooth_devices) {
+    if (output.size() != 1)
+      output += ',';
+    output += '"' + mac + "|" + name + '"';
+  }
+  return output + ']';
 }
 
 std::string command_json(const char *command) {
@@ -240,12 +284,20 @@ int main(int argc, char **argv) {
     else if (request.starts_with("GET /api/config "))
       send_response(client, 200, "application/json", json(config));
     else if (request.starts_with("GET /api/bluetooth-devices "))
-      send_response(client, 200, "application/json",
-                    command_json("bluetoothctl devices | sed -n 's/^Device "
-                                 "\\([0-9A-F:]*\\) \\(.*\\)$/\\1|\\2/p'"));
+      send_response(client, 200, "application/json", scanned_bluetooth_json());
     else if (request.starts_with("GET /api/bluetooth-scan ")) {
-      command_json("bluetoothctl --timeout 30 scan le >/dev/null 2>&1");
-      send_response(client, 200, "application/json", "{}");
+      if (!bluetooth_scan_running.exchange(true)) {
+        std::thread([] {
+          capture_bluetooth_scan("bluetoothctl --timeout 30 scan le 2>&1");
+          capture_bluetooth_scan("bluetoothctl --timeout 15 scan bredr 2>&1");
+          bluetooth_scan_running = false;
+        }).detach();
+      }
+      send_response(client, 200, "application/json", "{\"running\":true}");
+    } else if (request.starts_with("GET /api/bluetooth-scan-status ")) {
+      send_response(client, 200, "application/json",
+                    bluetooth_scan_running ? "{\"running\":true}"
+                                           : "{\"running\":false}");
     } else if (request.starts_with("GET /api/wifi-interfaces "))
       send_response(client, 200, "application/json",
                     command_json("nmcli -t -f DEVICE,TYPE device status | awk "
