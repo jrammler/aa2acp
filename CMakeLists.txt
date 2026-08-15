@@ -34,8 +34,13 @@ target_include_directories(airplay_rtsp PUBLIC include)
 target_link_libraries(airplay_rtsp PUBLIC OpenSSL::Crypto)
 target_compile_options(airplay_rtsp PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
+add_library(airplay_session src/airplay/session.cpp)
+target_include_directories(airplay_session PUBLIC include)
+target_link_libraries(airplay_session PUBLIC airplay_rtsp)
+target_compile_options(airplay_session PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
 add_executable(airplay-pair-setup-probe src/airplay_pair_setup_probe_main.cpp)
-target_link_libraries(airplay-pair-setup-probe PRIVATE airplay_rtsp)
+target_link_libraries(airplay-pair-setup-probe PRIVATE airplay_session)
 target_compile_options(airplay-pair-setup-probe PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 add_executable(iap2-tcp src/iap2_tcp_main.cpp)
@@ -44,7 +49,7 @@ target_compile_options(iap2-tcp PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 add_executable(iap2-bt src/iap2_bt_main.cpp)
 target_sources(iap2-bt PRIVATE src/iap2/bluez_pairing.cpp)
-target_link_libraries(iap2-bt PRIVATE iap2_link ${BLUETOOTH_LIBRARY} PkgConfig::DBUS)
+target_link_libraries(iap2-bt PRIVATE iap2_link airplay_session ${BLUETOOTH_LIBRARY} PkgConfig::DBUS)
 target_compile_options(iap2-bt PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 enable_testing()

@@ -1,3 +1,4 @@
+#include "acp/airplay/session.hpp"
 #include "acp/iap2/bluez_pairing.hpp"
 #include "acp/iap2/bootstrap.hpp"
 #include "acp/iap2/carplay_probe.hpp"
@@ -7,19 +8,13 @@
 #include <bluetooth/rfcomm.h>
 
 #include <poll.h>
-#include <spawn.h>
 #include <sys/socket.h>
-#include <sys/wait.h>
 #include <unistd.h>
 
 #include <array>
 #include <chrono>
-#include <filesystem>
 #include <iostream>
 #include <string>
-#include <vector>
-
-extern char **environ;
 
 namespace {
 
@@ -52,44 +47,6 @@ int connect_rfcomm(const std::string &address, const std::uint8_t channel) {
     return -1;
   }
   return socket_fd;
-}
-
-bool run_airplay_probe(const std::string &program_path, const std::string &host,
-                       const std::uint32_t port, const std::string &video_path,
-                       const std::string &pairing_store,
-                       const int timeout_seconds) {
-  const auto probe_path = (std::filesystem::path(program_path).parent_path() /
-                           "airplay-pair-setup-probe")
-                              .string();
-  std::vector<std::string> arguments{probe_path,
-                                     "--host",
-                                     host,
-                                     "--port",
-                                     std::to_string(port),
-                                     "--timeout",
-                                     std::to_string(timeout_seconds)};
-  if (!video_path.empty()) {
-    arguments.emplace_back("--video");
-    arguments.push_back(video_path);
-  }
-  if (!pairing_store.empty()) {
-    arguments.emplace_back("--pairing-store");
-    arguments.push_back(pairing_store);
-  }
-  std::vector<char *> argv;
-  for (auto &argument : arguments)
-    argv.push_back(argument.data());
-  argv.push_back(nullptr);
-  pid_t child{};
-  if (posix_spawn(&child, argv.front(), nullptr, nullptr, argv.data(),
-                  environ) != 0) {
-    std::cerr << "Unable to launch AirPlay bridge phase at " << probe_path
-              << '\n';
-    return false;
-  }
-  int status{};
-  return waitpid(child, &status, 0) >= 0 && WIFEXITED(status) &&
-         WEXITSTATUS(status) == 0;
 }
 
 } // namespace
@@ -243,13 +200,18 @@ int main(int argc, char **argv) {
     }
     std::cout << "Bridge: starting AirPlay on " << host << ':'
               << carplay_probe.airplay_port() << '\n';
-    const auto result =
-        run_airplay_probe(argv[0], host, carplay_probe.airplay_port(),
-                          video_path, pairing_store, timeout_seconds);
-    if (!result) {
+    const acp::airplay::SessionOptions options{
+        .host = host,
+        .port = static_cast<std::uint16_t>(carplay_probe.airplay_port()),
+        .timeout_seconds = timeout_seconds,
+        .video_path = video_path,
+        .pairing_store = pairing_store,
+    };
+    const auto result = acp::airplay::run_session(options);
+    if (result != 0) {
       std::cerr << "Bridge: AirPlay phase failed\n";
     }
-    return result ? 0 : 1;
+    return result;
   }
   if (carplay) {
     return carplay_probe.done() ? 0 : 1;
