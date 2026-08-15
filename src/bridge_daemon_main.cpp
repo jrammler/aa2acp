@@ -372,6 +372,7 @@ public:
     Bytes frame(access_unit.begin(), access_unit.end());
     {
       std::lock_guard lock(mutex_);
+      bool keyframe = false;
       for (const auto &nalu : nalus(frame)) {
         if (nalu.empty())
           continue;
@@ -380,10 +381,26 @@ public:
           sps_ = nalu;
         else if (type == 8)
           pps_ = nalu;
+        else if (type == 5)
+          keyframe = true;
       }
-      if (frames_.size() == 120)
-        frames_.pop_front();
-      frames_.push_back(std::move(frame));
+      if (!received_video_) {
+        std::cout << "Bridge daemon: received first Android Auto H.264 access "
+                     "unit ("
+                  << frame.size() << " bytes)\n";
+        received_video_ = true;
+      }
+      if (keyframe) {
+        // CarPlay setup can take longer than the ordinary frame queue. Keep
+        // the latest decoder entry point and only retain frames after it.
+        keyframe_ = std::move(frame);
+        frames_.clear();
+        std::cout << "Bridge daemon: retained Android Auto H.264 keyframe\n";
+      } else {
+        if (frames_.size() == 120)
+          frames_.pop_front();
+        frames_.push_back(std::move(frame));
+      }
     }
     frames_ready_.notify_one();
   }
@@ -464,6 +481,19 @@ private:
         close(client);
         continue;
       }
+      Bytes keyframe;
+      {
+        std::lock_guard lock(mutex_);
+        keyframe = keyframe_;
+      }
+      if (!keyframe.empty() && !send_frame(client, keyframe)) {
+        close(client);
+        continue;
+      }
+      std::cout << "Bridge daemon: forwarded Android Auto H.264 "
+                << (config.empty() ? "without cached config" : "config")
+                << (keyframe.empty() ? " and awaiting keyframe\n"
+                                     : " and cached keyframe\n");
       while (!stop.stop_requested()) {
         Bytes frame;
         {
@@ -498,6 +528,8 @@ private:
   std::deque<Bytes> frames_;
   Bytes sps_;
   Bytes pps_;
+  Bytes keyframe_;
+  bool received_video_{};
 };
 
 int run_carplay_session(const char *program_path,
