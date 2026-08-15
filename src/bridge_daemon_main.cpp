@@ -72,6 +72,30 @@ std::string html_escape(const std::string &value) {
   return escaped;
 }
 
+std::string json_escape(const std::string &value) {
+  std::string escaped;
+  for (const char character : value) {
+    switch (character) {
+    case '\\':
+      escaped += "\\\\";
+      break;
+    case '\"':
+      escaped += "\\\"";
+      break;
+    case '\n':
+      escaped += "\\n";
+      break;
+    case '\r':
+      escaped += "\\r";
+      break;
+    default:
+      escaped += character;
+      break;
+    }
+  }
+  return escaped;
+}
+
 std::string url_decode(const std::string &value) {
   std::string decoded;
   for (std::size_t index = 0; index < value.size(); ++index) {
@@ -179,6 +203,12 @@ ManagementSnapshot management_snapshot(ManagementState &state) {
   return state.snapshot;
 }
 
+std::string scan_status_json(const ManagementSnapshot &snapshot) {
+  return "{\"running\":" +
+         std::string(snapshot.bluetooth_scan_running ? "true" : "false") +
+         ",\"phase\":\"" + json_escape(snapshot.bluetooth_scan_phase) + "\"}";
+}
+
 void run_bluetooth_scan(ManagementState &state) {
   const auto set_phase = [&state](const std::string &phase) {
     std::lock_guard lock(state.mutex);
@@ -211,48 +241,47 @@ std::string page(const acp::bridge::Config &config,
       "label,select,input{display:block;width:100%;box-sizing:border-box;"
       "margin:.5rem 0}button{padding:.6rem 1rem;margin:.25rem 0}"
       ".hint{color:#555}.status{padding:.6rem;background:#eef7ee}</style></"
-      "head><body>"
+      "head><body data-scan-running=\"" +
+      std::string(snapshot.bluetooth_scan_running ? "1" : "0") +
+      "\">"
       "<h1>ACP-AA Bridge</h1><p>Configure the pinned CarPlay head unit.</p>";
   if (saved)
     output += "<p class=status>Configuration saved.</p>";
-  if (snapshot.bluetooth_scan_running)
-    output += "<p class=status>Bluetooth " +
-              html_escape(snapshot.bluetooth_scan_phase) +
-              ". This page is rendered from the last saved device and Wi-Fi "
-              "inventory; refreshing will not clear either list.</p>";
-  else if (snapshot.bluetooth_scan_phase != "idle")
-    output += "<p class=hint>Bluetooth " +
-              html_escape(snapshot.bluetooth_scan_phase) + ".</p>";
   if (!snapshot.bluetooth_error.empty())
-    output +=
-        "<p class=hint>BlueZ refresh failed; retaining the previous device "
-        "inventory: " +
-        html_escape(snapshot.bluetooth_error) + "</p>";
-  output += "<form method=post action=\"/config\">"
-            "<label>Known or discovered Bluetooth device<select "
-            "name=\"head_unit_mac\">"
-            "<option value=\"\">Keep the configured device (use manual field "
-            "below)</option>";
-  for (const auto &device : snapshot.bluetooth_devices) {
-    if (device.name.empty() && !snapshot.show_unnamed_bluetooth_devices)
-      continue;
-    const auto selected =
-        device.address == config.head_unit_mac ? " selected" : "";
-    auto name = device.name.empty() ? "Unnamed device" : device.name;
-    output += "<option value=\"" + html_escape(device.address) + "\"" +
-              selected + ">" + html_escape(name) + " — " +
-              html_escape(device.address) + (device.paired ? " (paired)" : "") +
-              (device.connected ? " (connected)" : "") + "</option>";
+    output += "<p class=hint>Bluetooth refresh failed: " +
+              html_escape(snapshot.bluetooth_error) + "</p>";
+  output +=
+      "<form id=\"scan-form\" method=post action=\"/scan\"></form>"
+      "<form method=post action=\"/config\"><div id=\"bluetooth-picker\">";
+  if (snapshot.bluetooth_scan_running) {
+    output += "<input type=hidden name=\"head_unit_mac\" value=\"\"><p "
+              "class=status>Bluetooth " +
+              html_escape(snapshot.bluetooth_scan_phase) + "…</p>";
+  } else {
+    output += "<label>Known or discovered Bluetooth device<select "
+              "name=\"head_unit_mac\">"
+              "<option value=\"\">Keep the configured device (use manual field "
+              "below)</option>";
+    for (const auto &device : snapshot.bluetooth_devices) {
+      if (device.name.empty() && !snapshot.show_unnamed_bluetooth_devices)
+        continue;
+      const auto selected =
+          device.address == config.head_unit_mac ? " selected" : "";
+      auto name = device.name.empty() ? "Unnamed device" : device.name;
+      output += "<option value=\"" + html_escape(device.address) + "\"" +
+                selected + ">" + html_escape(name) + " — " +
+                html_escape(device.address) +
+                (device.paired ? " (paired)" : "") +
+                (device.connected ? " (connected)" : "") + "</option>";
+    }
+    output += "</select></label><button form=\"scan-form\" type=submit>Rescan "
+              "Bluetooth devices</button>";
   }
-  output += "</select></label><p class=hint>Paired devices and discoveries "
-            "both come directly from BlueZ. A CarPlay capability filter is "
-            "deliberately not applied yet, because its advertised identifiers "
-            "are not sufficient to safely identify every head unit.</p>"
-            "<label>Manual Bluetooth MAC (leave unchanged to keep the saved "
-            "device)<input name=\"manual_mac\" value=\"" +
-            html_escape(config.head_unit_mac) +
-            "\" placeholder=\"[redacted-device-address]\"></label>"
-            "<label>Wi-Fi interface<select name=\"wifi_interface\">";
+  output +=
+      "</div><label>Manual Bluetooth MAC<input name=\"manual_mac\" value=\"" +
+      html_escape(config.head_unit_mac) +
+      "\" placeholder=\"[redacted-device-address]\"></label>"
+      "<label>Wi-Fi interface<select name=\"wifi_interface\">";
   bool current_interface_present = false;
   for (const auto &interface : snapshot.wifi_interfaces) {
     const auto selected = interface == config.wifi_interface ? " selected" : "";
@@ -272,12 +301,21 @@ std::string page(const acp::bridge::Config &config,
       std::string(snapshot.show_unnamed_bluetooth_devices ? " checked" : "") +
       "> Show unnamed Bluetooth devices</label><button type=submit>Apply "
       "display filter</button></form>"
-      "<form method=post action=\"/scan\"><button type=submit" +
-      std::string(snapshot.bluetooth_scan_running ? " disabled" : "") +
-      ">Scan Bluetooth devices (LE, then classic)</button></form>"
-      "<p class=hint>Discovery and NetworkManager refreshes update daemon "
-      "state in background workers. HTTP requests only render a state "
-      "snapshot.</p></body></html>";
+      "<script>(()=>{const "
+      "form=document.querySelector('#scan-form');"
+      "const picker=document.querySelector('#bluetooth-picker');"
+      "const progress=phase=>{picker.innerHTML='<p class=\"status\">Bluetooth "
+      "'+phase+'…</p>';};"
+      "const poll=async()=>{try{const response=await fetch('/scan-status');"
+      "const status=await "
+      "response.json();if(status.running){progress(status.phase);setTimeout("
+      "poll,1000);}"
+      "else location.reload();}catch{setTimeout(poll,2000);}};"
+      "form.addEventListener('submit',async "
+      "event=>{event.preventDefault();progress('discovery queued');"
+      "await fetch('/scan',{method:'POST'});poll();});"
+      "if(document.body.dataset.scanRunning==='1')poll();})();</script></"
+      "body></html>";
   return output;
 }
 
@@ -453,6 +491,9 @@ int main(int argc, char **argv) {
                 << " cached Wi-Fi interfaces)\n";
       send_response(client, 200, "text/html; charset=utf-8",
                     page(config, snapshot, saved));
+    } else if (request.starts_with("GET /scan-status ")) {
+      send_response(client, 200, "application/json",
+                    scan_status_json(management_snapshot(management_state)));
     } else if (request.starts_with("POST /scan ")) {
       std::cout << "Management: Bluetooth scan requested\n";
       bool start_scan = false;
