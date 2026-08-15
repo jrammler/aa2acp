@@ -244,7 +244,7 @@ int main(int argc, char **argv) {
                     command_json("bluetoothctl devices | sed -n 's/^Device "
                                  "\\([0-9A-F:]*\\) \\(.*\\)$/\\1|\\2/p'"));
     else if (request.starts_with("GET /api/bluetooth-scan ")) {
-      command_json("bluetoothctl --timeout 12 scan le >/dev/null 2>&1");
+      command_json("bluetoothctl --timeout 30 scan le >/dev/null 2>&1");
       send_response(client, 200, "application/json", "{}");
     } else if (request.starts_with("GET /api/wifi-interfaces "))
       send_response(client, 200, "application/json",
