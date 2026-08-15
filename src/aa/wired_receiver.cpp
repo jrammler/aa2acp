@@ -332,10 +332,12 @@ public:
                  aasdk::usb::IUSBWrapper &usb_wrapper,
                  aasdk::usb::DeviceHandle handle, Callback callback,
                  WiredReceiver::VideoFrameCallback video_frame_callback,
+                 WiredReceiver::DisplayProfileProvider display_profile_provider,
                  std::function<void()> ended_callback)
       : io_service_(io_service), strand_(io_service), usb_wrapper_(usb_wrapper),
         handle_(std::move(handle)), callback_(std::move(callback)),
         video_frame_callback_(std::move(video_frame_callback)),
+        display_profile_provider_(std::move(display_profile_provider)),
         ended_callback_(std::move(ended_callback)) {}
 
   void start() {
@@ -457,9 +459,19 @@ public:
     media_sink->set_available_type(aap_protobuf::service::media::shared::
                                        message::MEDIA_CODEC_VIDEO_H264_BP);
     media_sink->set_available_while_in_call(true);
+    const auto profile =
+        display_profile_provider_ ? display_profile_provider_() : std::nullopt;
+    using Resolution =
+        aap_protobuf::service::media::sink::message::VideoCodecResolutionType;
+    const auto resolution =
+        profile && profile->width_pixels == 800 && profile->height_pixels == 480
+            ? Resolution::VIDEO_800x480
+        : profile && profile->width_pixels == 1920 &&
+                profile->height_pixels == 1080
+            ? Resolution::VIDEO_1920x1080
+            : Resolution::VIDEO_1280x720;
     auto *video_config = media_sink->add_video_configs();
-    video_config->set_codec_resolution(
-        aap_protobuf::service::media::sink::message::VIDEO_1280x720);
+    video_config->set_codec_resolution(resolution);
     video_config->set_frame_rate(
         aap_protobuf::service::media::sink::message::VIDEO_FPS_30);
     video_config->set_density(180);
@@ -729,6 +741,7 @@ private:
   aasdk::usb::DeviceHandle handle_;
   Callback callback_;
   WiredReceiver::VideoFrameCallback video_frame_callback_;
+  WiredReceiver::DisplayProfileProvider display_profile_provider_;
   std::function<void()> ended_callback_;
   aasdk::transport::ITransport::Pointer transport_;
   aasdk::messenger::ICryptor::Pointer cryptor_;
@@ -745,9 +758,11 @@ private:
 
 class WiredReceiver::Impl {
 public:
-  explicit Impl(EventCallback callback, VideoFrameCallback video_frame_callback)
+  explicit Impl(EventCallback callback, VideoFrameCallback video_frame_callback,
+                DisplayProfileProvider display_profile_provider)
       : callback_(std::move(callback)),
-        video_frame_callback_(std::move(video_frame_callback)) {}
+        video_frame_callback_(std::move(video_frame_callback)),
+        display_profile_provider_(std::move(display_profile_provider)) {}
 
   ~Impl() { stop(); }
 
@@ -927,7 +942,7 @@ private:
   void start_control_session() {
     control_session_ = std::make_shared<ControlSession>(
         io_service_, *usb_wrapper_, active_handle_, callback_,
-        video_frame_callback_,
+        video_frame_callback_, display_profile_provider_,
         [this] { io_service_.post([this] { handle_control_session_end(); }); });
     control_session_->start();
   }
@@ -964,6 +979,7 @@ private:
 
   EventCallback callback_;
   VideoFrameCallback video_frame_callback_;
+  DisplayProfileProvider display_profile_provider_;
   std::mutex mutex_;
   std::atomic_bool stopping_{false};
   bool running_{};
@@ -985,9 +1001,11 @@ private:
 };
 
 WiredReceiver::WiredReceiver(EventCallback callback,
-                             VideoFrameCallback video_frame_callback)
+                             VideoFrameCallback video_frame_callback,
+                             DisplayProfileProvider display_profile_provider)
     : impl_(std::make_unique<Impl>(std::move(callback),
-                                   std::move(video_frame_callback))) {}
+                                   std::move(video_frame_callback),
+                                   std::move(display_profile_provider))) {}
 
 WiredReceiver::~WiredReceiver() = default;
 

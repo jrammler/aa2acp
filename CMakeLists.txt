@@ -84,7 +84,7 @@ target_link_libraries(aa2acp-iap2-bt PRIVATE iap2_link airplay_session bluez_inv
 target_compile_options(aa2acp-iap2-bt PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 add_executable(aa2acp-bridge-daemon src/bridge_daemon_main.cpp)
-target_link_libraries(aa2acp-bridge-daemon PRIVATE bridge_config bluez_inventory android_auto_usb h264_normalizer)
+target_link_libraries(aa2acp-bridge-daemon PRIVATE bridge_config bluez_inventory android_auto_usb h264_normalizer airplay_rtsp)
 target_compile_options(aa2acp-bridge-daemon PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 add_executable(aa2acp-android-auto-usb src/android_auto_usb_main.cpp)

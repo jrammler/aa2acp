@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 
@@ -27,15 +28,23 @@ struct WiredReceiverEvent {
   std::string detail;
 };
 
+struct DisplayProfile {
+  std::uint32_t width_pixels{};
+  std::uint32_t height_pixels{};
+  std::uint32_t max_fps{};
+};
+
 class WiredReceiver {
 public:
   using EventCallback = std::function<void(const WiredReceiverEvent &)>;
   // Invoked on the receiver's I/O thread for each Android Auto H.264 access
   // unit. The span is valid only for the duration of the callback.
   using VideoFrameCallback = std::function<void(std::span<const std::uint8_t>)>;
+  using DisplayProfileProvider = std::function<std::optional<DisplayProfile>()>;
 
   explicit WiredReceiver(EventCallback callback,
-                         VideoFrameCallback video_frame_callback = {});
+                         VideoFrameCallback video_frame_callback = {},
+                         DisplayProfileProvider display_profile_provider = {});
   ~WiredReceiver();
 
   WiredReceiver(const WiredReceiver &) = delete;

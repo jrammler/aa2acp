@@ -1,4 +1,5 @@
 #include "aa2acp/aa/wired_receiver.hpp"
+#include "aa2acp/airplay/display_profile.hpp"
 #include "aa2acp/bridge/bluez_inventory.hpp"
 #include "aa2acp/bridge/config.hpp"
 #include "aa2acp/bridge/h264_normalizer.hpp"
@@ -892,6 +893,16 @@ int run_wired_android_auto_receiver(
         }
         for (const auto &access_unit : normalized)
           forwarder.push(access_unit);
+      },
+      [&config_provider]() -> std::optional<aa2acp::aa::DisplayProfile> {
+        const auto config = config_provider();
+        const auto profile = aa2acp::airplay::load_display_profile(
+            aa2acp::bridge::default_display_profile_store(),
+            config.head_unit_mac);
+        if (!profile)
+          return std::nullopt;
+        return aa2acp::aa::DisplayProfile{
+            profile->width_pixels, profile->height_pixels, profile->max_fps};
       });
   std::string error;
   if (!receiver.start(&error)) {
