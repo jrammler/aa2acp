@@ -415,13 +415,13 @@ public:
       }
       if (keyframe) {
         // CarPlay setup can take longer than the ordinary frame queue. Keep
-        // the latest decoder entry point and only retain frames after it.
+        // the latest decoder entry point and every dependent frame after it.
         keyframe_ = std::move(frame);
         frames_.clear();
-        std::cout << "Bridge daemon: retained Android Auto H.264 keyframe\n";
-      } else {
-        if (frames_.size() == 120)
-          frames_.pop_front();
+        frames_.push_back(keyframe_);
+        std::cout << "Bridge daemon: retained Android Auto H.264 keyframe "
+                     "and dependent frame sequence\n";
+      } else if (frames_.size() < 600) {
         frames_.push_back(std::move(frame));
       }
     }
@@ -493,6 +493,7 @@ private:
       if (client < 0)
         continue;
       Bytes config;
+      bool has_keyframe = false;
       {
         std::lock_guard lock(mutex_);
         if (!sps_.empty() && !pps_.empty()) {
@@ -501,24 +502,16 @@ private:
           config.insert(config.end(), {0, 0, 0, 1});
           config.insert(config.end(), pps_.begin(), pps_.end());
         }
+        has_keyframe = !keyframe_.empty();
       }
       if (!config.empty() && !send_frame(client, config)) {
         close(client);
         continue;
       }
-      Bytes keyframe;
-      {
-        std::lock_guard lock(mutex_);
-        keyframe = keyframe_;
-      }
-      if (!keyframe.empty() && !send_frame(client, keyframe)) {
-        close(client);
-        continue;
-      }
       std::cout << "Bridge daemon: forwarded Android Auto H.264 "
                 << (config.empty() ? "without cached config" : "config")
-                << (keyframe.empty() ? " and awaiting keyframe\n"
-                                     : " and cached keyframe\n");
+                << (has_keyframe ? " and cached keyframe sequence\n"
+                                 : " and awaiting keyframe\n");
       while (!stop.stop_requested()) {
         Bytes frame;
         {
