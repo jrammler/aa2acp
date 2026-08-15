@@ -56,6 +56,10 @@ target_sources(iap2-bt PRIVATE src/iap2/bluez_pairing.cpp)
 target_link_libraries(iap2-bt PRIVATE iap2_link airplay_session ${BLUETOOTH_LIBRARY} PkgConfig::DBUS)
 target_compile_options(iap2-bt PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
+add_executable(bridge-daemon src/bridge_daemon_main.cpp)
+target_link_libraries(bridge-daemon PRIVATE bridge_config)
+target_compile_options(bridge-daemon PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
 enable_testing()
 add_executable(iap2-link-tests tests/link_layer_tests.cpp)
 target_link_libraries(iap2-link-tests PRIVATE iap2_link)
