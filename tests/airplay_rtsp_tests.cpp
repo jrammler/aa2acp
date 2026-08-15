@@ -1,10 +1,12 @@
 #include "acp/airplay/bplist.hpp"
 #include "acp/airplay/control_cipher.hpp"
 #include "acp/airplay/crypto.hpp"
+#include "acp/airplay/pairing_store.hpp"
 #include "acp/airplay/rtsp.hpp"
 
 #include <array>
 #include <cassert>
+#include <filesystem>
 #include <iostream>
 
 int main() {
@@ -64,5 +66,18 @@ int main() {
       std::get_if<acp::airplay::PlistValue::Dictionary>(&parsed_plist->data);
   assert(dictionary &&
          std::get<std::string>(dictionary->at("name").data) == "C++ bridge");
+
+  const auto identity = acp::airplay::ed25519_generate();
+  assert(identity);
+  const auto pairing_path =
+      std::filesystem::temp_directory_path() / "acp-airplay-pairing-test.bin";
+  const acp::airplay::PairingRecord record{"controller", *identity,
+                                           acp::airplay::Bytes(32, 0x11)};
+  assert(acp::airplay::save_pairing_record(pairing_path, record));
+  const auto restored = acp::airplay::load_pairing_record(pairing_path);
+  assert(restored && restored->controller_id == record.controller_id &&
+         restored->controller.public_key == record.controller.public_key &&
+         restored->accessory_public_key == record.accessory_public_key);
+  std::filesystem::remove(pairing_path);
   std::cout << "airplay RTSP tests passed\n";
 }

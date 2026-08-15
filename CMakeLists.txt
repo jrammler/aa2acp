@@ -28,6 +28,7 @@ add_library(airplay_rtsp
     src/airplay/crypto.cpp
     src/airplay/control_cipher.cpp
     src/airplay/bplist.cpp
+    src/airplay/pairing_store.cpp
 )
 target_include_directories(airplay_rtsp PUBLIC include)
 target_link_libraries(airplay_rtsp PUBLIC OpenSSL::Crypto)
