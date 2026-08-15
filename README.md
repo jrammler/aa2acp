@@ -27,7 +27,11 @@ session, joins test head unit's AP, and forwards the phone's Annex-B H.264 acces
 through the established encrypted AirPlay data stream. A bounded local queue
 keeps USB processing independent from CarPlay setup; it retains SPS/PPS so a
 late CarPlay connection still receives the required video configuration.
-Audio and head-unit input forwarding are not implemented yet.
+Before forwarding, the daemon normalizes H.264 SPS colour metadata using
+FFmpeg's `h264_metadata` bitstream filter. This is a lossless metadata rewrite,
+not a video re-encode: it makes the Android phone's otherwise-valid stream
+acceptable to test head unit's Pi hardware decoder. Audio and head-unit input forwarding
+are not implemented yet.
 
 The process needs read/write access to the phone's USB device node. Install the
 provided udev rule once (and ensure the service/developer user belongs to

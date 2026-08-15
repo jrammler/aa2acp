@@ -1,6 +1,7 @@
 #include "acp/aa/wired_receiver.hpp"
 #include "acp/bridge/bluez_inventory.hpp"
 #include "acp/bridge/config.hpp"
+#include "acp/bridge/h264_normalizer.hpp"
 
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -762,6 +763,7 @@ int run_wired_android_auto_receiver(
   std::atomic_bool carplay_start_requested{};
   std::atomic_bool phone_disconnected{};
   std::atomic<pid_t> active_carplay_child{-1};
+  acp::bridge::H264Normalizer h264_normalizer;
   acp::aa::WiredReceiver receiver(
       [&carplay_start_requested, &phone_disconnected,
        &active_carplay_child](const auto &event) {
@@ -801,8 +803,16 @@ int run_wired_android_auto_receiver(
           break;
         }
       },
-      [&forwarder](const std::span<const std::uint8_t> frame) {
-        forwarder.push(frame);
+      [&forwarder,
+       &h264_normalizer](const std::span<const std::uint8_t> frame) {
+        std::string error;
+        const auto normalized = h264_normalizer.normalize(frame, &error);
+        if (normalized.empty()) {
+          std::cerr << "Bridge daemon: " << error << '\n';
+          return;
+        }
+        for (const auto &access_unit : normalized)
+          forwarder.push(access_unit);
       });
   std::string error;
   if (!receiver.start(&error)) {

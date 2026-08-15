@@ -18,6 +18,7 @@ find_package(aasdk CONFIG REQUIRED)
 find_library(BLUETOOTH_LIBRARY bluetooth REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(DBUS REQUIRED IMPORTED_TARGET dbus-1)
+pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavcodec libavutil)
 find_path(LIBUSB_INCLUDE_DIR libusb.h PATH_SUFFIXES libusb-1.0 REQUIRED)
 
 add_library(iap2_link
@@ -57,6 +58,11 @@ target_include_directories(bluez_inventory PUBLIC include)
 target_link_libraries(bluez_inventory PUBLIC PkgConfig::DBUS)
 target_compile_options(bluez_inventory PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
+add_library(h264_normalizer src/bridge/h264_normalizer.cpp)
+target_include_directories(h264_normalizer PUBLIC include)
+target_link_libraries(h264_normalizer PUBLIC PkgConfig::FFMPEG)
+target_compile_options(h264_normalizer PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
 add_library(android_auto_usb src/aa/wired_receiver.cpp)
 target_include_directories(android_auto_usb PUBLIC include)
 target_include_directories(android_auto_usb PRIVATE ${LIBUSB_INCLUDE_DIR})
@@ -77,7 +83,7 @@ target_link_libraries(iap2-bt PRIVATE iap2_link airplay_session bluez_inventory 
 target_compile_options(iap2-bt PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 add_executable(bridge-daemon src/bridge_daemon_main.cpp)
-target_link_libraries(bridge-daemon PRIVATE bridge_config bluez_inventory android_auto_usb)
+target_link_libraries(bridge-daemon PRIVATE bridge_config bluez_inventory android_auto_usb h264_normalizer)
 target_compile_options(bridge-daemon PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 add_executable(android-auto-usb src/android_auto_usb_main.cpp)
