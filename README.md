@@ -28,7 +28,8 @@ Call audio and physical-control forwarding are not implemented yet. See
 [TODO.md](TODO.md) for the active task list and
 [ARCHITECTURE.md](ARCHITECTURE.md) for the system design. The verified
 end-to-end runbook and external test-rig assumptions are in
-[TESTING.md](TESTING.md).
+[TESTING.md](TESTING.md). The planned real-car management-network behavior is
+in [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ## Build and test
 
