@@ -19,19 +19,19 @@
 #include <cctype>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <deque>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
 #include <vector>
-
-#include <cstdlib>
 
 extern char **environ;
 
@@ -53,6 +53,103 @@ struct ManagementState {
 };
 
 ManagementState management_state;
+
+class TeeBuffer final : public std::streambuf {
+public:
+  TeeBuffer(std::streambuf *console, std::ofstream &file, std::mutex &mutex)
+      : console_(console), file_(file), mutex_(mutex) {}
+
+private:
+  int_type overflow(const int_type character) override {
+    if (traits_type::eq_int_type(character, traits_type::eof()))
+      return traits_type::not_eof(character);
+    if (traits_type::eq_int_type(
+            console_->sputc(traits_type::to_char_type(character)),
+            traits_type::eof()))
+      return traits_type::eof();
+    std::lock_guard lock(mutex_);
+    file_.put(traits_type::to_char_type(character));
+    return file_ ? character : traits_type::eof();
+  }
+
+  std::streamsize xsputn(const char *text,
+                         const std::streamsize size) override {
+    const auto written = console_->sputn(text, size);
+    std::lock_guard lock(mutex_);
+    file_.write(text, size);
+    return file_ ? written : 0;
+  }
+
+  int sync() override {
+    const auto console_result = console_->pubsync();
+    std::lock_guard lock(mutex_);
+    file_.flush();
+    return console_result == 0 && file_ ? 0 : -1;
+  }
+
+  std::streambuf *console_;
+  std::ofstream &file_;
+  std::mutex &mutex_;
+};
+
+class DaemonLog final {
+public:
+  explicit DaemonLog(const std::filesystem::path &path)
+      : path_(path), file_(path, std::ios::app),
+        cout_buffer_(std::cout.rdbuf(), file_, mutex_),
+        cerr_buffer_(std::cerr.rdbuf(), file_, mutex_) {
+    if (file_) {
+      old_cout_ = std::cout.rdbuf(&cout_buffer_);
+      old_cerr_ = std::cerr.rdbuf(&cerr_buffer_);
+    }
+  }
+
+  ~DaemonLog() {
+    if (old_cout_ != nullptr)
+      std::cout.rdbuf(old_cout_);
+    if (old_cerr_ != nullptr)
+      std::cerr.rdbuf(old_cerr_);
+  }
+
+  bool active() const { return old_cout_ != nullptr; }
+  const std::filesystem::path &path() const { return path_; }
+
+private:
+  std::filesystem::path path_;
+  std::ofstream file_;
+  std::mutex mutex_;
+  TeeBuffer cout_buffer_;
+  TeeBuffer cerr_buffer_;
+  std::streambuf *old_cout_{};
+  std::streambuf *old_cerr_{};
+};
+
+std::unique_ptr<DaemonLog> start_daemon_log() {
+  const auto directory = acp::bridge::default_state_directory() / "logs";
+  std::error_code error;
+  std::filesystem::create_directories(directory, error);
+  if (error)
+    return {};
+  std::vector<std::filesystem::directory_entry> logs;
+  for (const auto &entry :
+       std::filesystem::directory_iterator(directory, error)) {
+    if (entry.is_regular_file() && entry.path().extension() == ".log" &&
+        entry.path().filename().string().starts_with("bridge-daemon-"))
+      logs.push_back(entry);
+  }
+  std::sort(logs.begin(), logs.end(), [](const auto &left, const auto &right) {
+    return left.last_write_time() > right.last_write_time();
+  });
+  for (std::size_t index = 29; index < logs.size(); ++index)
+    std::filesystem::remove(logs[index], error);
+  const auto stamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::system_clock::now().time_since_epoch())
+                         .count();
+  const auto path = directory / ("bridge-daemon-" + std::to_string(stamp) +
+                                 "-" + std::to_string(getpid()) + ".log");
+  auto log = std::make_unique<DaemonLog>(path);
+  return log->active() ? std::move(log) : nullptr;
+}
 
 std::string normalized_bluetooth_address(const std::string &value) {
   std::string normalized;
@@ -555,6 +652,7 @@ int run_carplay_session(const char *program_path,
                         const acp::bridge::Config &config,
                         const std::stop_token stop,
                         const std::atomic_bool &phone_disconnected,
+                        std::atomic<pid_t> &active_child,
                         const std::string &video_socket = {}) {
   if (config.head_unit_mac.empty()) {
     std::cerr << "Bridge daemon: configure a head-unit MAC first\n";
@@ -580,21 +678,32 @@ int run_carplay_session(const char *program_path,
   for (auto &argument : arguments)
     argv.push_back(argument.data());
   argv.push_back(nullptr);
+  posix_spawnattr_t attributes;
+  posix_spawnattr_init(&attributes);
+  short flags = POSIX_SPAWN_SETPGROUP;
+  posix_spawnattr_setflags(&attributes, flags);
+  posix_spawnattr_setpgroup(&attributes, 0);
   pid_t child{};
-  if (posix_spawn(&child, argv.front(), nullptr, nullptr, argv.data(),
-                  environ) != 0) {
+  const auto spawn_result = posix_spawn(&child, argv.front(), nullptr,
+                                        &attributes, argv.data(), environ);
+  posix_spawnattr_destroy(&attributes);
+  if (spawn_result != 0) {
     std::cerr << "Bridge daemon: unable to start CarPlay session\n";
     return 1;
   }
+  active_child = child;
   std::cout << "Bridge daemon: CarPlay session started\n";
   for (;;) {
     int status{};
-    if (waitpid(child, &status, WNOHANG) == child)
+    if (waitpid(child, &status, WNOHANG) == child) {
+      active_child = -1;
       return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+    }
     if (stop.stop_requested() || phone_disconnected.load()) {
       std::cout << "Bridge daemon: stopping active CarPlay session\n";
-      kill(child, SIGTERM);
+      kill(-child, SIGTERM);
       waitpid(child, &status, 0);
+      active_child = -1;
       return 128 + SIGTERM;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -615,8 +724,10 @@ int run_wired_android_auto_receiver(
   }
   std::atomic_bool carplay_start_requested{};
   std::atomic_bool phone_disconnected{};
+  std::atomic<pid_t> active_carplay_child{-1};
   acp::aa::WiredReceiver receiver(
-      [&carplay_start_requested, &phone_disconnected](const auto &event) {
+      [&carplay_start_requested, &phone_disconnected,
+       &active_carplay_child](const auto &event) {
         switch (event.type) {
         case acp::aa::WiredReceiverEventType::waiting_for_phone:
           std::cout << "Bridge daemon: Android Auto USB idle: " << event.detail
@@ -642,6 +753,11 @@ int run_wired_android_auto_receiver(
         case acp::aa::WiredReceiverEventType::disconnected:
           std::cout << "Bridge daemon: Android Auto USB disconnected\n";
           phone_disconnected = true;
+          if (const auto child = active_carplay_child.load(); child > 0) {
+            std::cout << "Bridge daemon: stopping CarPlay after Android Auto "
+                         "disconnect\n";
+            kill(-child, SIGTERM);
+          }
           break;
         case acp::aa::WiredReceiverEventType::error:
           std::cerr << "Bridge daemon: " << event.detail << '\n';
@@ -670,8 +786,9 @@ int run_wired_android_auto_receiver(
                    "interface first\n";
       continue;
     }
-    const auto result = run_carplay_session(program_path, config, stop,
-                                            phone_disconnected, video_socket);
+    const auto result =
+        run_carplay_session(program_path, config, stop, phone_disconnected,
+                            active_carplay_child, video_socket);
     if (stop.stop_requested())
       break;
     if (phone_disconnected.load()) {
@@ -693,6 +810,9 @@ int run_wired_android_auto_receiver(
 } // namespace
 
 int main(int argc, char **argv) {
+  auto daemon_log = start_daemon_log();
+  if (daemon_log)
+    std::cout << "Bridge daemon: logging to " << daemon_log->path() << '\n';
   std::filesystem::path config_path = acp::bridge::default_config_path();
   int port = 8080;
   for (int index = 1; index < argc; ++index) {

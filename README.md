@@ -65,7 +65,9 @@ By default its configuration is `~/.local/state/acp-aa-bridge/config` (or
 `$XDG_STATE_HOME/acp-aa-bridge/config`) and its AirPlay pairing identity is
 stored beside it as `airplay-pairing.bin`. `--config PATH` remains available
 for test instances; an omitted pairing-record override uses the same XDG state
-directory automatically.
+directory automatically. Every daemon launch also tees console output to
+`logs/bridge-daemon-<timestamp>-<pid>.log` in that state directory. Log files
+rotate on launch, retaining the 30 newest files.
 
 `iap2-tcp` establishes the phone-side iAP2 link layer over TCP. It repeatedly
 sends the iAP2 marker while detecting the accessory, negotiates LSP with

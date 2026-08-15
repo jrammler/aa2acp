@@ -845,6 +845,7 @@ int acp::airplay::run_session(const SessionOptions &options) {
       close(socket_fd);
       return 1;
     }
+    std::this_thread::sleep_for(std::chrono::milliseconds(33));
   }
   while (options.next_video_frame &&
          (!options.stop_requested || !options.stop_requested())) {
@@ -857,6 +858,7 @@ int acp::airplay::run_session(const SessionOptions &options) {
       close(socket_fd);
       return 1;
     }
+    std::this_thread::sleep_for(std::chrono::milliseconds(33));
   }
   close(data_socket);
   close(socket_fd);
