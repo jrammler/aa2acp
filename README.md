@@ -51,6 +51,11 @@ nix develop --command ./pi-bridge/build/android-auto-usb
 nix develop --command ./pi-bridge/build/bridge-daemon
 ```
 
+For an encoder diagnostic, set `ACP_AA_BRIDGE_DUMP_H264=/tmp/android-auto.h264`
+when starting the daemon. It writes the raw Android Auto Annex-B access units;
+inspect it after a short session with `ffprobe -v error -show_streams
+/tmp/android-auto.h264`.
+
 The daemon uses the configured head-unit MAC, Wi-Fi interface, and persistent
 AirPlay pairing record. It asks BlueZ to pair if needed, then preserves the
 BlueZ/NetworkManager records for fast reconnect while disconnecting test head unit's AP

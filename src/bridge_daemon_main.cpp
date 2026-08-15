@@ -21,6 +21,7 @@
 #include <condition_variable>
 #include <deque>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <map>
@@ -29,6 +30,8 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+#include <cstdlib>
 
 extern char **environ;
 
@@ -337,6 +340,16 @@ class VideoSocketForwarder {
 public:
   explicit VideoSocketForwarder(const std::filesystem::path &path)
       : path_(path) {
+    if (const char *dump_path = std::getenv("ACP_AA_BRIDGE_DUMP_H264");
+        dump_path != nullptr && *dump_path != '\0') {
+      dump_.open(dump_path, std::ios::binary | std::ios::trunc);
+      if (dump_)
+        std::cout << "Bridge daemon: capturing Android Auto H.264 to "
+                  << dump_path << '\n';
+      else
+        std::cerr << "Bridge daemon: unable to capture Android Auto H.264 to "
+                  << dump_path << '\n';
+    }
     listener_ = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (listener_ < 0 ||
         path_.string().size() >= sizeof(sockaddr_un::sun_path)) {
@@ -391,6 +404,10 @@ public:
           keyframe = true;
       }
       ++received_video_count_;
+      if (dump_) {
+        dump_.write(reinterpret_cast<const char *>(frame.data()),
+                    static_cast<std::streamsize>(frame.size()));
+      }
       if (received_video_count_ <= 5 || received_video_count_ % 60 == 0) {
         std::cout << "Bridge daemon: Android Auto H.264 access unit #"
                   << received_video_count_ << " (" << frame.size()
@@ -538,11 +555,13 @@ private:
   Bytes pps_;
   Bytes keyframe_;
   std::size_t received_video_count_{};
+  std::ofstream dump_;
 };
 
 int run_carplay_session(const char *program_path,
                         const acp::bridge::Config &config,
-                        const std::function<bool()> &stop_requested,
+                        const std::stop_token stop,
+                        const std::atomic_bool &phone_disconnected,
                         const std::string &video_socket = {}) {
   if (config.head_unit_mac.empty()) {
     std::cerr << "Bridge daemon: configure a head-unit MAC first\n";
@@ -579,7 +598,7 @@ int run_carplay_session(const char *program_path,
     int status{};
     if (waitpid(child, &status, WNOHANG) == child)
       return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
-    if (stop_requested()) {
+    if (stop.stop_requested() || phone_disconnected.load()) {
       std::cout << "Bridge daemon: stopping active CarPlay session\n";
       kill(child, SIGTERM);
       waitpid(child, &status, 0);
@@ -658,12 +677,8 @@ int run_wired_android_auto_receiver(
                    "interface first\n";
       continue;
     }
-    const auto result = run_carplay_session(
-        program_path, config,
-        [stop, &phone_disconnected] {
-          return stop.stop_requested() || phone_disconnected.load();
-        },
-        video_socket);
+    const auto result = run_carplay_session(program_path, config, stop,
+                                            phone_disconnected, video_socket);
     if (stop.stop_requested())
       break;
     if (phone_disconnected.load()) {
