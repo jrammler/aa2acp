@@ -1,7 +1,11 @@
 #include "acp/aa/wired_receiver.hpp"
 
 #include <aasdk/Channel/Control/ControlServiceChannel.hpp>
+#include <aasdk/Channel/InputSource/InputSourceService.hpp>
+#include <aasdk/Channel/MediaSink/Audio/AudioMediaSinkService.hpp>
 #include <aasdk/Channel/MediaSink/Video/VideoMediaSinkService.hpp>
+#include <aasdk/Channel/MediaSource/MediaSourceService.hpp>
+#include <aasdk/Channel/SensorSource/SensorSourceService.hpp>
 #include <aasdk/Error/Error.hpp>
 #include <aasdk/Messenger/Cryptor.hpp>
 #include <aasdk/Messenger/MessageInStream.hpp>
@@ -26,8 +30,294 @@
 #include <mutex>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace acp::aa {
+
+class AudioSinkSession final
+    : public aasdk::channel::mediasink::audio::
+          IAudioMediaSinkServiceEventHandler,
+      public std::enable_shared_from_this<AudioSinkSession> {
+public:
+  AudioSinkSession(boost::asio::io_service::strand &strand,
+                   aasdk::messenger::IMessenger::Pointer messenger,
+                   aasdk::messenger::ChannelId channel_id,
+                   WiredReceiver::EventCallback callback)
+      : strand_(strand), callback_(std::move(callback)),
+        channel_(std::make_shared<
+                 aasdk::channel::mediasink::audio::AudioMediaSinkService>(
+            strand_, std::move(messenger), channel_id)) {}
+
+  void start() { receive_next(); }
+
+  void onChannelOpenRequest(
+      const aap_protobuf::service::control::message::ChannelOpenRequest &)
+      override {
+    aap_protobuf::service::control::message::ChannelOpenResponse response;
+    response.set_status(aap_protobuf::shared::STATUS_SUCCESS);
+    send([this, response](aasdk::channel::SendPromise::Pointer promise) {
+      channel_->sendChannelOpenResponse(response, std::move(promise));
+    });
+    receive_next();
+  }
+
+  void onMediaChannelSetupRequest(
+      const aap_protobuf::service::media::shared::message::Setup &request)
+      override {
+    if (request.type() !=
+        aap_protobuf::service::media::shared::message::MEDIA_CODEC_AUDIO_PCM) {
+      fail("phone requested an unsupported Android Auto audio codec");
+      return;
+    }
+    aap_protobuf::service::media::shared::message::Config response;
+    response.set_status(
+        aap_protobuf::service::media::shared::message::Config::STATUS_READY);
+    response.set_max_unacked(1);
+    response.add_configuration_indices(0);
+    send([this, response](aasdk::channel::SendPromise::Pointer promise) {
+      channel_->sendChannelSetupResponse(response, std::move(promise));
+    });
+    receive_next();
+  }
+
+  void onMediaChannelStartIndication(
+      const aap_protobuf::service::media::shared::message::Start &indication)
+      override {
+    session_id_ = indication.session_id();
+    receive_next();
+  }
+
+  void onMediaChannelStopIndication(
+      const aap_protobuf::service::media::shared::message::Stop &) override {
+    session_id_ = 0;
+    receive_next();
+  }
+
+  void onMediaWithTimestampIndication(
+      aasdk::messenger::Timestamp::ValueType,
+      const aasdk::common::DataConstBuffer &) override {
+    acknowledge();
+  }
+
+  void onMediaIndication(const aasdk::common::DataConstBuffer &) override {
+    acknowledge();
+  }
+
+  void onChannelError(const aasdk::error::Error &error) override {
+    fail(error.what());
+  }
+
+private:
+  template <typename Sender> void send(Sender sender) {
+    auto promise = aasdk::channel::SendPromise::defer(strand_);
+    promise->then([] {}, [self = shared_from_this()](
+                             const auto &error) { self->fail(error.what()); });
+    sender(std::move(promise));
+  }
+  void receive_next() { channel_->receive(shared_from_this()); }
+  void acknowledge() {
+    aap_protobuf::service::media::source::message::Ack acknowledgement;
+    acknowledgement.set_session_id(session_id_);
+    acknowledgement.set_ack(1);
+    send([this, acknowledgement](aasdk::channel::SendPromise::Pointer promise) {
+      channel_->sendMediaAckIndication(acknowledgement, std::move(promise));
+    });
+    receive_next();
+  }
+  void fail(const std::string &detail) {
+    callback_({WiredReceiverEventType::error,
+               "Android Auto audio channel: " + detail});
+  }
+
+  boost::asio::io_service::strand &strand_;
+  WiredReceiver::EventCallback callback_;
+  aasdk::channel::mediasink::audio::IAudioMediaSinkService::Pointer channel_;
+  int32_t session_id_ = 0;
+};
+
+class InputSession final
+    : public aasdk::channel::inputsource::IInputSourceServiceEventHandler,
+      public std::enable_shared_from_this<InputSession> {
+public:
+  InputSession(boost::asio::io_service::strand &strand,
+               aasdk::messenger::IMessenger::Pointer messenger,
+               WiredReceiver::EventCallback callback)
+      : strand_(strand), callback_(std::move(callback)),
+        channel_(
+            std::make_shared<aasdk::channel::inputsource::InputSourceService>(
+                strand_, std::move(messenger))) {}
+  void start() { receive_next(); }
+  void onChannelOpenRequest(
+      const aap_protobuf::service::control::message::ChannelOpenRequest &)
+      override {
+    aap_protobuf::service::control::message::ChannelOpenResponse response;
+    response.set_status(aap_protobuf::shared::STATUS_SUCCESS);
+    send([this, response](aasdk::channel::SendPromise::Pointer promise) {
+      channel_->sendChannelOpenResponse(response, std::move(promise));
+    });
+    receive_next();
+  }
+  void onKeyBindingRequest(
+      const aap_protobuf::service::media::sink::message::KeyBindingRequest &)
+      override {
+    aap_protobuf::service::media::sink::message::KeyBindingResponse response;
+    response.set_status(aap_protobuf::shared::STATUS_SUCCESS);
+    send([this, response](aasdk::channel::SendPromise::Pointer promise) {
+      channel_->sendKeyBindingResponse(response, std::move(promise));
+    });
+    receive_next();
+  }
+  void onChannelError(const aasdk::error::Error &error) override {
+    fail(error.what());
+  }
+
+private:
+  template <typename Sender> void send(Sender sender) {
+    auto promise = aasdk::channel::SendPromise::defer(strand_);
+    promise->then([] {}, [self = shared_from_this()](
+                             const auto &error) { self->fail(error.what()); });
+    sender(std::move(promise));
+  }
+  void receive_next() { channel_->receive(shared_from_this()); }
+  void fail(const std::string &detail) {
+    callback_({WiredReceiverEventType::error,
+               "Android Auto input channel: " + detail});
+  }
+  boost::asio::io_service::strand &strand_;
+  WiredReceiver::EventCallback callback_;
+  aasdk::channel::inputsource::IInputSourceService::Pointer channel_;
+};
+
+class SensorSession final
+    : public aasdk::channel::sensorsource::ISensorSourceServiceEventHandler,
+      public std::enable_shared_from_this<SensorSession> {
+public:
+  SensorSession(boost::asio::io_service::strand &strand,
+                aasdk::messenger::IMessenger::Pointer messenger,
+                WiredReceiver::EventCallback callback)
+      : strand_(strand), callback_(std::move(callback)),
+        channel_(
+            std::make_shared<aasdk::channel::sensorsource::SensorSourceService>(
+                strand_, std::move(messenger))) {}
+  void start() { receive_next(); }
+  void onChannelOpenRequest(
+      const aap_protobuf::service::control::message::ChannelOpenRequest &)
+      override {
+    aap_protobuf::service::control::message::ChannelOpenResponse response;
+    response.set_status(aap_protobuf::shared::STATUS_SUCCESS);
+    send([this, response](aasdk::channel::SendPromise::Pointer promise) {
+      channel_->sendChannelOpenResponse(response, std::move(promise));
+    });
+    receive_next();
+  }
+  void onSensorStartRequest(
+      const aap_protobuf::service::sensorsource::message::SensorRequest &)
+      override {
+    aap_protobuf::service::sensorsource::message::SensorStartResponseMessage
+        response;
+    response.set_status(aap_protobuf::shared::STATUS_SUCCESS);
+    send([this, response](aasdk::channel::SendPromise::Pointer promise) {
+      channel_->sendSensorStartResponse(response, std::move(promise));
+    });
+    receive_next();
+  }
+  void onChannelError(const aasdk::error::Error &error) override {
+    fail(error.what());
+  }
+
+private:
+  template <typename Sender> void send(Sender sender) {
+    auto promise = aasdk::channel::SendPromise::defer(strand_);
+    promise->then([] {}, [self = shared_from_this()](
+                             const auto &error) { self->fail(error.what()); });
+    sender(std::move(promise));
+  }
+  void receive_next() { channel_->receive(shared_from_this()); }
+  void fail(const std::string &detail) {
+    callback_({WiredReceiverEventType::error,
+               "Android Auto sensor channel: " + detail});
+  }
+  boost::asio::io_service::strand &strand_;
+  WiredReceiver::EventCallback callback_;
+  aasdk::channel::sensorsource::ISensorSourceService::Pointer channel_;
+};
+
+class MicrophoneSession final
+    : public aasdk::channel::mediasource::IMediaSourceServiceEventHandler,
+      public std::enable_shared_from_this<MicrophoneSession> {
+public:
+  MicrophoneSession(boost::asio::io_service::strand &strand,
+                    aasdk::messenger::IMessenger::Pointer messenger,
+                    WiredReceiver::EventCallback callback)
+      : strand_(strand), callback_(std::move(callback)),
+        channel_(
+            std::make_shared<aasdk::channel::mediasource::MediaSourceService>(
+                strand_, std::move(messenger),
+                aasdk::messenger::ChannelId::MEDIA_SOURCE_MICROPHONE)) {}
+  void start() { receive_next(); }
+  void onChannelOpenRequest(
+      const aap_protobuf::service::control::message::ChannelOpenRequest &)
+      override {
+    aap_protobuf::service::control::message::ChannelOpenResponse response;
+    response.set_status(aap_protobuf::shared::STATUS_SUCCESS);
+    send([this, response](aasdk::channel::SendPromise::Pointer promise) {
+      channel_->sendChannelOpenResponse(response, std::move(promise));
+    });
+    receive_next();
+  }
+  void onMediaChannelSetupRequest(
+      const aap_protobuf::service::media::shared::message::Setup &request)
+      override {
+    if (request.type() !=
+        aap_protobuf::service::media::shared::message::MEDIA_CODEC_AUDIO_PCM) {
+      fail("phone requested an unsupported Android Auto microphone codec");
+      return;
+    }
+    aap_protobuf::service::media::shared::message::Config response;
+    response.set_status(
+        aap_protobuf::service::media::shared::message::Config::STATUS_READY);
+    response.set_max_unacked(1);
+    response.add_configuration_indices(0);
+    send([this, response](aasdk::channel::SendPromise::Pointer promise) {
+      channel_->sendChannelSetupResponse(response, std::move(promise));
+    });
+    receive_next();
+  }
+  void onMediaSourceOpenRequest(
+      const aap_protobuf::service::media::source::message::MicrophoneRequest
+          &request) override {
+    aap_protobuf::service::media::source::message::MicrophoneResponse response;
+    response.set_status(aap_protobuf::shared::STATUS_SUCCESS);
+    response.set_session_id(request.open() ? 1 : 0);
+    send([this, response](aasdk::channel::SendPromise::Pointer promise) {
+      channel_->sendMicrophoneOpenResponse(response, std::move(promise));
+    });
+    receive_next();
+  }
+  void onMediaChannelAckIndication(
+      const aap_protobuf::service::media::source::message::Ack &) override {
+    receive_next();
+  }
+  void onChannelError(const aasdk::error::Error &error) override {
+    fail(error.what());
+  }
+
+private:
+  template <typename Sender> void send(Sender sender) {
+    auto promise = aasdk::channel::SendPromise::defer(strand_);
+    promise->then([] {}, [self = shared_from_this()](
+                             const auto &error) { self->fail(error.what()); });
+    sender(std::move(promise));
+  }
+  void receive_next() { channel_->receive(shared_from_this()); }
+  void fail(const std::string &detail) {
+    callback_({WiredReceiverEventType::error,
+               "Android Auto microphone channel: " + detail});
+  }
+  boost::asio::io_service::strand &strand_;
+  WiredReceiver::EventCallback callback_;
+  aasdk::channel::mediasource::IMediaSourceService::Pointer channel_;
+};
 
 class ControlSession final
     : public aasdk::channel::control::IControlServiceChannelEventHandler,
@@ -64,9 +354,25 @@ public:
       video_ = std::make_shared<
           aasdk::channel::mediasink::video::VideoMediaSinkService>(
           strand_, messenger_, aasdk::messenger::ChannelId::MEDIA_SINK_VIDEO);
+      for (const auto channel :
+           {aasdk::messenger::ChannelId::MEDIA_SINK_MEDIA_AUDIO,
+            aasdk::messenger::ChannelId::MEDIA_SINK_GUIDANCE_AUDIO,
+            aasdk::messenger::ChannelId::MEDIA_SINK_SYSTEM_AUDIO}) {
+        audio_.push_back(std::make_shared<AudioSinkSession>(
+            strand_, messenger_, channel, callback_));
+      }
+      input_ = std::make_shared<InputSession>(strand_, messenger_, callback_);
+      sensor_ = std::make_shared<SensorSession>(strand_, messenger_, callback_);
+      microphone_ =
+          std::make_shared<MicrophoneSession>(strand_, messenger_, callback_);
       send_version_request();
       receive_next();
       receive_video_next();
+      for (const auto &audio : audio_)
+        audio->start();
+      input_->start();
+      sensor_->start();
+      microphone_->start();
     } catch (const aasdk::error::Error &error) {
       fail(error.what());
     }
@@ -205,12 +511,11 @@ public:
     auto *input_service = response.add_channels();
     input_service->set_id(
         static_cast<int>(aasdk::messenger::ChannelId::INPUT_SOURCE));
-    auto *touchscreen =
-        input_service->mutable_input_source_service()->add_touchscreen();
-    touchscreen->set_width(1280);
-    touchscreen->set_height(720);
-    touchscreen->set_type(
-        aap_protobuf::service::inputsource::message::CAPACITIVE);
+    auto *input = input_service->mutable_input_source_service();
+    // test head unit's physical controls will be mapped to these Android key codes. Do
+    // not advertise a touchscreen: the target CarPlay head unit has none.
+    for (const int keycode : {3, 4, 19, 20, 21, 22, 23, 66, 84})
+      input->add_keycodes_supported(keycode);
 
     auto promise = aasdk::channel::SendPromise::defer(strand_);
     promise->then(
@@ -284,6 +589,8 @@ public:
   void onChannelOpenRequest(
       const aap_protobuf::service::control::message::ChannelOpenRequest &)
       override {
+    callback_({WiredReceiverEventType::control_session_ready,
+               "phone opened Android Auto video channel"});
     aap_protobuf::service::control::message::ChannelOpenResponse response;
     response.set_status(aap_protobuf::shared::STATUS_SUCCESS);
     send_video([this, response](aasdk::channel::SendPromise::Pointer promise) {
@@ -300,6 +607,8 @@ public:
       fail("phone requested an unsupported Android Auto video codec");
       return;
     }
+    callback_({WiredReceiverEventType::control_session_ready,
+               "phone selected H.264 video configuration"});
     aap_protobuf::service::media::shared::message::Config response;
     response.set_status(
         aap_protobuf::service::media::shared::message::Config::STATUS_READY);
@@ -315,12 +624,16 @@ public:
       const aap_protobuf::service::media::shared::message::Start &indication)
       override {
     video_session_id_ = indication.session_id();
+    callback_({WiredReceiverEventType::control_session_ready,
+               "Android Auto video stream started"});
     receive_video_next();
   }
 
   void onMediaChannelStopIndication(
       const aap_protobuf::service::media::shared::message::Stop &) override {
     video_session_id_ = 0;
+    callback_({WiredReceiverEventType::control_session_ready,
+               "Android Auto video stream stopped"});
     receive_video_next();
   }
 
@@ -398,6 +711,10 @@ private:
   aasdk::messenger::IMessenger::Pointer messenger_;
   aasdk::channel::control::IControlServiceChannel::Pointer control_;
   aasdk::channel::mediasink::video::IVideoMediaSinkService::Pointer video_;
+  std::vector<std::shared_ptr<AudioSinkSession>> audio_;
+  std::shared_ptr<InputSession> input_;
+  std::shared_ptr<SensorSession> sensor_;
+  std::shared_ptr<MicrophoneSession> microphone_;
   int32_t video_session_id_ = 0;
 };
 
