@@ -72,30 +72,6 @@ std::string html_escape(const std::string &value) {
   return escaped;
 }
 
-std::string json_escape(const std::string &value) {
-  std::string escaped;
-  for (const char character : value) {
-    switch (character) {
-    case '\\':
-      escaped += "\\\\";
-      break;
-    case '\"':
-      escaped += "\\\"";
-      break;
-    case '\n':
-      escaped += "\\n";
-      break;
-    case '\r':
-      escaped += "\\r";
-      break;
-    default:
-      escaped += character;
-      break;
-    }
-  }
-  return escaped;
-}
-
 std::string url_decode(const std::string &value) {
   std::string decoded;
   for (std::size_t index = 0; index < value.size(); ++index) {
@@ -203,10 +179,11 @@ ManagementSnapshot management_snapshot(ManagementState &state) {
   return state.snapshot;
 }
 
-std::string scan_status_json(const ManagementSnapshot &snapshot) {
-  return "{\"running\":" +
-         std::string(snapshot.bluetooth_scan_running ? "true" : "false") +
-         ",\"phase\":\"" + json_escape(snapshot.bluetooth_scan_phase) + "\"}";
+std::string scan_status_fragment(const ManagementSnapshot &snapshot) {
+  if (!snapshot.bluetooth_scan_running)
+    return "<span data-scan-running=\"0\"></span>";
+  return "<p class=\"status\" data-scan-running=\"1\">Bluetooth " +
+         html_escape(snapshot.bluetooth_scan_phase) + "…</p>";
 }
 
 void run_bluetooth_scan(ManagementState &state) {
@@ -304,16 +281,14 @@ std::string page(const acp::bridge::Config &config,
       "<script>(()=>{const "
       "form=document.querySelector('#scan-form');"
       "const picker=document.querySelector('#bluetooth-picker');"
-      "const progress=phase=>{picker.innerHTML='<p class=\"status\">Bluetooth "
-      "'+phase+'…</p>';};"
-      "const poll=async()=>{try{const response=await fetch('/scan-status');"
-      "const status=await "
-      "response.json();if(status.running){progress(status.phase);setTimeout("
-      "poll,1000);}"
+      "const poll=async()=>{try{picker.innerHTML=await (await "
+      "fetch('/scan-status')).text();"
+      "if(picker.firstElementChild.dataset.scanRunning==='1'){setTimeout(poll,"
+      "1000);}"
       "else location.reload();}catch{setTimeout(poll,2000);}};"
       "form.addEventListener('submit',async "
-      "event=>{event.preventDefault();progress('discovery queued');"
-      "await fetch('/scan',{method:'POST'});poll();});"
+      "event=>{event.preventDefault();await "
+      "fetch('/scan',{method:'POST'});poll();});"
       "if(document.body.dataset.scanRunning==='1')poll();})();</script></"
       "body></html>";
   return output;
@@ -492,8 +467,9 @@ int main(int argc, char **argv) {
       send_response(client, 200, "text/html; charset=utf-8",
                     page(config, snapshot, saved));
     } else if (request.starts_with("GET /scan-status ")) {
-      send_response(client, 200, "application/json",
-                    scan_status_json(management_snapshot(management_state)));
+      send_response(
+          client, 200, "text/html; charset=utf-8",
+          scan_status_fragment(management_snapshot(management_state)));
     } else if (request.starts_with("POST /scan ")) {
       std::cout << "Management: Bluetooth scan requested\n";
       bool start_scan = false;
