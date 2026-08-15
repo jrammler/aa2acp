@@ -19,9 +19,12 @@
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <cerrno>
 #include <chrono>
 #include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -32,6 +35,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -56,6 +60,23 @@ struct ManagementState {
 
 ManagementState management_state;
 
+std::string log_timestamp() {
+  const auto now = std::chrono::system_clock::now();
+  const auto milliseconds =
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          now.time_since_epoch())
+          .count() %
+      1000;
+  const auto time = std::chrono::system_clock::to_time_t(now);
+  std::tm local_time{};
+  localtime_r(&time, &local_time);
+  std::array<char, 40> text{};
+  std::strftime(text.data(), text.size(), "%Y-%m-%d %H:%M:%S", &local_time);
+  std::snprintf(text.data() + 19, text.size() - 19, ".%03lld ",
+                static_cast<long long>(milliseconds));
+  return text.data();
+}
+
 class TeeBuffer final : public std::streambuf {
 public:
   TeeBuffer(std::streambuf *console, std::ofstream &file, std::mutex &mutex)
@@ -65,33 +86,53 @@ private:
   int_type overflow(const int_type character) override {
     if (traits_type::eq_int_type(character, traits_type::eof()))
       return traits_type::not_eof(character);
-    if (traits_type::eq_int_type(
-            console_->sputc(traits_type::to_char_type(character)),
-            traits_type::eof()))
-      return traits_type::eof();
     std::lock_guard lock(mutex_);
-    file_.put(traits_type::to_char_type(character));
-    return file_ ? character : traits_type::eof();
+    const auto text = traits_type::to_char_type(character);
+    return write_locked(std::string_view(&text, 1)) ? character
+                                                    : traits_type::eof();
   }
 
   std::streamsize xsputn(const char *text,
                          const std::streamsize size) override {
-    const auto written = console_->sputn(text, size);
     std::lock_guard lock(mutex_);
-    file_.write(text, size);
-    return file_ ? written : 0;
+    return write_locked(std::string_view(text, size)) ? size : 0;
   }
 
   int sync() override {
-    const auto console_result = console_->pubsync();
     std::lock_guard lock(mutex_);
+    const auto console_result = console_->pubsync();
     file_.flush();
     return console_result == 0 && file_ ? 0 : -1;
+  }
+
+  bool write_locked(const std::string_view text) {
+    for (std::size_t offset = 0; offset < text.size();) {
+      if (at_line_start_) {
+        const auto timestamp = log_timestamp();
+        if (console_->sputn(timestamp.data(), timestamp.size()) !=
+                static_cast<std::streamsize>(timestamp.size()) ||
+            !file_.write(timestamp.data(), timestamp.size()))
+          return false;
+        at_line_start_ = false;
+      }
+      const auto line_end = text.find('\n', offset);
+      const auto count = line_end == std::string_view::npos
+                             ? text.size() - offset
+                             : line_end - offset + 1;
+      if (console_->sputn(text.data() + offset, count) !=
+              static_cast<std::streamsize>(count) ||
+          !file_.write(text.data() + offset, count))
+        return false;
+      at_line_start_ = text[offset + count - 1] == '\n';
+      offset += count;
+    }
+    return true;
   }
 
   std::streambuf *console_;
   std::ofstream &file_;
   std::mutex &mutex_;
+  bool at_line_start_{true};
 };
 
 class DaemonLog final {
@@ -650,6 +691,22 @@ private:
   std::ofstream dump_;
 };
 
+void stop_carplay_process_group(const pid_t child, int *status) {
+  kill(-child, SIGTERM);
+  const auto graceful_deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (std::chrono::steady_clock::now() < graceful_deadline) {
+    if (waitpid(child, status, WNOHANG) == child)
+      return;
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+  std::cerr << "Bridge daemon: CarPlay worker did not stop after SIGTERM; "
+               "sending SIGKILL\n";
+  kill(-child, SIGKILL);
+  while (waitpid(child, status, 0) < 0 && errno == EINTR) {
+  }
+}
+
 int run_carplay_session(const char *program_path,
                         const acp::bridge::Config &config,
                         const std::stop_token stop,
@@ -737,8 +794,7 @@ int run_carplay_session(const char *program_path,
     }
     if (stop.stop_requested() || phone_disconnected.load()) {
       std::cout << "Bridge daemon: stopping active CarPlay session\n";
-      kill(-child, SIGTERM);
-      waitpid(child, &status, 0);
+      stop_carplay_process_group(child, &status);
       while (output_pipe[0] >= 0)
         forward_output(100);
       active_child = -1;

@@ -71,7 +71,8 @@ stored beside it as `airplay-pairing.bin`. `--config PATH` remains available
 for test instances; an omitted pairing-record override uses the same XDG state
 directory automatically. Every daemon launch also tees console output to
 `logs/bridge-daemon-<timestamp>-<pid>.log` in that state directory. Log files
-rotate on launch, retaining the 30 newest files.
+rotate on launch, retaining the 30 newest files. Each daemon and CarPlay-worker
+log line carries a local wall-clock timestamp.
 
 `iap2-tcp` establishes the phone-side iAP2 link layer over TCP. It repeatedly
 sends the iAP2 marker while detecting the accessory, negotiates LSP with
