@@ -517,7 +517,7 @@ public:
     input_service->set_id(
         static_cast<int>(aasdk::messenger::ChannelId::INPUT_SOURCE));
     auto *input = input_service->mutable_input_source_service();
-    // test head unit's physical controls will be mapped to these Android key codes. Do
+    // CarPlay physical controls will be mapped to these Android key codes. Do
     // not advertise a touchscreen: the target CarPlay head unit has none.
     for (const int keycode : {3, 4, 19, 20, 21, 22, 23, 66, 84})
       input->add_keycodes_supported(keycode);

@@ -25,6 +25,6 @@
 ## Boundaries
 
 The bridge currently has verified wired Android Auto to wireless CarPlay H.264
-video. The development MFi implementation and test head unit test setup are external
-test infrastructure, not part of this repository or a production certification
+video. Any development-only head-unit authentication setup is external test
+infrastructure, not part of this repository or a production certification
 story.

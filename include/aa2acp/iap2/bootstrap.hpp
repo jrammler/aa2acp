@@ -11,8 +11,8 @@ namespace aa2acp::iap2 {
 
 class PhoneLink;
 
-// The minimum CSM exchange needed to prove the iAP2 control session and
-// test head unit's development-only software-MFi implementation work end-to-end.
+// The minimum CSM exchange needed to prove that the iAP2 control session and a
+// development-only software-MFi implementation work end-to-end.
 class BootstrapSession {
 public:
   void attach(PhoneLink &link);

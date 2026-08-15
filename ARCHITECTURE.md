@@ -21,7 +21,7 @@ Wi-Fi client connection.
 - Runtime: local management UI, XDG state, rotating timestamped logs, and
   bounded child-worker shutdown on Android Auto disconnect.
 - Video: live H.264 forwarding is verified; SPS metadata is normalized without
-  re-encoding for decoder interoperability observed with the test head unit.
+  re-encoding for decoder interoperability.
 
 ## Next milestones
 
@@ -36,6 +36,6 @@ Wi-Fi client connection.
 6. Package the daemon in a minimal appliance image with ignition/power handling
    and persistent state.
 
-The development MFi implementation and test head unit test setup are external test
-infrastructure; they are not part of this repository or a production
+Any development-only head-unit authentication setup is external test
+infrastructure; it is not part of this repository or a production
 certification story.

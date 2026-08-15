@@ -5,7 +5,7 @@
 
 int main() {
   const auto path = std::filesystem::temp_directory_path() / "acp-bridge.conf";
-  const aa2acp::bridge::Config expected{"[redacted-device-address]", "wlan0",
+  const aa2acp::bridge::Config expected{"head-unit-address", "wlan0",
                                         "/var/lib/aa2acp/airplay.bin"};
   assert(aa2acp::bridge::save_config(path, expected));
   const auto restored = aa2acp::bridge::load_config(path);

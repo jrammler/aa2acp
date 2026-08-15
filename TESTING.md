@@ -6,8 +6,8 @@ emulators into this repository.
 
 ## Verified state
 
-AA2ACP has been tested end to end with a wired Android Auto phone and a test head unit
-development head unit:
+AA2ACP has been tested end to end with a wired Android Auto phone and a
+development CarPlay head unit:
 
 1. An Android phone connects over USB and starts Android Auto.
 2. AA2ACP receives the phone's H.264 video stream through AOAP/AASDK.
@@ -20,7 +20,7 @@ development head unit:
 Audio and input/control forwarding are not implemented. The active work is in
 [TODO.md](TODO.md).
 
-## Local prerequisites
+## Prerequisites
 
 - Linux with BlueZ, NetworkManager, a Bluetooth adapter, and a Wi-Fi interface
   that can join the head unit's CarPlay Wi-Fi network.
@@ -28,9 +28,8 @@ Audio and input/control forwarding are not implemented. The active work is in
   needs persistent USB access; install `udev/70-aa2acp-android-auto.rules` and
   run it as a user in `plugdev` as described in the README.
 - A CarPlay-capable head unit that accepts this development implementation.
-  The current test head unit test setup uses development-only software MFi
-  authentication; it is external to this repository and is not a production
-  certification configuration.
+  Any development-only authentication configuration is external to this
+  repository and is not a production certification configuration.
 
 ## Runbook
 

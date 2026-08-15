@@ -444,7 +444,7 @@ std::string page(const aa2acp::bridge::Config &config,
   output +=
       "</div><label>Manual Bluetooth MAC<input name=\"manual_mac\" value=\"" +
       html_escape(config.head_unit_mac) +
-      "\" placeholder=\"[redacted-device-address]\"></label>"
+      "\" placeholder=\"Bluetooth address\"></label>"
       "<label>Wi-Fi interface<select name=\"wifi_interface\">";
   bool current_interface_present = false;
   if (config.wifi_interface.empty())

@@ -229,7 +229,8 @@ int main(int argc, char **argv) {
   if (socket_fd < 0) {
     std::cerr << "Unable to open RFCOMM channel " << static_cast<int>(channel)
               << " to " << address
-              << "; ensure the device is paired and test head unit is advertising iAP2\n";
+              << "; ensure the device is paired and the head unit is "
+                 "advertising iAP2\n";
     return 1;
   }
   std::cout << "RFCOMM connected to " << address << ':'

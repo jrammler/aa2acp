@@ -65,9 +65,9 @@ bool join_with_networkmanager(const AccessoryWifiConfiguration &configuration,
   std::cout << "Wi-Fi: joining SSID '" << configuration.ssid << "' on "
             << interface_name << " (channel "
             << static_cast<int>(configuration.channel) << ")\n";
-  // Reuse the saved AP profile first. It avoids a fresh scan race while test head unit is
-  // bringing its AP up and is the desired fast-reconnect behaviour after a
-  // completed session.
+  // Reuse the saved AP profile first. It avoids a fresh scan race while the
+  // head unit is bringing its AP up and is the desired fast-reconnect behaviour
+  // after a completed session.
   if (run_nmcli({"nmcli", "--wait", "30", "connection", "up", "id",
                  configuration.ssid, "ifname", interface_name},
                 false, true)) {

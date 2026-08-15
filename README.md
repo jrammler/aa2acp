@@ -3,10 +3,15 @@
 AA2ACP is a C++20 bridge that receives Android Auto from an Android
 phone and presents it to a car as a wireless CarPlay phone.
 
+> **Work in progress:** this is an experimental development project, not a
+> finished consumer product. It has a verified video path, but audio, physical
+> controls, wireless Android Auto, production authentication, and appliance
+> packaging are still in progress. Do not rely on it while driving.
+
 ## Current state
 
-The wired Android Auto → wireless CarPlay video path works end to end against
-the test head unit test head unit:
+The wired Android Auto → wireless CarPlay video path has been verified end to
+end with a development CarPlay head unit:
 
 - AOAP USB and Android Auto TLS/control session;
 - Bluetooth iAP2, pairing, MFi test authentication, and CarPlay Wi-Fi handover;

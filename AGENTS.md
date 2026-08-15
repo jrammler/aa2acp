@@ -21,5 +21,5 @@ nix develop --command bash -c '
 ```
 
 Keep commits focused and commit completed work regularly. The production target
-is the Pi bridge; do not add emulator, test head unit, ESP32, or unrelated test assets to
-this repository.
+is the Pi bridge; do not add external head-unit software, emulators, ESP32
+experiments, or unrelated test assets to this repository.
