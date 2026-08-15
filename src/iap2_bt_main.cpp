@@ -185,6 +185,8 @@ int main(int argc, char **argv) {
   std::string video_path;
   std::string video_socket;
   std::string audio_socket;
+  std::string guidance_audio_socket;
+  std::string system_audio_socket;
   std::string pairing_store;
   std::string head_unit_capabilities_store;
   std::string wifi_interface;
@@ -227,6 +229,10 @@ int main(int argc, char **argv) {
       video_socket = argv[++index];
     } else if (argument == "--audio-socket" && index + 1 < argc) {
       audio_socket = argv[++index];
+    } else if (argument == "--guidance-audio-socket" && index + 1 < argc) {
+      guidance_audio_socket = argv[++index];
+    } else if (argument == "--system-audio-socket" && index + 1 < argc) {
+      system_audio_socket = argv[++index];
     } else if (argument == "--pairing-store" && index + 1 < argc) {
       pairing_store = argv[++index];
     } else if (argument == "--wifi-interface" && index + 1 < argc) {
@@ -238,6 +244,7 @@ int main(int argc, char **argv) {
              "[--bootstrap] [--carplay] [--wifi-config] [--join-wifi] "
              "[--leave-wifi] [--wifi-interface IFACE] [--bridge] [--video "
              "H264_FILE] [--video-socket PATH] [--audio-socket PATH] "
+             "[--guidance-audio-socket PATH] [--system-audio-socket PATH] "
              "[--pairing-store FILE] [--head-unit-capabilities-store FILE]\n";
       return 2;
     }
@@ -358,16 +365,25 @@ int main(int argc, char **argv) {
     }
     std::cout << "Bridge: starting AirPlay on " << host << ':'
               << carplay_probe.airplay_port() << '\n';
-    const auto run_airplay = [&] {
-      const auto live_video =
-          video_socket.empty()
-              ? std::shared_ptr<VideoSocketReader>{}
-              : std::make_shared<VideoSocketReader>(video_socket);
-      const auto live_audio =
-          audio_socket.empty()
-              ? std::shared_ptr<AudioSocketReader>{}
-              : std::make_shared<AudioSocketReader>(audio_socket);
-      const aa2acp::airplay::SessionOptions options{
+    const auto run_airplay =
+        [&] {
+          const auto live_video =
+              video_socket.empty()
+                  ? std::shared_ptr<VideoSocketReader>{}
+                  : std::make_shared<VideoSocketReader>(video_socket);
+          const auto live_audio =
+              audio_socket.empty()
+                  ? std::shared_ptr<AudioSocketReader>{}
+                  : std::make_shared<AudioSocketReader>(audio_socket);
+          const auto live_guidance_audio =
+              guidance_audio_socket.empty()
+                  ? std::shared_ptr<AudioSocketReader>{}
+                  : std::make_shared<AudioSocketReader>(guidance_audio_socket);
+          const auto live_system_audio =
+              system_audio_socket.empty()
+                  ? std::shared_ptr<AudioSocketReader>{}
+                  : std::make_shared<AudioSocketReader>(system_audio_socket);
+          const aa2acp::airplay::SessionOptions options{
           .host = host,
           .port = static_cast<std::uint16_t>(carplay_probe.airplay_port()),
           .timeout_seconds = timeout_seconds,
@@ -380,13 +396,21 @@ int main(int argc, char **argv) {
               live_audio
                   ? [live_audio] { return live_audio->next(); }
                   : std::function<std::optional<std::vector<std::uint8_t>>()>{},
+          .next_guidance_audio =
+              live_guidance_audio
+                  ? [live_guidance_audio] { return live_guidance_audio->next(); }
+                  : std::function<std::optional<std::vector<std::uint8_t>>()>{},
+          .next_system_audio =
+              live_system_audio
+                  ? [live_system_audio] { return live_system_audio->next(); }
+                  : std::function<std::optional<std::vector<std::uint8_t>>()>{},
           .pairing_store = pairing_store,
           .head_unit_capabilities_store = head_unit_capabilities_store,
           .head_unit_mac = address,
           .stop_requested = [] { return shutdown_requested != 0; },
       };
-      return aa2acp::airplay::run_session(options);
-    };
+          return aa2acp::airplay::run_session(options);
+        };
     auto result = run_airplay();
     if (result != 0 && shutdown_requested == 0) {
       std::cerr << "Bridge: AirPlay attempt failed; retrying once\n";

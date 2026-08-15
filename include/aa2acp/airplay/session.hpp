@@ -23,6 +23,8 @@ struct SessionOptions {
   // Supplies one 48 kHz stereo S16LE Android Auto media-audio packet at a
   // time. Returning std::nullopt ends the live stream.
   std::function<std::optional<std::vector<std::uint8_t>>()> next_media_audio;
+  std::function<std::optional<std::vector<std::uint8_t>>()> next_guidance_audio;
+  std::function<std::optional<std::vector<std::uint8_t>>()> next_system_audio;
   std::string pairing_store;
   std::filesystem::path head_unit_capabilities_store;
   std::string head_unit_mac;

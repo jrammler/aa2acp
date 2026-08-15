@@ -525,6 +525,21 @@ public:
           48000, 2);
     }
 
+    // Android Auto opens this source as part of its normal projection
+    // negotiation, even though the return path is not bridged yet. Keep the
+    // established advertisement until the bidirectional call-audio work can
+    // replace it with a complete CarPlay microphone path.
+    auto *microphone_service = response.add_channels();
+    microphone_service->set_id(
+        static_cast<int>(aasdk::messenger::ChannelId::MEDIA_SOURCE_MICROPHONE));
+    auto *microphone = microphone_service->mutable_media_source_service();
+    microphone->set_available_type(
+        aap_protobuf::service::media::shared::message::MEDIA_CODEC_AUDIO_PCM);
+    auto *microphone_config = microphone->mutable_audio_config();
+    microphone_config->set_sampling_rate(16000);
+    microphone_config->set_number_of_bits(16);
+    microphone_config->set_number_of_channels(1);
+
     auto *sensor_service = response.add_channels();
     sensor_service->set_id(
         static_cast<int>(aasdk::messenger::ChannelId::SENSOR));

@@ -14,7 +14,8 @@
 ## Audio and controls
 
 - [ ] Forward Android Auto guidance and system audio to CarPlay.
-- [ ] Return microphone audio from CarPlay to Android Auto.
+- [ ] Bridge call audio: forward Android Auto telephony audio to CarPlay and
+  return microphone audio from CarPlay to Android Auto.
 - [ ] Translate CarPlay physical controls to Android Auto input: directional,
   select, back, home, and media controls. Support non-touch head units first.
 - [ ] Audit every AASDK service channel against CarPlay capabilities, documenting
