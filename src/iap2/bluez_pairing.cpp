@@ -2,6 +2,7 @@
 
 #include <dbus/dbus.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <iostream>
@@ -252,17 +253,31 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
   // After a bond is removed, BlueZ removes its Device1 object too. test head unit can
   // take several inquiry intervals to reappear, so five seconds is not
   // enough for a real first-pairing attempt.
-  const auto discovery_deadline =
-      std::chrono::steady_clock::now() + std::chrono::seconds(12);
+  const auto discovery_seconds = std::max(12, timeout_seconds);
+  const auto discovery_deadline = std::chrono::steady_clock::now() +
+                                  std::chrono::seconds(discovery_seconds);
   while (std::chrono::steady_clock::now() < discovery_deadline) {
     dbus_connection_read_write_dispatch(connection, 200);
   }
   write_log(log, "pairing " + std::string(mac) +
                      " using NoInputNoOutput (Just Works)");
   const int pair_timeout = timeout_seconds > 0 ? timeout_seconds * 1000 : 60000;
-  const bool paired =
-      call_no_arguments(connection, path.c_str(), kDeviceInterface, "Pair",
-                        pair_timeout, name, detail);
+  // Device1 objects can disappear and be recreated while discovery updates a
+  // freshly removed bond. Retry the method on the stable address-derived path
+  // rather than treating that transient UnknownObject as a pairing failure.
+  bool paired = false;
+  for (int attempt = 0; attempt < 3 && !paired; ++attempt) {
+    paired = call_no_arguments(connection, path.c_str(), kDeviceInterface,
+                               "Pair", pair_timeout, name, detail);
+    if (!paired && name == "org.freedesktop.DBus.Error.UnknownObject" &&
+        attempt < 2) {
+      write_log(log, "device object changed during discovery; retrying pair");
+      const auto retry_deadline =
+          std::chrono::steady_clock::now() + std::chrono::seconds(2);
+      while (std::chrono::steady_clock::now() < retry_deadline)
+        dbus_connection_read_write_dispatch(connection, 100);
+    }
+  }
   const auto pair_error_name = name;
   const auto pair_error_detail = detail;
   std::string cleanup_name;
