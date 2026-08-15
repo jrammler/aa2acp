@@ -17,7 +17,9 @@ the test head unit test head unit:
 
 Audio and physical-control forwarding are not implemented yet. See
 [TODO.md](TODO.md) for the active task list and
-[ARCHITECTURE.md](ARCHITECTURE.md) for the system design.
+[ARCHITECTURE.md](ARCHITECTURE.md) for the system design. The verified
+end-to-end runbook and external test-rig assumptions are in
+[TESTING.md](TESTING.md).
 
 ## Build and test
 
