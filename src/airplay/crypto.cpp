@@ -51,16 +51,26 @@ Bytes hkdf_sha512(const std::span<const std::uint8_t> ikm,
 std::optional<Bytes> seal(const std::span<const std::uint8_t> key,
                           const std::string_view label,
                           const std::span<const std::uint8_t> plaintext) {
-  if (key.size() != 32)
+  return seal_with_nonce(key, nonce_for_label(label), plaintext);
+}
+
+std::optional<Bytes>
+seal_with_nonce(const std::span<const std::uint8_t> key,
+                const std::span<const std::uint8_t> nonce,
+                const std::span<const std::uint8_t> plaintext,
+                const std::span<const std::uint8_t> aad) {
+  if (key.size() != 32 || nonce.size() != 12)
     return std::nullopt;
   CipherContext context(EVP_CIPHER_CTX_new(), EVP_CIPHER_CTX_free);
-  const auto nonce = nonce_for_label(label);
   Bytes output(plaintext.size() + 16);
   int encrypted_length = 0;
   int final_length = 0;
   if (!context ||
       EVP_EncryptInit_ex(context.get(), EVP_chacha20_poly1305(), nullptr,
                          key.data(), nonce.data()) != 1 ||
+      (!aad.empty() &&
+       EVP_EncryptUpdate(context.get(), nullptr, &encrypted_length, aad.data(),
+                         aad.size()) != 1) ||
       EVP_EncryptUpdate(context.get(), output.data(), &encrypted_length,
                         plaintext.data(), plaintext.size()) != 1 ||
       EVP_EncryptFinal_ex(context.get(), output.data() + encrypted_length,
@@ -75,10 +85,17 @@ std::optional<Bytes> seal(const std::span<const std::uint8_t> key,
 std::optional<Bytes> open(const std::span<const std::uint8_t> key,
                           const std::string_view label,
                           const std::span<const std::uint8_t> ciphertext) {
-  if (key.size() != 32 || ciphertext.size() < 16)
+  return open_with_nonce(key, nonce_for_label(label), ciphertext);
+}
+
+std::optional<Bytes>
+open_with_nonce(const std::span<const std::uint8_t> key,
+                const std::span<const std::uint8_t> nonce,
+                const std::span<const std::uint8_t> ciphertext,
+                const std::span<const std::uint8_t> aad) {
+  if (key.size() != 32 || nonce.size() != 12 || ciphertext.size() < 16)
     return std::nullopt;
   CipherContext context(EVP_CIPHER_CTX_new(), EVP_CIPHER_CTX_free);
-  const auto nonce = nonce_for_label(label);
   const auto encrypted_size = ciphertext.size() - 16;
   Bytes output(encrypted_size);
   int plaintext_length = 0;
@@ -86,6 +103,9 @@ std::optional<Bytes> open(const std::span<const std::uint8_t> key,
   if (!context ||
       EVP_DecryptInit_ex(context.get(), EVP_chacha20_poly1305(), nullptr,
                          key.data(), nonce.data()) != 1 ||
+      (!aad.empty() &&
+       EVP_DecryptUpdate(context.get(), nullptr, &plaintext_length, aad.data(),
+                         aad.size()) != 1) ||
       EVP_DecryptUpdate(context.get(), output.data(), &plaintext_length,
                         ciphertext.data(), encrypted_size) != 1 ||
       EVP_CIPHER_CTX_ctrl(context.get(), EVP_CTRL_AEAD_SET_TAG, 16,
@@ -153,6 +173,54 @@ bool ed25519_verify(const std::span<const std::uint8_t> public_key,
                               key.get()) == 1 &&
          EVP_DigestVerify(context.get(), signature.data(), signature.size(),
                           data.data(), data.size()) == 1;
+}
+
+std::optional<X25519> x25519_generate() {
+  PkeyContext context(EVP_PKEY_CTX_new_id(EVP_PKEY_X25519, nullptr),
+                      EVP_PKEY_CTX_free);
+  EVP_PKEY *raw_key = nullptr;
+  if (!context || EVP_PKEY_keygen_init(context.get()) != 1 ||
+      EVP_PKEY_keygen(context.get(), &raw_key) != 1)
+    return std::nullopt;
+  Pkey key(raw_key, EVP_PKEY_free);
+  X25519 result;
+  std::size_t length = 32;
+  result.private_key.resize(length);
+  result.public_key.resize(length);
+  if (EVP_PKEY_get_raw_private_key(key.get(), result.private_key.data(),
+                                   &length) != 1)
+    return std::nullopt;
+  result.private_key.resize(length);
+  length = 32;
+  if (EVP_PKEY_get_raw_public_key(key.get(), result.public_key.data(),
+                                  &length) != 1)
+    return std::nullopt;
+  result.public_key.resize(length);
+  return result;
+}
+
+std::optional<Bytes>
+x25519_shared(const std::span<const std::uint8_t> private_key,
+              const std::span<const std::uint8_t> public_key) {
+  Pkey private_pkey(EVP_PKEY_new_raw_private_key(EVP_PKEY_X25519, nullptr,
+                                                 private_key.data(),
+                                                 private_key.size()),
+                    EVP_PKEY_free);
+  Pkey public_pkey(EVP_PKEY_new_raw_public_key(EVP_PKEY_X25519, nullptr,
+                                               public_key.data(),
+                                               public_key.size()),
+                   EVP_PKEY_free);
+  PkeyContext context(EVP_PKEY_CTX_new(private_pkey.get(), nullptr),
+                      EVP_PKEY_CTX_free);
+  Bytes shared(32);
+  std::size_t length = shared.size();
+  if (!private_pkey || !public_pkey || !context ||
+      EVP_PKEY_derive_init(context.get()) != 1 ||
+      EVP_PKEY_derive_set_peer(context.get(), public_pkey.get()) != 1 ||
+      EVP_PKEY_derive(context.get(), shared.data(), &length) != 1)
+    return std::nullopt;
+  shared.resize(length);
+  return shared;
 }
 
 } // namespace acp::airplay

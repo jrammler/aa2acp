@@ -1,3 +1,6 @@
+#include "acp/airplay/bplist.hpp"
+#include "acp/airplay/control_cipher.hpp"
+#include "acp/airplay/crypto.hpp"
 #include "acp/airplay/rtsp.hpp"
 
 #include <array>
@@ -27,5 +30,39 @@ int main() {
   const auto decoded = acp::airplay::decode_tlv8(encoded);
   assert(decoded.at(3).size() == large.size());
   assert(decoded.at(6) == acp::airplay::Bytes{2});
+
+  const auto first = acp::airplay::x25519_generate();
+  const auto second = acp::airplay::x25519_generate();
+  assert(first && second);
+  const auto first_shared =
+      acp::airplay::x25519_shared(first->private_key, second->public_key);
+  const auto second_shared =
+      acp::airplay::x25519_shared(second->private_key, first->public_key);
+  assert(first_shared && first_shared == second_shared);
+
+  acp::airplay::Bytes control_key(32, 0x42);
+  acp::airplay::ControlCipher writer(control_key, control_key);
+  acp::airplay::ControlCipher reader(control_key, control_key);
+  const auto encrypted = writer.encrypt(acp::airplay::Bytes{'o', 'k'});
+  assert(encrypted);
+  acp::airplay::Bytes partial(encrypted->begin(), encrypted->begin() + 1);
+  assert(reader.decrypt_one(partial) == acp::airplay::Bytes{});
+  partial.insert(partial.end(), encrypted->begin() + 1, encrypted->end());
+  assert(reader.decrypt_one(partial) == acp::airplay::Bytes({'o', 'k'}));
+  assert(partial.empty());
+
+  const acp::airplay::PlistValue plist(acp::airplay::PlistValue::Dictionary{
+      {"name", "C++ bridge"},
+      {"streams",
+       acp::airplay::PlistValue::Array{acp::airplay::PlistValue::Dictionary{
+           {"type", acp::airplay::PlistValue(std::uint64_t{110})}}}},
+  });
+  const auto plist_bytes = acp::airplay::encode_bplist(plist);
+  const auto parsed_plist = acp::airplay::decode_bplist(plist_bytes);
+  assert(parsed_plist);
+  const auto *dictionary =
+      std::get_if<acp::airplay::PlistValue::Dictionary>(&parsed_plist->data);
+  assert(dictionary &&
+         std::get<std::string>(dictionary->at("name").data) == "C++ bridge");
   std::cout << "airplay RTSP tests passed\n";
 }
