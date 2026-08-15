@@ -228,8 +228,10 @@ std::string page(const acp::bridge::Config &config,
       "content=\"width=device-width,initial-scale=1\">"
       "<title>ACP-AA Bridge</title><style>body{font:16px "
       "sans-serif;max-width:38rem;margin:3rem auto;padding:0 1rem}"
-      "label,select,input{display:block;width:100%;box-sizing:border-box;"
+      "label,select,input:not([type=checkbox]){display:block;width:100%;box-"
+      "sizing:border-box;"
       "margin:.5rem 0}button{padding:.6rem 1rem;margin:.25rem 0}"
+      "input[type=checkbox]{width:auto;margin:0 .4rem 0 0}"
       ".hint{color:#555}.status{padding:.6rem;background:#eef7ee}</style></"
       "head><body data-scan-running=\"" +
       std::string(snapshot.bluetooth_scan_running ? "1" : "0") +
@@ -244,6 +246,7 @@ std::string page(const acp::bridge::Config &config,
               html_escape(snapshot.bluetooth_error) + "</p>";
   output +=
       "<form id=\"scan-form\" method=post action=\"/scan\"></form>"
+      "<form id=\"display-form\" method=post action=\"/display\"></form>"
       "<form method=post action=\"/config\"><div id=\"bluetooth-picker\">";
   if (snapshot.bluetooth_scan_running) {
     output += "<input type=hidden name=\"head_unit_mac\" value=\"\"><p "
@@ -266,8 +269,13 @@ std::string page(const acp::bridge::Config &config,
                 (device.paired ? " (paired)" : "") +
                 (device.connected ? " (connected)" : "") + "</option>";
     }
-    output += "</select></label><button form=\"scan-form\" type=submit>Rescan "
-              "Bluetooth devices</button>";
+    output +=
+        "</select></label><button form=\"scan-form\" type=submit>Rescan "
+        "Bluetooth devices</button><label><input form=\"display-form\" "
+        "type=checkbox name=\"show_unnamed\" value=\"1\"" +
+        std::string(snapshot.show_unnamed_bluetooth_devices ? " checked" : "") +
+        ">Show unnamed Bluetooth devices</label><button form=\"display-form\" "
+        "type=submit>Apply display filter</button>";
   }
   output +=
       "</div><label>Manual Bluetooth MAC<input name=\"manual_mac\" value=\"" +
@@ -288,11 +296,6 @@ std::string page(const acp::bridge::Config &config,
               " (configured)</option>";
   output +=
       "</select></label><button type=submit>Save configuration</button></form>"
-      "<form method=post action=\"/display\"><label><input type=checkbox "
-      "name=\"show_unnamed\" value=\"1\"" +
-      std::string(snapshot.show_unnamed_bluetooth_devices ? " checked" : "") +
-      "> Show unnamed Bluetooth devices</label><button type=submit>Apply "
-      "display filter</button></form>"
       "<script>(()=>{if(document.body.dataset.scanRunning!=='1')return;"
       "const phase=encodeURIComponent(document.body.dataset.scanPhase);"
       "const poll=async()=>{try{const response=await "
