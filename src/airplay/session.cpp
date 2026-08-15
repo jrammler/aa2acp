@@ -60,7 +60,8 @@ std::optional<acp::airplay::Response>
 send_encrypted(const int socket_fd, acp::airplay::ControlCipher &cipher,
                acp::airplay::Bytes &encrypted_buffer,
                const std::span<const std::uint8_t> plaintext,
-               const int timeout_seconds) {
+               const int timeout_seconds,
+               const std::function<bool()> &stop_requested) {
   const auto encrypted = cipher.encrypt(plaintext);
   if (!encrypted || !send_all(socket_fd, *encrypted))
     return std::nullopt;
@@ -68,7 +69,8 @@ send_encrypted(const int socket_fd, acp::airplay::ControlCipher &cipher,
   std::array<std::uint8_t, 4096> buffer{};
   const auto deadline =
       std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
-  while (std::chrono::steady_clock::now() < deadline) {
+  while (std::chrono::steady_clock::now() < deadline &&
+         (!stop_requested || !stop_requested())) {
     while (true) {
       const auto frame = cipher.decrypt_one(encrypted_buffer);
       if (!frame)
@@ -220,6 +222,7 @@ int acp::airplay::run_session(const SessionOptions &options) {
     const auto deadline = std::chrono::steady_clock::now() +
                           std::chrono::seconds(timeout_seconds);
     while (std::chrono::steady_clock::now() < deadline &&
+           (!options.stop_requested || !options.stop_requested()) &&
            !acp::airplay::complete_response_size(response_bytes)) {
       pollfd descriptor{socket_fd, POLLIN, 0};
       if (poll(&descriptor, 1, 100) <= 0)
@@ -266,6 +269,7 @@ int acp::airplay::run_session(const SessionOptions &options) {
     const auto m4_deadline = std::chrono::steady_clock::now() +
                              std::chrono::seconds(timeout_seconds);
     while (std::chrono::steady_clock::now() < m4_deadline &&
+           (!options.stop_requested || !options.stop_requested()) &&
            !acp::airplay::complete_response_size(response_bytes)) {
       pollfd descriptor{socket_fd, POLLIN, 0};
       if (poll(&descriptor, 1, 100) <= 0)
@@ -345,6 +349,7 @@ int acp::airplay::run_session(const SessionOptions &options) {
     const auto m6_deadline = std::chrono::steady_clock::now() +
                              std::chrono::seconds(timeout_seconds);
     while (std::chrono::steady_clock::now() < m6_deadline &&
+           (!options.stop_requested || !options.stop_requested()) &&
            !acp::airplay::complete_response_size(response_bytes)) {
       pollfd descriptor{socket_fd, POLLIN, 0};
       if (poll(&descriptor, 1, 100) <= 0)
@@ -427,6 +432,7 @@ int acp::airplay::run_session(const SessionOptions &options) {
   const auto verify_m2_deadline =
       std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
   while (std::chrono::steady_clock::now() < verify_m2_deadline &&
+         (!options.stop_requested || !options.stop_requested()) &&
          !acp::airplay::complete_response_size(response_bytes)) {
     pollfd descriptor{socket_fd, POLLIN, 0};
     if (poll(&descriptor, 1, 100) <= 0)
@@ -528,6 +534,7 @@ int acp::airplay::run_session(const SessionOptions &options) {
   const auto verify_m4_deadline =
       std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
   while (std::chrono::steady_clock::now() < verify_m4_deadline &&
+         (!options.stop_requested || !options.stop_requested()) &&
          !acp::airplay::complete_response_size(response_bytes)) {
     pollfd descriptor{socket_fd, POLLIN, 0};
     if (poll(&descriptor, 1, 100) <= 0)
@@ -575,7 +582,7 @@ int acp::airplay::run_session(const SessionOptions &options) {
       socket_fd, control, encrypted_read_buffer,
       acp::airplay::encode_request("POST", "/info", 6, info_body,
                                    "application/x-apple-binary-plist"),
-      timeout_seconds);
+      timeout_seconds, options.stop_requested);
   const auto info_plist = info_response
                               ? acp::airplay::decode_bplist(info_response->body)
                               : std::nullopt;
@@ -605,7 +612,7 @@ int acp::airplay::run_session(const SessionOptions &options) {
                      acp::airplay::encode_request(
                          "SETUP", "rtsp://127.0.0.1/stream", 7, session_body,
                          "application/x-apple-binary-plist"),
-                     timeout_seconds);
+                     timeout_seconds, options.stop_requested);
   const auto session_plist =
       session_response ? acp::airplay::decode_bplist(session_response->body)
                        : std::nullopt;
@@ -634,7 +641,7 @@ int acp::airplay::run_session(const SessionOptions &options) {
                      acp::airplay::encode_request(
                          "SETUP", "rtsp://127.0.0.1/stream", 8, screen_body,
                          "application/x-apple-binary-plist"),
-                     timeout_seconds);
+                     timeout_seconds, options.stop_requested);
   const auto screen_plist =
       screen_response ? acp::airplay::decode_bplist(screen_response->body)
                       : std::nullopt;
@@ -681,7 +688,7 @@ int acp::airplay::run_session(const SessionOptions &options) {
       socket_fd, control, encrypted_read_buffer,
       acp::airplay::encode_request("RECORD", "rtsp://127.0.0.1/stream", 9, {},
                                    "application/octet-stream"),
-      timeout_seconds);
+      timeout_seconds, options.stop_requested);
   if (!record_response || record_response->status != 200) {
     std::cerr << "Encrypted RECORD failed\n";
     close(socket_fd);
@@ -721,6 +728,11 @@ int acp::airplay::run_session(const SessionOptions &options) {
   std::uint64_t frame_counter{};
   std::size_t sent_frames{};
   for (const auto &nalu : nalus) {
+    if (options.stop_requested && options.stop_requested()) {
+      close(data_socket);
+      close(socket_fd);
+      return 1;
+    }
     if (nalu.empty() || ((nalu[0] & 0x1f) != 1 && (nalu[0] & 0x1f) != 5))
       continue;
     acp::airplay::Bytes frame;

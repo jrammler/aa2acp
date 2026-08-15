@@ -7,6 +7,7 @@
 #include <bluetooth/bluetooth.h>
 #include <bluetooth/rfcomm.h>
 
+#include <csignal>
 #include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -17,6 +18,10 @@
 #include <string>
 
 namespace {
+
+volatile std::sig_atomic_t shutdown_requested = 0;
+
+void request_shutdown(int) { shutdown_requested = 1; }
 
 bool send_all(const int socket_fd, const std::span<const std::uint8_t> bytes) {
   std::size_t offset = 0;
@@ -117,6 +122,11 @@ int main(int argc, char **argv) {
     return acp::iap2::leave_with_networkmanager(wifi_interface) ? 0 : 1;
   }
 
+  if (bridge) {
+    std::signal(SIGINT, request_shutdown);
+    std::signal(SIGTERM, request_shutdown);
+  }
+
   if (pair && !acp::iap2::ensure_bluez_pairing(address, timeout_seconds)) {
     return 1;
   }
@@ -162,7 +172,7 @@ int main(int argc, char **argv) {
 
   std::array<std::uint8_t, 1024> buffer{};
   while (std::chrono::steady_clock::now() < deadline &&
-         link.state() != acp::iap2::State::Dead &&
+         shutdown_requested == 0 && link.state() != acp::iap2::State::Dead &&
          (!bootstrap ||
           (carplay ? (!carplay_probe.done() && !carplay_probe.failed())
                    : (!session.done() && !session.failed()))) &&
@@ -189,6 +199,12 @@ int main(int argc, char **argv) {
     }
   }
   close(socket_fd);
+  if (shutdown_requested != 0) {
+    if (join_wifi)
+      acp::iap2::leave_with_networkmanager(wifi_interface);
+    std::cerr << "Bridge: shutdown requested during iAP2 phase\n";
+    return 128 + SIGTERM;
+  }
   if (bridge && carplay_probe.done()) {
     // In a Bluetooth-originated wireless CarPlay session, the StartSession
     // device identifier is the head unit's BT identity, not an IP address.
@@ -206,12 +222,16 @@ int main(int argc, char **argv) {
         .timeout_seconds = timeout_seconds,
         .video_path = video_path,
         .pairing_store = pairing_store,
+        .stop_requested = [] { return shutdown_requested != 0; },
     };
     const auto result = acp::airplay::run_session(options);
+    // The profile and credentials remain in NetworkManager for fast reconnect,
+    // but the car AP must not remain the active idle network.
+    const auto left_wifi = acp::iap2::leave_with_networkmanager(wifi_interface);
     if (result != 0) {
       std::cerr << "Bridge: AirPlay phase failed\n";
     }
-    return result;
+    return result != 0 || !left_wifi ? 1 : 0;
   }
   if (carplay) {
     return carplay_probe.done() ? 0 : 1;

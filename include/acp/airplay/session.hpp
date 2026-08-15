@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <string>
 
 namespace acp::airplay {
@@ -14,6 +15,7 @@ struct SessionOptions {
   int timeout_seconds{10};
   std::string video_path;
   std::string pairing_store;
+  std::function<bool()> stop_requested;
 };
 
 int run_session(const SessionOptions &options);

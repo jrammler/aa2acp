@@ -2,6 +2,9 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <poll.h>
+#include <signal.h>
+#include <sys/signalfd.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -68,6 +71,19 @@ int main(int argc, char **argv) {
   auto config = acp::bridge::load_config(config_path)
                     .value_or(acp::bridge::Config{
                         "", "wlan0", "/var/lib/acp-aa-bridge/airplay"});
+  sigset_t signals;
+  sigemptyset(&signals);
+  sigaddset(&signals, SIGINT);
+  sigaddset(&signals, SIGTERM);
+  if (sigprocmask(SIG_BLOCK, &signals, nullptr) != 0) {
+    std::cerr << "Unable to block shutdown signals\n";
+    return 1;
+  }
+  const int signal_fd = signalfd(-1, &signals, SFD_CLOEXEC);
+  if (signal_fd < 0) {
+    std::cerr << "Unable to create shutdown signal descriptor\n";
+    return 1;
+  }
   const int listener = socket(AF_INET, SOCK_STREAM, 0);
   int enabled = 1;
   setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &enabled, sizeof(enabled));
@@ -80,11 +96,26 @@ int main(int argc, char **argv) {
           0 ||
       listen(listener, 8) != 0) {
     std::cerr << "Unable to listen on 127.0.0.1:" << port << '\n';
+    close(signal_fd);
     return 1;
   }
   std::cout << "Bridge management UI listening on http://127.0.0.1:" << port
             << '\n';
   for (;;) {
+    pollfd descriptors[]{{listener, POLLIN, 0}, {signal_fd, POLLIN, 0}};
+    if (poll(descriptors, 2, -1) <= 0)
+      continue;
+    if ((descriptors[1].revents & POLLIN) != 0) {
+      signalfd_siginfo signal_info{};
+      const auto signal_bytes =
+          read(signal_fd, &signal_info, sizeof(signal_info));
+      if (signal_bytes != static_cast<ssize_t>(sizeof(signal_info)))
+        continue;
+      std::cout << "Bridge daemon: graceful shutdown requested\n";
+      break;
+    }
+    if ((descriptors[0].revents & POLLIN) == 0)
+      continue;
     const int client = accept(listener, nullptr, nullptr);
     if (client < 0)
       continue;
@@ -139,4 +170,7 @@ int main(int argc, char **argv) {
     }
     close(client);
   }
+  close(listener);
+  close(signal_fd);
+  std::cout << "Bridge daemon: stopped\n";
 }
