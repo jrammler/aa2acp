@@ -408,6 +408,10 @@ std::string page(const aa2acp::bridge::Config &config,
       "<h1>AA2ACP</h1><p>Configure the pinned CarPlay head unit.</p>";
   if (saved)
     output += "<p class=status>Configuration saved.</p>";
+  if (config.head_unit_mac.empty() || config.wifi_interface.empty())
+    output +=
+        "<p class=status>Android Auto is disabled until both settings are "
+        "saved.</p>";
   if (!snapshot.bluetooth_error.empty())
     output += "<p class=hint>Bluetooth refresh failed: " +
               html_escape(snapshot.bluetooth_error) + "</p>";
@@ -809,6 +813,21 @@ int run_wired_android_auto_receiver(
     const char *program_path,
     const std::function<aa2acp::bridge::Config()> &config_provider,
     const std::stop_token stop) {
+  bool configuration_warning_logged = false;
+  while (!stop.stop_requested()) {
+    const auto config = config_provider();
+    if (!config.head_unit_mac.empty() && !config.wifi_interface.empty())
+      break;
+    if (!configuration_warning_logged) {
+      std::cout << "Bridge daemon: wired Android Auto is disabled until a "
+                   "head-unit MAC and Wi-Fi interface are configured\n";
+      configuration_warning_logged = true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+  }
+  if (stop.stop_requested())
+    return 0;
+
   const auto video_socket =
       std::filesystem::path("/tmp") /
       ("aa2acp-video-" + std::to_string(getpid()) + ".sock");

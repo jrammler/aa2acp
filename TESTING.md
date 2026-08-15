@@ -47,7 +47,9 @@ nix develop --command bash -c '
 Open `http://127.0.0.1:8080`, scan if necessary, select the CarPlay head
 unit's Bluetooth address, select the Wi-Fi interface that should join its
 CarPlay network, and save. The selected device is pinned through the persistent
-AirPlay pairing record; a later connection validates that same head unit.
+AirPlay pairing record; a later connection validates that same head unit. The
+daemon does not start its Android Auto USB receiver until both settings are
+saved; if a phone was already connected, unplug and reconnect it after setup.
 
 Then plug in the Android phone. The normal successful sequence includes:
 
