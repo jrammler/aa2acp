@@ -408,7 +408,8 @@ std::string page(const aa2acp::bridge::Config &config,
       "\">"
       "<h1>AA2ACP</h1><p>Configure the pinned CarPlay head unit.</p>";
   if (saved)
-    output += "<p class=status>Configuration saved.</p>";
+    output += "<p class=status>Configuration saved.</p><script>history."
+              "replaceState(null,'',location.pathname);</script>";
   if (config.head_unit_mac.empty() || config.wifi_interface.empty())
     output +=
         "<p class=status>Android Auto is disabled until both settings are "
