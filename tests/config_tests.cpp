@@ -13,4 +13,7 @@ int main() {
          restored->wifi_interface == expected.wifi_interface &&
          restored->airplay_pairing_store == expected.airplay_pairing_store);
   std::filesystem::remove(path);
+  assert(acp::bridge::default_config_path().filename() == "config");
+  assert(acp::bridge::default_airplay_pairing_store().filename() ==
+         "airplay-pairing.bin");
 }

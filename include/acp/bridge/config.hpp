@@ -16,6 +16,9 @@ struct Config {
   std::filesystem::path airplay_pairing_store;
 };
 
+std::filesystem::path default_state_directory();
+std::filesystem::path default_config_path();
+std::filesystem::path default_airplay_pairing_store();
 std::optional<Config> load_config(const std::filesystem::path &path);
 bool save_config(const std::filesystem::path &path, const Config &config);
 

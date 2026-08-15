@@ -507,7 +507,6 @@ int run_carplay_session(const char *program_path,
       std::filesystem::path(program_path).parent_path() / "iap2-bt";
   std::vector<std::string> arguments{executable.string(),
                                      "--bridge",
-                                     "--pair",
                                      "--mac",
                                      config.head_unit_mac,
                                      "--wifi-interface",
@@ -635,7 +634,7 @@ int run_wired_android_auto_receiver(const char *program_path,
 } // namespace
 
 int main(int argc, char **argv) {
-  std::filesystem::path config_path = "/var/lib/acp-aa-bridge/config";
+  std::filesystem::path config_path = acp::bridge::default_config_path();
   int port = 8080;
   bool run_session = false;
   bool run_carplay = false;
@@ -658,7 +657,9 @@ int main(int argc, char **argv) {
   auto config =
       acp::bridge::load_config(config_path)
           .value_or(acp::bridge::Config{
-              "", "wlan0", "/var/lib/acp-aa-bridge/airplay-pairing.bin"});
+              "", "wlan0", acp::bridge::default_airplay_pairing_store()});
+  if (config.airplay_pairing_store.empty())
+    config.airplay_pairing_store = acp::bridge::default_airplay_pairing_store();
   refresh_bluetooth_inventory(management_state);
   refresh_wifi_inventory(management_state);
   std::jthread wifi_refresh_worker([](std::stop_token stop_token) {

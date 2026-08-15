@@ -135,7 +135,6 @@ int main(int argc, char **argv) {
   int timeout_seconds = 15;
   bool bootstrap = false;
   bool carplay = false;
-  bool pair = false;
   bool wifi_config = false;
   bool join_wifi = false;
   bool leave_wifi = false;
@@ -157,8 +156,6 @@ int main(int argc, char **argv) {
     } else if (argument == "--carplay") {
       bootstrap = true;
       carplay = true;
-    } else if (argument == "--pair") {
-      pair = true;
     } else if (argument == "--wifi-config") {
       bootstrap = true;
       carplay = true;
@@ -187,7 +184,7 @@ int main(int argc, char **argv) {
     } else {
       std::cerr
           << "usage: iap2-bt [--mac MAC] [--channel N] [--timeout SECONDS] "
-             "[--pair] [--bootstrap] [--carplay] [--wifi-config] [--join-wifi] "
+             "[--bootstrap] [--carplay] [--wifi-config] [--join-wifi] "
              "[--leave-wifi] [--wifi-interface IFACE] [--bridge] [--video "
              "H264_FILE] [--video-socket PATH] [--pairing-store FILE]\n";
       return 2;
@@ -203,7 +200,10 @@ int main(int argc, char **argv) {
     std::signal(SIGTERM, request_shutdown);
   }
 
-  if (pair && !acp::iap2::ensure_bluez_pairing(address, timeout_seconds)) {
+  // Every Bluetooth connection has a usable bond: this is an immediate no-op
+  // for an existing BlueZ record and performs discovery/pairing only when it
+  // is absent.
+  if (!acp::iap2::ensure_bluez_pairing(address, timeout_seconds)) {
     return 1;
   }
 

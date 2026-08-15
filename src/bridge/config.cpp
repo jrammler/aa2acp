@@ -3,6 +3,8 @@
 #include <fstream>
 #include <sys/stat.h>
 
+#include <cstdlib>
+
 namespace acp::bridge {
 namespace {
 
@@ -14,6 +16,23 @@ bool valid_key(const std::string_view key) {
 }
 
 } // namespace
+
+std::filesystem::path default_state_directory() {
+  if (const char *state_home = std::getenv("XDG_STATE_HOME");
+      state_home != nullptr && *state_home != '\0')
+    return std::filesystem::path(state_home) / "acp-aa-bridge";
+  if (const char *home = std::getenv("HOME"); home != nullptr && *home != '\0')
+    return std::filesystem::path(home) / ".local" / "state" / "acp-aa-bridge";
+  return std::filesystem::temp_directory_path() / "acp-aa-bridge";
+}
+
+std::filesystem::path default_config_path() {
+  return default_state_directory() / "config";
+}
+
+std::filesystem::path default_airplay_pairing_store() {
+  return default_state_directory() / "airplay-pairing.bin";
+}
 
 std::optional<Config> load_config(const std::filesystem::path &path) {
   std::ifstream stream(path);

@@ -56,6 +56,12 @@ AirPlay pairing record. It asks BlueZ to pair if needed, then preserves the
 BlueZ/NetworkManager records for fast reconnect while disconnecting test head unit's AP
 after the CarPlay session ends.
 
+By default its configuration is `~/.local/state/acp-aa-bridge/config` (or
+`$XDG_STATE_HOME/acp-aa-bridge/config`) and its AirPlay pairing identity is
+stored beside it as `airplay-pairing.bin`. `--config PATH` remains available
+for test instances; an omitted pairing-record override uses the same XDG state
+directory automatically.
+
 `iap2-tcp` establishes the phone-side iAP2 link layer over TCP. It repeatedly
 sends the iAP2 marker while detecting the accessory, negotiates LSP with
 SYN/ACK packets, and exits successfully after reaching `NORMAL`. Its
