@@ -71,6 +71,17 @@ void capture_bluetooth_scan(const char *command) {
   while (stream != nullptr &&
          fgets(line.data(), line.size(), stream) != nullptr) {
     std::string value(line.data());
+    for (std::size_t index = 0; index < value.size();) {
+      if (static_cast<unsigned char>(value[index]) == 0x1b &&
+          index + 1 < value.size() && value[index + 1] == '[') {
+        auto end = index + 2;
+        while (end < value.size() && !(value[end] >= '@' && value[end] <= '~'))
+          ++end;
+        value.erase(index, std::min(end + 1, value.size()) - index);
+      } else {
+        ++index;
+      }
+    }
     const auto marker = value.find("Device ");
     if (marker == std::string::npos || value.size() < marker + 24)
       continue;
@@ -82,8 +93,16 @@ void capture_bluetooth_scan(const char *command) {
         std::remove_if(name.begin(), name.end(),
                        [](unsigned char character) { return character < 32; }),
         name.end());
+    static constexpr std::array<std::string_view, 8> properties{
+        "RSSI",        "ManufacturerData", "AdvertisingFlags", "UUID",
+        "ServiceData", "Appearance",       "Modalias",         "TxPower"};
+    if (name.empty() || std::any_of(properties.begin(), properties.end(),
+                                    [&name](const auto property) {
+                                      return name.starts_with(property);
+                                    }))
+      continue;
     std::lock_guard lock(bluetooth_devices_mutex);
-    scanned_bluetooth_devices[mac] = name.empty() ? mac : name;
+    scanned_bluetooth_devices.try_emplace(mac, name);
   }
   if (stream != nullptr)
     pclose(stream);
@@ -283,9 +302,16 @@ int main(int argc, char **argv) {
       send_response(client, 200, "text/html; charset=utf-8", kPage);
     else if (request.starts_with("GET /api/config "))
       send_response(client, 200, "application/json", json(config));
-    else if (request.starts_with("GET /api/bluetooth-devices "))
+    else if (request.starts_with("GET /api/bluetooth-devices ")) {
+      bool empty = false;
+      {
+        std::lock_guard lock(bluetooth_devices_mutex);
+        empty = scanned_bluetooth_devices.empty();
+      }
+      if (empty && !bluetooth_scan_running)
+        capture_bluetooth_scan("bluetoothctl devices");
       send_response(client, 200, "application/json", scanned_bluetooth_json());
-    else if (request.starts_with("GET /api/bluetooth-scan ")) {
+    } else if (request.starts_with("GET /api/bluetooth-scan ")) {
       if (!bluetooth_scan_running.exchange(true)) {
         std::thread([] {
           capture_bluetooth_scan("bluetoothctl --timeout 30 scan le 2>&1");
