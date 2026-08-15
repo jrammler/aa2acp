@@ -11,11 +11,15 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <filesystem>
 #include <iostream>
+#include <map>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
@@ -25,7 +29,20 @@ extern char **environ;
 
 namespace {
 
-std::atomic_bool bluetooth_scan_running = false;
+struct ManagementSnapshot {
+  std::vector<acp::bridge::BluetoothDevice> bluetooth_devices;
+  std::vector<std::string> wifi_interfaces;
+  bool bluetooth_scan_running{};
+  std::string bluetooth_scan_phase{"idle"};
+  std::string bluetooth_error;
+};
+
+struct ManagementState {
+  std::mutex mutex;
+  ManagementSnapshot snapshot;
+};
+
+ManagementState management_state;
 
 std::string html_escape(const std::string &value) {
   std::string escaped;
@@ -121,11 +138,69 @@ std::vector<std::string> wifi_interfaces() {
   return interfaces;
 }
 
-std::string page(const acp::bridge::Config &config, const bool saved,
-                 const bool scan_requested) {
+void refresh_bluetooth_inventory(ManagementState &state) {
   std::string error;
   const auto devices = acp::bridge::list_bluez_devices(&error);
+  std::lock_guard lock(state.mutex);
+  if (!error.empty()) {
+    state.snapshot.bluetooth_error = error;
+    return;
+  }
+  std::map<std::string, acp::bridge::BluetoothDevice> merged;
+  for (const auto &device : state.snapshot.bluetooth_devices)
+    merged.emplace(device.address, device);
+  for (const auto &device : devices)
+    merged.insert_or_assign(device.address, device);
+  state.snapshot.bluetooth_devices.clear();
+  for (auto &[address, device] : merged)
+    state.snapshot.bluetooth_devices.push_back(std::move(device));
+  std::sort(state.snapshot.bluetooth_devices.begin(),
+            state.snapshot.bluetooth_devices.end(),
+            [](const auto &left, const auto &right) {
+              if (left.paired != right.paired)
+                return left.paired > right.paired;
+              return left.address < right.address;
+            });
+  state.snapshot.bluetooth_error.clear();
+}
+
+void refresh_wifi_inventory(ManagementState &state) {
   const auto interfaces = wifi_interfaces();
+  if (interfaces.empty())
+    return;
+  std::lock_guard lock(state.mutex);
+  state.snapshot.wifi_interfaces = interfaces;
+}
+
+ManagementSnapshot management_snapshot(ManagementState &state) {
+  std::lock_guard lock(state.mutex);
+  return state.snapshot;
+}
+
+void run_bluetooth_scan(ManagementState &state) {
+  const auto set_phase = [&state](const std::string &phase) {
+    std::lock_guard lock(state.mutex);
+    state.snapshot.bluetooth_scan_phase = phase;
+  };
+  const auto log = [](const std::string &message) {
+    std::cout << "Management Bluetooth: " << message << '\n';
+  };
+  set_phase("LE discovery in progress");
+  acp::bridge::discover_bluez_devices("le", 30, log);
+  refresh_bluetooth_inventory(state);
+  set_phase("classic discovery in progress");
+  acp::bridge::discover_bluez_devices("bredr", 15, log);
+  refresh_bluetooth_inventory(state);
+  {
+    std::lock_guard lock(state.mutex);
+    state.snapshot.bluetooth_scan_running = false;
+    state.snapshot.bluetooth_scan_phase = "last discovery completed";
+  }
+  std::cout << "Management Bluetooth: discovery finished\n";
+}
+
+std::string page(const acp::bridge::Config &config,
+                 const ManagementSnapshot &snapshot, const bool saved) {
   std::string output =
       "<!doctype html><html><head><meta name=\"viewport\" "
       "content=\"width=device-width,initial-scale=1\">"
@@ -138,20 +213,25 @@ std::string page(const acp::bridge::Config &config, const bool saved,
       "<h1>ACP-AA Bridge</h1><p>Configure the pinned CarPlay head unit.</p>";
   if (saved)
     output += "<p class=status>Configuration saved.</p>";
-  if (scan_requested || bluetooth_scan_running)
+  if (snapshot.bluetooth_scan_running)
+    output += "<p class=status>Bluetooth " +
+              html_escape(snapshot.bluetooth_scan_phase) +
+              ". This page is rendered from the last saved device and Wi-Fi "
+              "inventory; refreshing will not clear either list.</p>";
+  else if (snapshot.bluetooth_scan_phase != "idle")
+    output += "<p class=hint>Bluetooth " +
+              html_escape(snapshot.bluetooth_scan_phase) + ".</p>";
+  if (!snapshot.bluetooth_error.empty())
     output +=
-        "<p class=status>Bluetooth discovery is running in the background. "
-        "Refresh this page to see devices as BlueZ discovers them.</p>";
-  if (!error.empty())
-    output +=
-        "<p class=hint>BlueZ inventory unavailable: " + html_escape(error) +
-        "</p>";
+        "<p class=hint>BlueZ refresh failed; retaining the previous device "
+        "inventory: " +
+        html_escape(snapshot.bluetooth_error) + "</p>";
   output += "<form method=post action=\"/config\">"
             "<label>Known or discovered Bluetooth device<select "
             "name=\"head_unit_mac\">"
             "<option value=\"\">Keep the configured device (use manual field "
             "below)</option>";
-  for (const auto &device : devices) {
+  for (const auto &device : snapshot.bluetooth_devices) {
     const auto selected =
         device.address == config.head_unit_mac ? " selected" : "";
     auto name = device.name.empty() ? "Unnamed device" : device.name;
@@ -170,7 +250,7 @@ std::string page(const acp::bridge::Config &config, const bool saved,
             "\" placeholder=\"[redacted-device-address]\"></label>"
             "<label>Wi-Fi interface<select name=\"wifi_interface\">";
   bool current_interface_present = false;
-  for (const auto &interface : interfaces) {
+  for (const auto &interface : snapshot.wifi_interfaces) {
     const auto selected = interface == config.wifi_interface ? " selected" : "";
     current_interface_present =
         current_interface_present || interface == config.wifi_interface;
@@ -184,11 +264,11 @@ std::string page(const acp::bridge::Config &config, const bool saved,
   output +=
       "</select></label><button type=submit>Save configuration</button></form>"
       "<form method=post action=\"/scan\"><button type=submit" +
-      std::string(bluetooth_scan_running ? " disabled" : "") +
+      std::string(snapshot.bluetooth_scan_running ? " disabled" : "") +
       ">Scan Bluetooth devices (LE, then classic)</button></form>"
-      "<p class=hint>Discovery runs independently of the web request, so "
-      "reloading this page remains responsive. The Wi-Fi list is always "
-      "rendered with the page.</p></body></html>";
+      "<p class=hint>Discovery and NetworkManager refreshes update daemon "
+      "state in background workers. HTTP requests only render a state "
+      "snapshot.</p></body></html>";
   return output;
 }
 
@@ -264,6 +344,15 @@ int main(int argc, char **argv) {
       acp::bridge::load_config(config_path)
           .value_or(acp::bridge::Config{
               "", "wlan0", "/var/lib/acp-aa-bridge/airplay-pairing.bin"});
+  refresh_bluetooth_inventory(management_state);
+  refresh_wifi_inventory(management_state);
+  std::jthread wifi_refresh_worker([](std::stop_token stop_token) {
+    while (!stop_token.stop_requested()) {
+      refresh_wifi_inventory(management_state);
+      for (int count = 0; count < 20 && !stop_token.stop_requested(); ++count)
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+  });
   sigset_t signals;
   sigemptyset(&signals);
   sigaddset(&signals, SIGINT);
@@ -348,25 +437,27 @@ int main(int argc, char **argv) {
         split == std::string::npos ? "" : request.substr(split + 4);
     if (request.starts_with("GET / ") || request.starts_with("GET /?")) {
       const bool saved = request.find("saved=1") != std::string::npos;
-      std::cout << "Management: GET / ("
-                << acp::bridge::list_bluez_devices().size()
-                << " BlueZ devices)\n";
+      const auto snapshot = management_snapshot(management_state);
+      std::cout << "Management: GET / (" << snapshot.bluetooth_devices.size()
+                << " cached Bluetooth devices, "
+                << snapshot.wifi_interfaces.size()
+                << " cached Wi-Fi interfaces)\n";
       send_response(client, 200, "text/html; charset=utf-8",
-                    page(config, saved, false));
+                    page(config, snapshot, saved));
     } else if (request.starts_with("POST /scan ")) {
       std::cout << "Management: Bluetooth scan requested\n";
-      if (!bluetooth_scan_running.exchange(true)) {
-        std::thread([] {
-          const auto log = [](const std::string &message) {
-            std::cout << "Management Bluetooth: " << message << '\n';
-          };
-          acp::bridge::discover_bluez_devices("le", 30, log);
-          acp::bridge::discover_bluez_devices("bredr", 15, log);
-          bluetooth_scan_running = false;
-          std::cout << "Management Bluetooth: discovery finished\n";
-        }).detach();
+      bool start_scan = false;
+      {
+        std::lock_guard lock(management_state.mutex);
+        if (!management_state.snapshot.bluetooth_scan_running) {
+          management_state.snapshot.bluetooth_scan_running = true;
+          management_state.snapshot.bluetooth_scan_phase = "queued";
+          start_scan = true;
+        }
       }
-      send_response(client, 303, "text/plain", "", "Location: /?scan=1\r\n");
+      if (start_scan)
+        std::thread(run_bluetooth_scan, std::ref(management_state)).detach();
+      send_response(client, 303, "text/plain", "", "Location: /\r\n");
     } else if (request.starts_with("POST /config ")) {
       const auto manual = form_field(body, "manual_mac");
       const auto selected = form_field(body, "head_unit_mac");
