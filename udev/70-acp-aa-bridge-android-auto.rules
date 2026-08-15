@@ -1,0 +1,13 @@
+# Android Auto uses Android Open Accessory Protocol (AOAP). An Android phone
+# initially exposes its normal USB gadget, then re-enumerates as 18d1:2d00 or
+# 18d1:2d01. The bridge needs read/write access across both enumerations.
+#
+# The bridge service account, and developer accounts that run the diagnostic,
+# must belong to the plugdev group. These IDs are the Nothing phone used for
+# development: its pre-AOAP gadget is 18d1:4ee1 and it becomes 18d1:2d00.
+# Add a similarly specific pair for each validated phone. A production image
+# can deliberately choose a broader policy once its service account is locked
+# down appropriately.
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="18d1", ATTR{idProduct}=="4ee1", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="18d1", ATTR{idProduct}=="2d00", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="18d1", ATTR{idProduct}=="2d01", MODE="0660", GROUP="plugdev", TAG+="uaccess"

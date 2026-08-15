@@ -15,6 +15,22 @@ transport, and report phone disconnects. `bridge-daemon --run` owns that same
 receiver in service mode. `--run-carplay` preserves the old direct-CarPlay
 diagnostic mode.
 
+The process needs read/write access to the phone's USB device node. Install the
+provided udev rule once (and ensure the service/developer user belongs to
+`plugdev`):
+
+```bash
+sudo install -Dm644 pi-bridge/udev/70-acp-aa-bridge-android-auto.rules \
+  /etc/udev/rules.d/70-acp-aa-bridge-android-auto.rules
+sudo udevadm control --reload
+sudo udevadm trigger --subsystem-match=usb --attr-match=idVendor=18d1
+```
+
+The checked-in development rule covers this phone's initial `18d1:4ee1` gadget
+and later AOAP `18d1:2d00`/`18d1:2d01` device, so it survives the mandatory
+re-enumeration. Add similarly specific IDs for another phone; a broader rule
+is an appliance-image security decision, not a developer-machine default.
+
 ```bash
 nix develop --command ./pi-bridge/build/android-auto-usb
 # Service-mode receiver; stop with SIGTERM/SIGINT:
