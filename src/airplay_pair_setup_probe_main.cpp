@@ -1,6 +1,7 @@
 #include "acp/airplay/bplist.hpp"
 #include "acp/airplay/control_cipher.hpp"
 #include "acp/airplay/crypto.hpp"
+#include "acp/airplay/pairing_store.hpp"
 #include "acp/airplay/rtsp.hpp"
 #include "acp/airplay/srp.hpp"
 
@@ -189,6 +190,7 @@ int main(int argc, char **argv) {
   std::string host = "10.10.0.1";
   std::string port = "7000";
   std::string video_path;
+  std::string pairing_store;
   int timeout_seconds = 10;
   for (int index = 1; index < argc; ++index) {
     const std::string argument = argv[index];
@@ -200,9 +202,12 @@ int main(int argc, char **argv) {
       timeout_seconds = std::stoi(argv[++index]);
     else if (argument == "--video" && index + 1 < argc)
       video_path = argv[++index];
+    else if (argument == "--pairing-store" && index + 1 < argc)
+      pairing_store = argv[++index];
     else {
       std::cerr << "usage: airplay-pair-setup-probe [--host HOST] [--port "
-                   "PORT] [--timeout SECONDS] [--video H264_FILE]\n";
+                   "PORT] [--timeout SECONDS] [--video H264_FILE] "
+                   "[--pairing-store FILE]\n";
       return 2;
     }
   }
@@ -211,193 +216,215 @@ int main(int argc, char **argv) {
     std::cerr << "Unable to connect to AirPlay " << host << ':' << port << '\n';
     return 1;
   }
-  const auto m1 = acp::airplay::encode_tlv8({{0x06, {1}}, {0x00, {0}}});
-  const auto request = acp::airplay::encode_request(
-      "POST", "/pair-setup", 1, m1, "application/pairing+tlv8");
-  if (!send_all(socket_fd, request)) {
-    std::cerr << "Unable to send Pair-Setup M1\n";
-    close(socket_fd);
-    return 1;
-  }
+  acp::airplay::PairingRecord pairing;
   std::vector<std::uint8_t> response_bytes;
   std::array<std::uint8_t, 4096> buffer{};
-  const auto deadline =
-      std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
-  while (std::chrono::steady_clock::now() < deadline &&
-         !acp::airplay::complete_response_size(response_bytes)) {
-    pollfd descriptor{socket_fd, POLLIN, 0};
-    if (poll(&descriptor, 1, 100) <= 0)
-      continue;
-    const auto count = recv(socket_fd, buffer.data(), buffer.size(), 0);
-    if (count <= 0)
-      break;
-    response_bytes.insert(response_bytes.end(), buffer.begin(),
-                          buffer.begin() + count);
+  if (!pairing_store.empty()) {
+    const auto stored = acp::airplay::load_pairing_record(pairing_store);
+    if (stored) {
+      pairing = *stored;
+      std::cout << "AirPlay: loaded persistent pairing identity\n";
+    }
   }
-  const auto response = acp::airplay::parse_response(response_bytes);
-  if (!response || response->status != 200) {
-    std::cerr << "Pair-Setup M1 did not receive RTSP 200\n";
-    return 1;
-  }
-  const auto fields = acp::airplay::decode_tlv8(response->body);
-  const auto state = fields.find(0x06);
-  const auto salt = fields.find(0x02);
-  const auto public_key = fields.find(0x03);
-  if (state == fields.end() || state->second != acp::airplay::Bytes{2} ||
-      salt == fields.end() || public_key == fields.end()) {
-    std::cerr << "Pair-Setup M2 is missing state=2, salt, or SRP public key\n";
-    return 1;
-  }
-  std::cout << "AirPlay: Pair-Setup M2 received (salt=" << salt->second.size()
-            << "B, SRP public key=" << public_key->second.size() << "B)\n";
-  acp::airplay::SrpClient srp;
-  if (!srp.process_challenge(salt->second, public_key->second)) {
-    std::cerr << "Unable to process Pair-Setup SRP challenge\n";
-    close(socket_fd);
-    return 1;
-  }
-  const auto m3 = acp::airplay::encode_tlv8(
-      {{0x06, {3}}, {0x03, srp.public_key()}, {0x04, srp.client_proof()}});
-  const auto m3_request = acp::airplay::encode_request(
-      "POST", "/pair-setup", 2, m3, "application/pairing+tlv8");
-  if (!send_all(socket_fd, m3_request)) {
-    std::cerr << "Unable to send Pair-Setup M3\n";
-    close(socket_fd);
-    return 1;
-  }
-  response_bytes.clear();
-  const auto m4_deadline =
-      std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
-  while (std::chrono::steady_clock::now() < m4_deadline &&
-         !acp::airplay::complete_response_size(response_bytes)) {
-    pollfd descriptor{socket_fd, POLLIN, 0};
-    if (poll(&descriptor, 1, 100) <= 0)
-      continue;
-    const auto count = recv(socket_fd, buffer.data(), buffer.size(), 0);
-    if (count <= 0)
-      break;
-    response_bytes.insert(response_bytes.end(), buffer.begin(),
-                          buffer.begin() + count);
-  }
-  const auto m4_response = acp::airplay::parse_response(response_bytes);
-  if (!m4_response || m4_response->status != 200) {
-    std::cerr << "Pair-Setup M3 did not receive RTSP 200\n";
-    return 1;
-  }
-  const auto m4_fields = acp::airplay::decode_tlv8(m4_response->body);
-  const auto m4_state = m4_fields.find(0x06);
-  const auto server_proof = m4_fields.find(0x04);
-  if (m4_state == m4_fields.end() ||
-      m4_state->second != acp::airplay::Bytes{4} ||
-      server_proof == m4_fields.end() ||
-      !srp.verify_server(server_proof->second)) {
-    std::cerr << "Pair-Setup M4 server proof validation failed\n";
-    return 1;
-  }
-  std::cout << "AirPlay: Pair-Setup M4 server proof validated\n";
+  if (pairing.controller.private_key.empty()) {
+    const auto m1 = acp::airplay::encode_tlv8({{0x06, {1}}, {0x00, {0}}});
+    const auto request = acp::airplay::encode_request(
+        "POST", "/pair-setup", 1, m1, "application/pairing+tlv8");
+    if (!send_all(socket_fd, request)) {
+      std::cerr << "Unable to send Pair-Setup M1\n";
+      close(socket_fd);
+      return 1;
+    }
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::seconds(timeout_seconds);
+    while (std::chrono::steady_clock::now() < deadline &&
+           !acp::airplay::complete_response_size(response_bytes)) {
+      pollfd descriptor{socket_fd, POLLIN, 0};
+      if (poll(&descriptor, 1, 100) <= 0)
+        continue;
+      const auto count = recv(socket_fd, buffer.data(), buffer.size(), 0);
+      if (count <= 0)
+        break;
+      response_bytes.insert(response_bytes.end(), buffer.begin(),
+                            buffer.begin() + count);
+    }
+    const auto response = acp::airplay::parse_response(response_bytes);
+    if (!response || response->status != 200) {
+      std::cerr << "Pair-Setup M1 did not receive RTSP 200\n";
+      return 1;
+    }
+    const auto fields = acp::airplay::decode_tlv8(response->body);
+    const auto state = fields.find(0x06);
+    const auto salt = fields.find(0x02);
+    const auto public_key = fields.find(0x03);
+    if (state == fields.end() || state->second != acp::airplay::Bytes{2} ||
+        salt == fields.end() || public_key == fields.end()) {
+      std::cerr
+          << "Pair-Setup M2 is missing state=2, salt, or SRP public key\n";
+      return 1;
+    }
+    std::cout << "AirPlay: Pair-Setup M2 received (salt=" << salt->second.size()
+              << "B, SRP public key=" << public_key->second.size() << "B)\n";
+    acp::airplay::SrpClient srp;
+    if (!srp.process_challenge(salt->second, public_key->second)) {
+      std::cerr << "Unable to process Pair-Setup SRP challenge\n";
+      close(socket_fd);
+      return 1;
+    }
+    const auto m3 = acp::airplay::encode_tlv8(
+        {{0x06, {3}}, {0x03, srp.public_key()}, {0x04, srp.client_proof()}});
+    const auto m3_request = acp::airplay::encode_request(
+        "POST", "/pair-setup", 2, m3, "application/pairing+tlv8");
+    if (!send_all(socket_fd, m3_request)) {
+      std::cerr << "Unable to send Pair-Setup M3\n";
+      close(socket_fd);
+      return 1;
+    }
+    response_bytes.clear();
+    const auto m4_deadline = std::chrono::steady_clock::now() +
+                             std::chrono::seconds(timeout_seconds);
+    while (std::chrono::steady_clock::now() < m4_deadline &&
+           !acp::airplay::complete_response_size(response_bytes)) {
+      pollfd descriptor{socket_fd, POLLIN, 0};
+      if (poll(&descriptor, 1, 100) <= 0)
+        continue;
+      const auto count = recv(socket_fd, buffer.data(), buffer.size(), 0);
+      if (count <= 0)
+        break;
+      response_bytes.insert(response_bytes.end(), buffer.begin(),
+                            buffer.begin() + count);
+    }
+    const auto m4_response = acp::airplay::parse_response(response_bytes);
+    if (!m4_response || m4_response->status != 200) {
+      std::cerr << "Pair-Setup M3 did not receive RTSP 200\n";
+      return 1;
+    }
+    const auto m4_fields = acp::airplay::decode_tlv8(m4_response->body);
+    const auto m4_state = m4_fields.find(0x06);
+    const auto server_proof = m4_fields.find(0x04);
+    if (m4_state == m4_fields.end() ||
+        m4_state->second != acp::airplay::Bytes{4} ||
+        server_proof == m4_fields.end() ||
+        !srp.verify_server(server_proof->second)) {
+      std::cerr << "Pair-Setup M4 server proof validation failed\n";
+      return 1;
+    }
+    std::cout << "AirPlay: Pair-Setup M4 server proof validated\n";
 
-  const auto encryption_key =
-      acp::airplay::hkdf_sha512(srp.session_key(), "Pair-Setup-Encrypt-Salt",
-                                "Pair-Setup-Encrypt-Info", 32);
-  const auto controller = acp::airplay::ed25519_generate();
-  if (encryption_key.size() != 32 || !controller) {
-    std::cerr << "Unable to create Pair-Setup controller identity\n";
-    close(socket_fd);
-    return 1;
+    const auto encryption_key =
+        acp::airplay::hkdf_sha512(srp.session_key(), "Pair-Setup-Encrypt-Salt",
+                                  "Pair-Setup-Encrypt-Info", 32);
+    const auto controller = acp::airplay::ed25519_generate();
+    if (encryption_key.size() != 32 || !controller) {
+      std::cerr << "Unable to create Pair-Setup controller identity\n";
+      close(socket_fd);
+      return 1;
+    }
+    constexpr std::string_view controller_id =
+        "85A6B4F2-3C8D-4E1A-9F7B-2D5E6C8A0B3C";
+    const auto controller_sign_key = acp::airplay::hkdf_sha512(
+        srp.session_key(), "Pair-Setup-Controller-Sign-Salt",
+        "Pair-Setup-Controller-Sign-Info", 32);
+    acp::airplay::Bytes controller_signed(controller_sign_key);
+    controller_signed.insert(controller_signed.end(), controller_id.begin(),
+                             controller_id.end());
+    controller_signed.insert(controller_signed.end(),
+                             controller->public_key.begin(),
+                             controller->public_key.end());
+    const auto controller_signature =
+        acp::airplay::ed25519_sign(controller->private_key, controller_signed);
+    if (controller_sign_key.size() != 32 || !controller_signature) {
+      std::cerr << "Unable to sign Pair-Setup controller identity\n";
+      close(socket_fd);
+      return 1;
+    }
+    const auto inner = acp::airplay::encode_tlv8({
+        {0x01, {controller_id.begin(), controller_id.end()}},
+        {0x03, controller->public_key},
+        {0x0a, *controller_signature},
+    });
+    const auto encrypted =
+        acp::airplay::seal(encryption_key, "PS-Msg05", inner);
+    if (!encrypted) {
+      std::cerr << "Unable to encrypt Pair-Setup M5\n";
+      close(socket_fd);
+      return 1;
+    }
+    const auto m5 =
+        acp::airplay::encode_tlv8({{0x06, {5}}, {0x05, *encrypted}});
+    const auto m5_request = acp::airplay::encode_request(
+        "POST", "/pair-setup", 3, m5, "application/pairing+tlv8");
+    if (!send_all(socket_fd, m5_request)) {
+      std::cerr << "Unable to send Pair-Setup M5\n";
+      close(socket_fd);
+      return 1;
+    }
+    response_bytes.clear();
+    const auto m6_deadline = std::chrono::steady_clock::now() +
+                             std::chrono::seconds(timeout_seconds);
+    while (std::chrono::steady_clock::now() < m6_deadline &&
+           !acp::airplay::complete_response_size(response_bytes)) {
+      pollfd descriptor{socket_fd, POLLIN, 0};
+      if (poll(&descriptor, 1, 100) <= 0)
+        continue;
+      const auto count = recv(socket_fd, buffer.data(), buffer.size(), 0);
+      if (count <= 0)
+        break;
+      response_bytes.insert(response_bytes.end(), buffer.begin(),
+                            buffer.begin() + count);
+    }
+    const auto m6_response = acp::airplay::parse_response(response_bytes);
+    if (!m6_response || m6_response->status != 200) {
+      std::cerr << "Pair-Setup M5 did not receive RTSP 200\n";
+      return 1;
+    }
+    const auto m6_fields = acp::airplay::decode_tlv8(m6_response->body);
+    const auto m6_state = m6_fields.find(0x06);
+    const auto m6_encrypted = m6_fields.find(0x05);
+    const auto decrypted = m6_encrypted == m6_fields.end()
+                               ? std::nullopt
+                               : acp::airplay::open(encryption_key, "PS-Msg06",
+                                                    m6_encrypted->second);
+    if (m6_state == m6_fields.end() ||
+        m6_state->second != acp::airplay::Bytes{6} || !decrypted) {
+      std::cerr << "Pair-Setup M6 validation failed\n";
+      return 1;
+    }
+    const auto accessory = acp::airplay::decode_tlv8(*decrypted);
+    const auto accessory_id = accessory.find(0x01);
+    const auto accessory_key = accessory.find(0x03);
+    const auto accessory_signature = accessory.find(0x0a);
+    const auto accessory_sign_key = acp::airplay::hkdf_sha512(
+        srp.session_key(), "Pair-Setup-Accessory-Sign-Salt",
+        "Pair-Setup-Accessory-Sign-Info", 32);
+    if (accessory_id == accessory.end() || accessory_key == accessory.end() ||
+        accessory_signature == accessory.end() ||
+        accessory_sign_key.size() != 32) {
+      std::cerr << "Pair-Setup M6 identity is incomplete\n";
+      return 1;
+    }
+    acp::airplay::Bytes accessory_signed(accessory_sign_key);
+    accessory_signed.insert(accessory_signed.end(),
+                            accessory_id->second.begin(),
+                            accessory_id->second.end());
+    accessory_signed.insert(accessory_signed.end(),
+                            accessory_key->second.begin(),
+                            accessory_key->second.end());
+    if (!acp::airplay::ed25519_verify(accessory_key->second, accessory_signed,
+                                      accessory_signature->second)) {
+      std::cerr << "Pair-Setup M6 accessory signature validation failed\n";
+      close(socket_fd);
+      return 1;
+    }
+    std::cout << "AirPlay: Pair-Setup M6 accessory identity validated\n";
+    pairing = {std::string(controller_id), *controller, accessory_key->second};
+    if (!pairing_store.empty() &&
+        !acp::airplay::save_pairing_record(pairing_store, pairing)) {
+      std::cerr << "Unable to save persistent AirPlay pairing\n";
+      close(socket_fd);
+      return 1;
+    }
   }
-  constexpr std::string_view controller_id =
-      "85A6B4F2-3C8D-4E1A-9F7B-2D5E6C8A0B3C";
-  const auto controller_sign_key = acp::airplay::hkdf_sha512(
-      srp.session_key(), "Pair-Setup-Controller-Sign-Salt",
-      "Pair-Setup-Controller-Sign-Info", 32);
-  acp::airplay::Bytes controller_signed(controller_sign_key);
-  controller_signed.insert(controller_signed.end(), controller_id.begin(),
-                           controller_id.end());
-  controller_signed.insert(controller_signed.end(),
-                           controller->public_key.begin(),
-                           controller->public_key.end());
-  const auto controller_signature =
-      acp::airplay::ed25519_sign(controller->private_key, controller_signed);
-  if (controller_sign_key.size() != 32 || !controller_signature) {
-    std::cerr << "Unable to sign Pair-Setup controller identity\n";
-    close(socket_fd);
-    return 1;
-  }
-  const auto inner = acp::airplay::encode_tlv8({
-      {0x01, {controller_id.begin(), controller_id.end()}},
-      {0x03, controller->public_key},
-      {0x0a, *controller_signature},
-  });
-  const auto encrypted = acp::airplay::seal(encryption_key, "PS-Msg05", inner);
-  if (!encrypted) {
-    std::cerr << "Unable to encrypt Pair-Setup M5\n";
-    close(socket_fd);
-    return 1;
-  }
-  const auto m5 = acp::airplay::encode_tlv8({{0x06, {5}}, {0x05, *encrypted}});
-  const auto m5_request = acp::airplay::encode_request(
-      "POST", "/pair-setup", 3, m5, "application/pairing+tlv8");
-  if (!send_all(socket_fd, m5_request)) {
-    std::cerr << "Unable to send Pair-Setup M5\n";
-    close(socket_fd);
-    return 1;
-  }
-  response_bytes.clear();
-  const auto m6_deadline =
-      std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
-  while (std::chrono::steady_clock::now() < m6_deadline &&
-         !acp::airplay::complete_response_size(response_bytes)) {
-    pollfd descriptor{socket_fd, POLLIN, 0};
-    if (poll(&descriptor, 1, 100) <= 0)
-      continue;
-    const auto count = recv(socket_fd, buffer.data(), buffer.size(), 0);
-    if (count <= 0)
-      break;
-    response_bytes.insert(response_bytes.end(), buffer.begin(),
-                          buffer.begin() + count);
-  }
-  const auto m6_response = acp::airplay::parse_response(response_bytes);
-  if (!m6_response || m6_response->status != 200) {
-    std::cerr << "Pair-Setup M5 did not receive RTSP 200\n";
-    return 1;
-  }
-  const auto m6_fields = acp::airplay::decode_tlv8(m6_response->body);
-  const auto m6_state = m6_fields.find(0x06);
-  const auto m6_encrypted = m6_fields.find(0x05);
-  const auto decrypted = m6_encrypted == m6_fields.end()
-                             ? std::nullopt
-                             : acp::airplay::open(encryption_key, "PS-Msg06",
-                                                  m6_encrypted->second);
-  if (m6_state == m6_fields.end() ||
-      m6_state->second != acp::airplay::Bytes{6} || !decrypted) {
-    std::cerr << "Pair-Setup M6 validation failed\n";
-    return 1;
-  }
-  const auto accessory = acp::airplay::decode_tlv8(*decrypted);
-  const auto accessory_id = accessory.find(0x01);
-  const auto accessory_key = accessory.find(0x03);
-  const auto accessory_signature = accessory.find(0x0a);
-  const auto accessory_sign_key = acp::airplay::hkdf_sha512(
-      srp.session_key(), "Pair-Setup-Accessory-Sign-Salt",
-      "Pair-Setup-Accessory-Sign-Info", 32);
-  if (accessory_id == accessory.end() || accessory_key == accessory.end() ||
-      accessory_signature == accessory.end() ||
-      accessory_sign_key.size() != 32) {
-    std::cerr << "Pair-Setup M6 identity is incomplete\n";
-    return 1;
-  }
-  acp::airplay::Bytes accessory_signed(accessory_sign_key);
-  accessory_signed.insert(accessory_signed.end(), accessory_id->second.begin(),
-                          accessory_id->second.end());
-  accessory_signed.insert(accessory_signed.end(), accessory_key->second.begin(),
-                          accessory_key->second.end());
-  if (!acp::airplay::ed25519_verify(accessory_key->second, accessory_signed,
-                                    accessory_signature->second)) {
-    std::cerr << "Pair-Setup M6 accessory signature validation failed\n";
-    close(socket_fd);
-    return 1;
-  }
-  std::cout << "AirPlay: Pair-Setup M6 accessory identity validated\n";
 
   const auto ephemeral = acp::airplay::x25519_generate();
   if (!ephemeral) {
@@ -474,7 +501,7 @@ int main(int argc, char **argv) {
   verify_accessory_signed.insert(verify_accessory_signed.end(),
                                  ephemeral->public_key.begin(),
                                  ephemeral->public_key.end());
-  if (!acp::airplay::ed25519_verify(accessory_key->second,
+  if (!acp::airplay::ed25519_verify(pairing.accessory_public_key,
                                     verify_accessory_signed,
                                     verify_accessory_signature->second)) {
     std::cerr << "Pair-Verify M2 accessory signature validation failed\n";
@@ -483,19 +510,21 @@ int main(int argc, char **argv) {
   }
   acp::airplay::Bytes verify_controller_signed(ephemeral->public_key);
   verify_controller_signed.insert(verify_controller_signed.end(),
-                                  controller_id.begin(), controller_id.end());
+                                  pairing.controller_id.begin(),
+                                  pairing.controller_id.end());
   verify_controller_signed.insert(verify_controller_signed.end(),
                                   peer_ephemeral->second.begin(),
                                   peer_ephemeral->second.end());
   const auto verify_controller_signature = acp::airplay::ed25519_sign(
-      controller->private_key, verify_controller_signed);
+      pairing.controller.private_key, verify_controller_signed);
   if (!verify_controller_signature) {
     std::cerr << "Unable to sign Pair-Verify M3\n";
     close(socket_fd);
     return 1;
   }
   const auto verify_m3_inner = acp::airplay::encode_tlv8(
-      {{0x01, {controller_id.begin(), controller_id.end()}},
+      {{0x01, acp::airplay::Bytes(pairing.controller_id.begin(),
+                                  pairing.controller_id.end())},
        {0x0a, *verify_controller_signature}});
   const auto verify_m3_encrypted =
       acp::airplay::seal(verify_key, "PV-Msg03", verify_m3_inner);
@@ -555,7 +584,7 @@ int main(int argc, char **argv) {
   const auto info_body =
       acp::airplay::encode_bplist(acp::airplay::PlistValue::Dictionary{
           {"name", acp::airplay::PlistValue("ACP-AA Bridge")},
-          {"deviceID", acp::airplay::PlistValue(controller_id.data())},
+          {"deviceID", acp::airplay::PlistValue(pairing.controller_id)},
           {"manufacturer", acp::airplay::PlistValue("ACP-AA Bridge")},
           {"model", acp::airplay::PlistValue("AA2ACP")},
           {"osVersion", acp::airplay::PlistValue("0.1")},
@@ -586,7 +615,7 @@ int main(int argc, char **argv) {
       acp::airplay::encode_bplist(acp::airplay::PlistValue::Dictionary{
           {"timingPort", acp::airplay::PlistValue(std::uint64_t{0})},
           {"name", acp::airplay::PlistValue("ACP-AA Bridge")},
-          {"deviceID", acp::airplay::PlistValue(controller_id.data())},
+          {"deviceID", acp::airplay::PlistValue(pairing.controller_id)},
           {"model", acp::airplay::PlistValue("AA2ACP")},
       });
   const auto session_response =

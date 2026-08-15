@@ -56,6 +56,7 @@ int connect_rfcomm(const std::string &address, const std::uint8_t channel) {
 
 bool run_airplay_probe(const std::string &program_path, const std::string &host,
                        const std::uint32_t port, const std::string &video_path,
+                       const std::string &pairing_store,
                        const int timeout_seconds) {
   const auto probe_path = (std::filesystem::path(program_path).parent_path() /
                            "airplay-pair-setup-probe")
@@ -70,6 +71,10 @@ bool run_airplay_probe(const std::string &program_path, const std::string &host,
   if (!video_path.empty()) {
     arguments.emplace_back("--video");
     arguments.push_back(video_path);
+  }
+  if (!pairing_store.empty()) {
+    arguments.emplace_back("--pairing-store");
+    arguments.push_back(pairing_store);
   }
   std::vector<char *> argv;
   for (auto &argument : arguments)
@@ -101,6 +106,7 @@ int main(int argc, char **argv) {
   bool leave_wifi = false;
   bool bridge = false;
   std::string video_path;
+  std::string pairing_store;
   std::string wifi_interface = "wlp15s0";
   for (int index = 1; index < argc; ++index) {
     const std::string argument = argv[index];
@@ -136,6 +142,8 @@ int main(int argc, char **argv) {
       bridge = true;
     } else if (argument == "--video" && index + 1 < argc) {
       video_path = argv[++index];
+    } else if (argument == "--pairing-store" && index + 1 < argc) {
+      pairing_store = argv[++index];
     } else if (argument == "--wifi-interface" && index + 1 < argc) {
       wifi_interface = argv[++index];
     } else {
@@ -143,7 +151,7 @@ int main(int argc, char **argv) {
           << "usage: iap2-bt [--mac MAC] [--channel N] [--timeout SECONDS] "
              "[--pair] [--bootstrap] [--carplay] [--wifi-config] [--join-wifi] "
              "[--leave-wifi] [--wifi-interface IFACE] [--bridge] [--video "
-             "H264_FILE]\n";
+             "H264_FILE] [--pairing-store FILE]\n";
       return 2;
     }
   }
@@ -237,7 +245,7 @@ int main(int argc, char **argv) {
               << carplay_probe.airplay_port() << '\n';
     const auto result =
         run_airplay_probe(argv[0], host, carplay_probe.airplay_port(),
-                          video_path, timeout_seconds);
+                          video_path, pairing_store, timeout_seconds);
     if (!result) {
       std::cerr << "Bridge: AirPlay phase failed\n";
     }
