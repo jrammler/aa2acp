@@ -1,6 +1,7 @@
 #include "acp/aa/wired_receiver.hpp"
 
 #include <aasdk/Channel/Control/ControlServiceChannel.hpp>
+#include <aasdk/Channel/MediaSink/Video/VideoMediaSinkService.hpp>
 #include <aasdk/Error/Error.hpp>
 #include <aasdk/Messenger/Cryptor.hpp>
 #include <aasdk/Messenger/MessageInStream.hpp>
@@ -30,6 +31,8 @@ namespace acp::aa {
 
 class ControlSession final
     : public aasdk::channel::control::IControlServiceChannelEventHandler,
+      public aasdk::channel::mediasink::video::
+          IVideoMediaSinkServiceEventHandler,
       public std::enable_shared_from_this<ControlSession> {
 public:
   using Callback = WiredReceiver::EventCallback;
@@ -58,8 +61,12 @@ public:
       control_ =
           std::make_shared<aasdk::channel::control::ControlServiceChannel>(
               strand_, messenger_);
+      video_ = std::make_shared<
+          aasdk::channel::mediasink::video::VideoMediaSinkService>(
+          strand_, messenger_, aasdk::messenger::ChannelId::MEDIA_SINK_VIDEO);
       send_version_request();
       receive_next();
+      receive_video_next();
     } catch (const aasdk::error::Error &error) {
       fail(error.what());
     }
@@ -112,6 +119,22 @@ public:
       override {
     aap_protobuf::service::control::message::ServiceDiscoveryResponse response;
     response.set_display_name("ACP-AA Bridge");
+    // Advertise the primary Android Auto projection channel. The next media
+    // milestone attaches a decoder/forwarder to this same channel; declaring
+    // it here lets the phone accept this as a projection-capable head unit.
+    auto *video_service = response.add_channels();
+    video_service->set_id(
+        static_cast<int>(aasdk::messenger::ChannelId::MEDIA_SINK_VIDEO));
+    auto *media_sink = video_service->mutable_media_sink_service();
+    media_sink->set_available_type(aap_protobuf::service::media::shared::
+                                       message::MEDIA_CODEC_VIDEO_H264_BP);
+    media_sink->set_available_while_in_call(true);
+    auto *video_config = media_sink->add_video_configs();
+    video_config->set_codec_resolution(
+        aap_protobuf::service::media::sink::message::VIDEO_1280x720);
+    video_config->set_frame_rate(
+        aap_protobuf::service::media::sink::message::VIDEO_FPS_30);
+    video_config->set_density(180);
     send([this, response](aasdk::channel::SendPromise::Pointer promise) {
       control_->sendServiceDiscoveryResponse(response, std::move(promise));
     });
@@ -162,6 +185,72 @@ public:
     fail(error.what());
   }
 
+  void onChannelOpenRequest(
+      const aap_protobuf::service::control::message::ChannelOpenRequest &)
+      override {
+    aap_protobuf::service::control::message::ChannelOpenResponse response;
+    response.set_status(aap_protobuf::shared::STATUS_SUCCESS);
+    send_video([this, response](aasdk::channel::SendPromise::Pointer promise) {
+      video_->sendChannelOpenResponse(response, std::move(promise));
+    });
+    receive_video_next();
+  }
+
+  void onMediaChannelSetupRequest(
+      const aap_protobuf::service::media::shared::message::Setup &request)
+      override {
+    if (request.type() != aap_protobuf::service::media::shared::message::
+                              MEDIA_CODEC_VIDEO_H264_BP) {
+      fail("phone requested an unsupported Android Auto video codec");
+      return;
+    }
+    aap_protobuf::service::media::shared::message::Config response;
+    response.set_status(
+        aap_protobuf::service::media::shared::message::Config::STATUS_READY);
+    response.set_max_unacked(1);
+    response.add_configuration_indices(0);
+    send_video([this, response](aasdk::channel::SendPromise::Pointer promise) {
+      video_->sendChannelSetupResponse(response, std::move(promise));
+    });
+    receive_video_next();
+  }
+
+  void onMediaChannelStartIndication(
+      const aap_protobuf::service::media::shared::message::Start &indication)
+      override {
+    video_session_id_ = indication.session_id();
+    receive_video_next();
+  }
+
+  void onMediaChannelStopIndication(
+      const aap_protobuf::service::media::shared::message::Stop &) override {
+    video_session_id_ = 0;
+    receive_video_next();
+  }
+
+  void onMediaWithTimestampIndication(
+      aasdk::messenger::Timestamp::ValueType,
+      const aasdk::common::DataConstBuffer &) override {
+    acknowledge_video_frame();
+  }
+
+  void onMediaIndication(const aasdk::common::DataConstBuffer &) override {
+    acknowledge_video_frame();
+  }
+
+  void onVideoFocusRequest(const aap_protobuf::service::media::video::message::
+                               VideoFocusRequestNotification &) override {
+    aap_protobuf::service::media::video::message::VideoFocusNotification
+        response;
+    response.set_focus(
+        aap_protobuf::service::media::video::message::VIDEO_FOCUS_PROJECTED);
+    response.set_unsolicited(false);
+    send_video([this, response](aasdk::channel::SendPromise::Pointer promise) {
+      video_->sendVideoFocusIndication(response, std::move(promise));
+    });
+    receive_video_next();
+  }
+
 private:
   void send_version_request() {
     send([this](auto promise) {
@@ -180,7 +269,24 @@ private:
                              const auto &error) { self->fail(error.what()); });
     sender(std::move(promise));
   }
+  template <typename Sender> void send_video(Sender sender) {
+    auto promise = aasdk::channel::SendPromise::defer(strand_);
+    promise->then([] {}, [self = shared_from_this()](
+                             const auto &error) { self->fail(error.what()); });
+    sender(std::move(promise));
+  }
   void receive_next() { control_->receive(shared_from_this()); }
+  void receive_video_next() { video_->receive(shared_from_this()); }
+  void acknowledge_video_frame() {
+    aap_protobuf::service::media::source::message::Ack acknowledgement;
+    acknowledgement.set_session_id(video_session_id_);
+    acknowledgement.set_ack(1);
+    send_video(
+        [this, acknowledgement](aasdk::channel::SendPromise::Pointer promise) {
+          video_->sendMediaAckIndication(acknowledgement, std::move(promise));
+        });
+    receive_video_next();
+  }
   void fail(const std::string &detail) {
     callback_({WiredReceiverEventType::error,
                "Android Auto control session: " + detail});
@@ -195,6 +301,8 @@ private:
   aasdk::messenger::ICryptor::Pointer cryptor_;
   aasdk::messenger::IMessenger::Pointer messenger_;
   aasdk::channel::control::IControlServiceChannel::Pointer control_;
+  aasdk::channel::mediasink::video::IVideoMediaSinkService::Pointer video_;
+  int32_t video_session_id_ = 0;
 };
 
 class WiredReceiver::Impl {
@@ -368,9 +476,6 @@ private:
           active_address_ = address;
           active_handle_ = std::move(handle);
           active_ = true;
-          emit({WiredReceiverEventType::aoap_transport_ready,
-                "AOAP transport ready on USB " + std::to_string(bus) + ":" +
-                    std::to_string(address)});
         });
   }
 
