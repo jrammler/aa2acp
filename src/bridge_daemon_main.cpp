@@ -3,6 +3,7 @@
 #include "acp/bridge/config.hpp"
 
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <signal.h>
@@ -678,24 +679,58 @@ int run_carplay_session(const char *program_path,
   for (auto &argument : arguments)
     argv.push_back(argument.data());
   argv.push_back(nullptr);
+  int output_pipe[2];
+  if (pipe2(output_pipe, O_CLOEXEC) != 0) {
+    std::cerr << "Bridge daemon: unable to capture CarPlay session output\n";
+    return 1;
+  }
+  posix_spawn_file_actions_t file_actions;
+  posix_spawn_file_actions_init(&file_actions);
+  posix_spawn_file_actions_adddup2(&file_actions, output_pipe[1],
+                                   STDOUT_FILENO);
+  posix_spawn_file_actions_adddup2(&file_actions, output_pipe[1],
+                                   STDERR_FILENO);
+  posix_spawn_file_actions_addclose(&file_actions, output_pipe[0]);
+  posix_spawn_file_actions_addclose(&file_actions, output_pipe[1]);
   posix_spawnattr_t attributes;
   posix_spawnattr_init(&attributes);
   short flags = POSIX_SPAWN_SETPGROUP;
   posix_spawnattr_setflags(&attributes, flags);
   posix_spawnattr_setpgroup(&attributes, 0);
   pid_t child{};
-  const auto spawn_result = posix_spawn(&child, argv.front(), nullptr,
+  const auto spawn_result = posix_spawn(&child, argv.front(), &file_actions,
                                         &attributes, argv.data(), environ);
   posix_spawnattr_destroy(&attributes);
+  posix_spawn_file_actions_destroy(&file_actions);
+  close(output_pipe[1]);
   if (spawn_result != 0) {
+    close(output_pipe[0]);
     std::cerr << "Bridge daemon: unable to start CarPlay session\n";
     return 1;
   }
+  auto forward_output = [&](const int timeout) {
+    pollfd descriptor{output_pipe[0], POLLIN, 0};
+    while (output_pipe[0] >= 0 && poll(&descriptor, 1, timeout) > 0) {
+      std::array<char, 4096> output{};
+      const auto count = read(output_pipe[0], output.data(), output.size());
+      if (count > 0) {
+        std::cout.write(output.data(), count);
+        std::cout.flush();
+        descriptor.revents = 0;
+        continue;
+      }
+      close(output_pipe[0]);
+      output_pipe[0] = -1;
+    }
+  };
   active_child = child;
   std::cout << "Bridge daemon: CarPlay session started\n";
   for (;;) {
+    forward_output(0);
     int status{};
     if (waitpid(child, &status, WNOHANG) == child) {
+      while (output_pipe[0] >= 0)
+        forward_output(100);
       active_child = -1;
       return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
     }
@@ -703,6 +738,8 @@ int run_carplay_session(const char *program_path,
       std::cout << "Bridge daemon: stopping active CarPlay session\n";
       kill(-child, SIGTERM);
       waitpid(child, &status, 0);
+      while (output_pipe[0] >= 0)
+        forward_output(100);
       active_child = -1;
       return 128 + SIGTERM;
     }
