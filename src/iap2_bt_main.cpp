@@ -24,10 +24,17 @@
 namespace {
 
 volatile std::sig_atomic_t shutdown_requested = 0;
-
 void request_shutdown(int) { shutdown_requested = 1; }
 
 void install_shutdown_handlers() {
+  sigset_t signals;
+  sigemptyset(&signals);
+  sigaddset(&signals, SIGINT);
+  sigaddset(&signals, SIGTERM);
+  // The bridge daemon blocks shutdown signals in its parent thread before
+  // spawning this worker.  Unblock them here so the handler can run.
+  sigprocmask(SIG_UNBLOCK, &signals, nullptr);
+
   struct sigaction action{};
   action.sa_handler = request_shutdown;
   sigemptyset(&action.sa_mask);
