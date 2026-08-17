@@ -8,6 +8,7 @@
 #include "aa2acp/airplay/srp.hpp"
 
 #include <netdb.h>
+#include <openssl/rand.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -21,6 +22,25 @@
 #include <thread>
 
 namespace {
+
+std::optional<std::string> random_controller_id() {
+  std::array<unsigned char, 16> bytes{};
+  if (RAND_bytes(bytes.data(), static_cast<int>(bytes.size())) != 1)
+    return std::nullopt;
+  bytes[6] = static_cast<unsigned char>((bytes[6] & 0x0f) | 0x40);
+  bytes[8] = static_cast<unsigned char>((bytes[8] & 0x3f) | 0x80);
+
+  constexpr char hex[] = "0123456789ABCDEF";
+  std::string result;
+  result.reserve(36);
+  for (std::size_t index = 0; index < bytes.size(); ++index) {
+    if (index == 4 || index == 6 || index == 8 || index == 10)
+      result.push_back('-');
+    result.push_back(hex[bytes[index] >> 4]);
+    result.push_back(hex[bytes[index] & 0x0f]);
+  }
+  return result;
+}
 
 int connect_tcp(const std::string &host, const std::string &port) {
   addrinfo hints{};
@@ -363,19 +383,18 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
         srp.session_key(), "Pair-Setup-Encrypt-Salt", "Pair-Setup-Encrypt-Info",
         32);
     const auto controller = aa2acp::airplay::ed25519_generate();
-    if (encryption_key.size() != 32 || !controller) {
+    const auto controller_id = random_controller_id();
+    if (encryption_key.size() != 32 || !controller || !controller_id) {
       std::cerr << "Unable to create Pair-Setup controller identity\n";
       close(socket_fd);
       return 1;
     }
-    constexpr std::string_view controller_id =
-        "85A6B4F2-3C8D-4E1A-9F7B-2D5E6C8A0B3C";
     const auto controller_sign_key = aa2acp::airplay::hkdf_sha512(
         srp.session_key(), "Pair-Setup-Controller-Sign-Salt",
         "Pair-Setup-Controller-Sign-Info", 32);
     aa2acp::airplay::Bytes controller_signed(controller_sign_key);
-    controller_signed.insert(controller_signed.end(), controller_id.begin(),
-                             controller_id.end());
+    controller_signed.insert(controller_signed.end(), controller_id->begin(),
+                             controller_id->end());
     controller_signed.insert(controller_signed.end(),
                              controller->public_key.begin(),
                              controller->public_key.end());
@@ -387,7 +406,7 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
       return 1;
     }
     const auto inner = aa2acp::airplay::encode_tlv8({
-        {0x01, {controller_id.begin(), controller_id.end()}},
+        {0x01, {controller_id->begin(), controller_id->end()}},
         {0x03, controller->public_key},
         {0x0a, *controller_signature},
     });
@@ -468,7 +487,7 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
       return 1;
     }
     std::cout << "AirPlay: Pair-Setup M6 accessory identity validated\n";
-    pairing = {std::string(controller_id), *controller, accessory_key->second};
+    pairing = {*controller_id, *controller, accessory_key->second};
     if (!pairing_store.empty() &&
         !aa2acp::airplay::save_pairing_record(pairing_store, pairing)) {
       std::cerr << "Unable to save persistent AirPlay pairing\n";
