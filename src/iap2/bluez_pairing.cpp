@@ -331,8 +331,17 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
       break;
     }
   }
-  if (!found)
+  if (!found) {
     write_log(log, "discovery timeout reached for " + std::string(mac));
+    std::string cleanup_name;
+    std::string cleanup_detail;
+    call_no_arguments(connection, kAdapterPath, kAdapterInterface,
+                      "StopDiscovery", 5000, cleanup_name, cleanup_detail);
+    dbus_connection_unregister_object_path(connection, kAgentPath);
+    write_log(log, "Bluetooth device " + std::string(mac) +
+                       " was not found; pairing was not attempted");
+    return false;
+  }
   write_log(log, "pairing " + std::string(mac) +
                      " using NoInputNoOutput (Just Works)");
   const int pair_timeout = timeout_seconds > 0 ? timeout_seconds * 1000 : 60000;
