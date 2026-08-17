@@ -9,6 +9,7 @@
 
 #include <csignal>
 #include <poll.h>
+#include <signal.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -25,6 +26,16 @@ namespace {
 volatile std::sig_atomic_t shutdown_requested = 0;
 
 void request_shutdown(int) { shutdown_requested = 1; }
+
+void install_shutdown_handlers() {
+  struct sigaction action{};
+  action.sa_handler = request_shutdown;
+  sigemptyset(&action.sa_mask);
+  // Deliberately omit SA_RESTART so SIGTERM interrupts blocking socket I/O
+  // and lets the worker unwind through its cleanup guards.
+  sigaction(SIGINT, &action, nullptr);
+  sigaction(SIGTERM, &action, nullptr);
+}
 
 bool send_all(const int socket_fd, const std::span<const std::uint8_t> bytes) {
   std::size_t offset = 0;
@@ -88,6 +99,26 @@ bool receive_all(const int socket_fd, std::span<std::uint8_t> bytes) {
   }
   return offset == bytes.size();
 }
+
+class WifiCleanup final {
+public:
+  explicit WifiCleanup(std::string interface_name)
+      : interface_name_(std::move(interface_name)) {}
+
+  ~WifiCleanup() {
+    if (!joined_)
+      return;
+    std::cout << "Bridge: cleaning up accessory Wi-Fi\n";
+    if (!aa2acp::iap2::leave_with_networkmanager(interface_name_))
+      std::cerr << "Bridge: unable to disconnect accessory Wi-Fi\n";
+  }
+
+  void mark_joined() { joined_ = true; }
+
+private:
+  std::string interface_name_;
+  bool joined_{};
+};
 
 class VideoSocketReader {
 public:
@@ -220,6 +251,12 @@ int main(int argc, char **argv) {
       wifi_config = true;
       join_wifi = true;
       bridge = true;
+    } else if (argument == "--preflight") {
+      bootstrap = true;
+      carplay = true;
+      wifi_config = true;
+      join_wifi = true;
+      bridge = true;
     } else if (argument == "--video" && index + 1 < argc) {
       video_path = argv[++index];
     } else if (argument == "--head-unit-capabilities-store" &&
@@ -242,7 +279,8 @@ int main(int argc, char **argv) {
           << "usage: aa2acp-iap2-bt [--mac MAC] [--channel N] [--timeout "
              "SECONDS] "
              "[--bootstrap] [--carplay] [--wifi-config] [--join-wifi] "
-             "[--leave-wifi] [--wifi-interface IFACE] [--bridge] [--video "
+             "[--leave-wifi] [--wifi-interface IFACE] [--bridge] [--preflight] "
+             "[--video "
              "H264_FILE] [--video-socket PATH] [--audio-socket PATH] "
              "[--guidance-audio-socket PATH] [--system-audio-socket PATH] "
              "[--pairing-store FILE] [--head-unit-capabilities-store FILE]\n";
@@ -267,9 +305,10 @@ int main(int argc, char **argv) {
     return 2;
   }
 
+  WifiCleanup wifi_cleanup(wifi_interface);
+
   if (bridge) {
-    std::signal(SIGINT, request_shutdown);
-    std::signal(SIGTERM, request_shutdown);
+    install_shutdown_handlers();
   }
 
   // Every Bluetooth connection has a usable bond: this is an immediate no-op
@@ -279,7 +318,19 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  const auto socket_fd = connect_rfcomm(address, channel);
+  int socket_fd = -1;
+  constexpr int kRfcommAttempts = 6;
+  for (int attempt = 1; attempt <= kRfcommAttempts; ++attempt) {
+    socket_fd = connect_rfcomm(address, channel);
+    if (socket_fd >= 0)
+      break;
+    if (attempt < kRfcommAttempts) {
+      std::cout << "Bluetooth: RFCOMM channel " << static_cast<int>(channel)
+                << " unavailable (attempt " << attempt << "/" << kRfcommAttempts
+                << "); retrying in 500 ms\n";
+      std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+  }
   if (socket_fd < 0) {
     std::cerr << "Unable to open RFCOMM channel " << static_cast<int>(channel)
               << " to " << address
@@ -309,10 +360,13 @@ int main(int argc, char **argv) {
   carplay_probe.request_wifi_configuration(wifi_config);
   if (join_wifi) {
     carplay_probe.set_wifi_join_handler(
-        [&wifi_interface](
+        [&wifi_interface, &wifi_cleanup](
             const aa2acp::iap2::AccessoryWifiConfiguration &configuration) {
-          return aa2acp::iap2::join_with_networkmanager(configuration,
-                                                        wifi_interface);
+          const auto joined = aa2acp::iap2::join_with_networkmanager(
+              configuration, wifi_interface);
+          if (joined)
+            wifi_cleanup.mark_joined();
+          return joined;
         });
   }
   const auto deadline =
@@ -349,8 +403,6 @@ int main(int argc, char **argv) {
   }
   close(socket_fd);
   if (shutdown_requested != 0) {
-    if (join_wifi)
-      aa2acp::iap2::leave_with_networkmanager(wifi_interface);
     std::cerr << "Bridge: shutdown requested during iAP2 phase\n";
     return 128 + SIGTERM;
   }
@@ -418,10 +470,6 @@ int main(int argc, char **argv) {
       if (shutdown_requested == 0)
         result = run_airplay();
     }
-    // The profile and credentials remain in NetworkManager for fast reconnect,
-    // but the car AP must not remain the active idle network.
-    const auto left_wifi =
-        aa2acp::iap2::leave_with_networkmanager(wifi_interface);
     if (shutdown_requested != 0) {
       std::cerr << "Bridge: shutdown requested during AirPlay phase\n";
       return 128 + SIGTERM;
@@ -429,7 +477,7 @@ int main(int argc, char **argv) {
     if (result != 0) {
       std::cerr << "Bridge: AirPlay phase failed\n";
     }
-    return result != 0 || !left_wifi ? 1 : 0;
+    return result != 0 ? 1 : 0;
   }
   if (carplay) {
     return carplay_probe.done() ? 0 : 1;

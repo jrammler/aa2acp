@@ -3,6 +3,7 @@
 #include "aa2acp/bridge/bluez_inventory.hpp"
 #include "aa2acp/bridge/config.hpp"
 #include "aa2acp/bridge/h264_normalizer.hpp"
+#include "aa2acp/iap2/network_manager.hpp"
 
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -52,6 +53,8 @@ struct ManagementSnapshot {
   int bluetooth_scan_phase_id{};
   std::string bluetooth_scan_phase{"idle"};
   std::string bluetooth_error;
+  bool carplay_preflight_running{};
+  std::string carplay_preflight_status;
 };
 
 struct ManagementState {
@@ -390,7 +393,8 @@ void run_bluetooth_scan(ManagementState &state) {
 }
 
 std::string page(const aa2acp::bridge::Config &config,
-                 const ManagementSnapshot &snapshot, const bool saved) {
+                 const ManagementSnapshot &snapshot, const bool saved,
+                 const bool carplay_error) {
   std::string output =
       "<!doctype html><html><head><meta name=\"viewport\" "
       "content=\"width=device-width,initial-scale=1\">"
@@ -400,20 +404,33 @@ std::string page(const aa2acp::bridge::Config &config,
       "sizing:border-box;"
       "margin:.5rem 0}button{padding:.6rem 1rem;margin:.25rem 0}"
       "input[type=checkbox]{width:auto;margin:0 .4rem 0 0}"
-      ".hint{color:#555}.status{padding:.6rem;background:#eef7ee}</style></"
+      ".hint{color:#555}.status{padding:.6rem;background:#eef7ee}"
+      ".status.error{background:#fdecec;color:#8a1f1f}</style></"
       "head><body data-scan-running=\"" +
       std::string(snapshot.bluetooth_scan_running ? "1" : "0") +
       "\" data-scan-phase=\"" +
       std::to_string(snapshot.bluetooth_scan_phase_id) +
+      "\" data-preflight-running=\"" +
+      std::string(snapshot.carplay_preflight_running ? "1" : "0") +
       "\">"
       "<h1>AA2ACP</h1><p>Configure the pinned CarPlay head unit.</p>";
-  if (saved)
-    output += "<p class=status>Configuration saved.</p><script>history."
-              "replaceState(null,'',location.pathname);</script>";
+  if (saved || carplay_error) {
+    if (saved)
+      output += "<p class=status>Configuration saved.</p>";
+    if (carplay_error)
+      output += "<p class=\"status error\">CarPlay preparation requires "
+                "both a Bluetooth device and Wi-Fi interface "
+                "configuration.</p>";
+    output += "<script>history.replaceState(null,'',location.pathname);"
+              "</script>";
+  }
   if (config.head_unit_mac.empty() || config.wifi_interface.empty())
     output +=
         "<p class=status>Android Auto is disabled until both settings are "
         "saved.</p>";
+  if (!snapshot.carplay_preflight_status.empty())
+    output += "<p class=status>CarPlay preparation: " +
+              html_escape(snapshot.carplay_preflight_status) + "</p>";
   if (!snapshot.bluetooth_error.empty())
     output += "<p class=hint>Bluetooth refresh failed: " +
               html_escape(snapshot.bluetooth_error) + "</p>";
@@ -468,7 +485,13 @@ std::string page(const aa2acp::bridge::Config &config,
               "\">" + html_escape(config.wifi_interface) +
               " (configured)</option>";
   output +=
-      "</select></label><button type=submit>Save configuration</button></form>"
+      "</select></label><button type=submit>Save configuration</button></form>";
+  if (!config.head_unit_mac.empty() && !config.wifi_interface.empty())
+    output +=
+        "<form method=post action=\"/carplay-prepare\"><button type=submit " +
+        std::string(snapshot.carplay_preflight_running ? "disabled" : "") +
+        ">Prepare/Test CarPlay</button></form>";
+  output +=
       "<script>(()=>{const filter=document.querySelector('#show-unnamed');"
       "if(filter)filter.addEventListener('change',()=>filter.form."
       "requestSubmit());"
@@ -478,7 +501,12 @@ std::string page(const aa2acp::bridge::Config &config,
       "fetch('/scan-status?phase='+phase);"
       "if(response.status===205){location.reload();return;}setTimeout(poll,"
       "1000);"
-      "}catch{setTimeout(poll,2000);}};poll();})();</script></"
+      "}catch{setTimeout(poll,2000);}};poll();})();</script>"
+      "<script>(()=>{if(document.body.dataset.preflightRunning!=='1')return;"
+      "const poll=async()=>{try{const response=await "
+      "fetch('/carplay-prepare-status');"
+      "if(response.status===205){location.reload();return;}setTimeout(poll,"
+      "1000);}catch{setTimeout(poll,2000);}};poll();})();</script></"
       "body></html>";
   return output;
 }
@@ -822,13 +850,13 @@ private:
   std::size_t received_packets_{};
 };
 
-void stop_carplay_process_group(const pid_t child, int *status) {
+bool stop_carplay_process_group(const pid_t child, int *status) {
   kill(-child, SIGTERM);
   const auto graceful_deadline =
-      std::chrono::steady_clock::now() + std::chrono::seconds(2);
+      std::chrono::steady_clock::now() + std::chrono::seconds(8);
   while (std::chrono::steady_clock::now() < graceful_deadline) {
     if (waitpid(child, status, WNOHANG) == child)
-      return;
+      return false;
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
   std::cerr << "Bridge daemon: CarPlay worker did not stop after SIGTERM; "
@@ -836,17 +864,16 @@ void stop_carplay_process_group(const pid_t child, int *status) {
   kill(-child, SIGKILL);
   while (waitpid(child, status, 0) < 0 && errno == EINTR) {
   }
+  return true;
 }
 
-int run_carplay_session(const char *program_path,
-                        const aa2acp::bridge::Config &config,
-                        const std::stop_token stop,
-                        const std::atomic_bool &phone_disconnected,
-                        std::atomic<pid_t> &active_child,
-                        const std::string &video_socket = {},
-                        const std::string &media_audio_socket = {},
-                        const std::string &guidance_audio_socket = {},
-                        const std::string &system_audio_socket = {}) {
+int run_carplay_session(
+    const char *program_path, const aa2acp::bridge::Config &config,
+    const std::stop_token stop, const std::atomic_bool &phone_disconnected,
+    std::atomic<pid_t> &active_child, const std::string &video_socket = {},
+    const std::string &media_audio_socket = {},
+    const std::string &guidance_audio_socket = {},
+    const std::string &system_audio_socket = {}, const bool preflight = false) {
   if (config.head_unit_mac.empty()) {
     std::cerr << "Bridge daemon: configure a head-unit MAC first\n";
     return 2;
@@ -866,6 +893,8 @@ int run_carplay_session(const char *program_path,
       aa2acp::bridge::default_head_unit_capabilities_store().string(),
       "--timeout",
       "60"};
+  if (preflight)
+    arguments.push_back("--preflight");
   if (!video_socket.empty()) {
     arguments.push_back("--video-socket");
     arguments.push_back(video_socket);
@@ -939,18 +968,59 @@ int run_carplay_session(const char *program_path,
       while (output_pipe[0] >= 0)
         forward_output(100);
       active_child = -1;
+      if (!WIFEXITED(status)) {
+        std::cout << "Bridge daemon: cleaning up CarPlay Wi-Fi after worker "
+                     "failure\n";
+        if (!aa2acp::iap2::leave_with_networkmanager(config.wifi_interface))
+          std::cerr << "Bridge daemon: unable to disconnect CarPlay Wi-Fi\n";
+      }
       return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
     }
     if (stop.stop_requested() || phone_disconnected.load()) {
       std::cout << "Bridge daemon: stopping active CarPlay session\n";
-      stop_carplay_process_group(child, &status);
+      const auto forced = stop_carplay_process_group(child, &status);
       while (output_pipe[0] >= 0)
         forward_output(100);
+      if (forced || !WIFEXITED(status)) {
+        std::cout << "Bridge daemon: cleaning up CarPlay Wi-Fi after "
+                  << (forced ? "forced worker termination"
+                             : "abnormal worker termination")
+                  << '\n';
+        if (!aa2acp::iap2::leave_with_networkmanager(config.wifi_interface))
+          std::cerr << "Bridge daemon: unable to disconnect CarPlay Wi-Fi\n";
+      }
       active_child = -1;
       return 128 + SIGTERM;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
+}
+
+void run_carplay_preflight(const char *program_path,
+                           const aa2acp::bridge::Config config,
+                           ManagementState &management,
+                           const std::stop_token stop) {
+  {
+    std::lock_guard lock(management.mutex);
+    management.snapshot.carplay_preflight_running = true;
+    management.snapshot.carplay_preflight_status = "starting";
+  }
+  std::atomic<pid_t> active_child{-1};
+  std::atomic_bool phone_disconnected{false};
+  std::cout << "Management: starting CarPlay preflight for "
+            << config.head_unit_mac << '\n';
+  const auto result =
+      run_carplay_session(program_path, config, stop, phone_disconnected,
+                          active_child, {}, {}, {}, {}, true);
+  {
+    std::lock_guard lock(management.mutex);
+    management.snapshot.carplay_preflight_running = false;
+    management.snapshot.carplay_preflight_status =
+        result == 0 ? "ready; capabilities cached"
+                    : "failed (see daemon log for details)";
+  }
+  std::cout << "Management: CarPlay preflight "
+            << (result == 0 ? "succeeded" : "failed") << '\n';
 }
 
 int run_wired_android_auto_receiver(
@@ -1000,11 +1070,12 @@ int run_wired_android_auto_receiver(
   }
   std::atomic_bool carplay_start_requested{};
   std::atomic_bool phone_disconnected{};
+  std::atomic_bool carplay_preparation_failed{};
   std::atomic<pid_t> active_carplay_child{-1};
   aa2acp::bridge::H264Normalizer h264_normalizer;
   aa2acp::aa::WiredReceiver receiver(
       [&carplay_start_requested, &phone_disconnected,
-       &active_carplay_child](const auto &event) {
+       &carplay_preparation_failed, &active_carplay_child](const auto &event) {
         switch (event.type) {
         case aa2acp::aa::WiredReceiverEventType::waiting_for_phone:
           std::cout << "Bridge daemon: Android Auto USB idle: " << event.detail
@@ -1012,6 +1083,7 @@ int run_wired_android_auto_receiver(
           break;
         case aa2acp::aa::WiredReceiverEventType::aoap_transport_ready:
           phone_disconnected = false;
+          carplay_preparation_failed = false;
           std::cout << "Bridge daemon: Android Auto USB transport ready: "
                     << event.detail << '\n';
           carplay_start_requested = true;
@@ -1067,11 +1139,17 @@ int run_wired_android_auto_receiver(
           break;
         }
       },
-      [&config_provider]() -> std::optional<aa2acp::aa::HeadUnitCapabilities> {
+      [&config_provider, &carplay_preparation_failed]()
+          -> std::optional<aa2acp::aa::HeadUnitCapabilities> {
         const auto config = config_provider();
+        // A cold preflight normally populates this cache. Keep the fallback
+        // bounded so a failed CarPlay attempt cannot consume Android Auto's
+        // entire connection window.
         const auto deadline =
-            std::chrono::steady_clock::now() + std::chrono::seconds(30);
+            std::chrono::steady_clock::now() + std::chrono::seconds(5);
         do {
+          if (carplay_preparation_failed.load())
+            return std::nullopt;
           const auto capabilities =
               aa2acp::airplay::load_head_unit_capabilities(
                   aa2acp::bridge::default_head_unit_capabilities_store(),
@@ -1086,9 +1164,8 @@ int run_wired_android_auto_receiver(
                 capabilities->system_pcm_16k_mono};
           std::this_thread::sleep_for(std::chrono::milliseconds(50));
         } while (std::chrono::steady_clock::now() < deadline);
-        std::cerr << "Bridge daemon: CarPlay capabilities were unavailable "
-                     "before Android Auto service discovery deadline; using "
-                     "1280x720\n";
+        std::cerr << "Bridge daemon: CarPlay capabilities unavailable after "
+                     "5 seconds; using 1280x720 fallback\n";
         return std::nullopt;
       });
   std::string error;
@@ -1098,6 +1175,7 @@ int run_wired_android_auto_receiver(
     return 1;
   }
   std::cout << "Bridge daemon: wired Android Auto receiver started\n";
+  auto retry_delay = std::chrono::seconds(0);
   while (!stop.stop_requested()) {
     if (!carplay_start_requested.exchange(false)) {
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -1126,6 +1204,24 @@ int run_wired_android_auto_receiver(
                 << '\n';
     else
       std::cout << "Bridge daemon: CarPlay video session ended\n";
+    if (result == 0) {
+      retry_delay = std::chrono::seconds(0);
+    } else {
+      carplay_preparation_failed = true;
+      if (retry_delay.count() == 0)
+        retry_delay = std::chrono::seconds(1);
+      else
+        retry_delay = std::min(retry_delay * 2, std::chrono::seconds(30));
+      std::cout << "Bridge daemon: retrying CarPlay in " << retry_delay.count()
+                << " seconds\n";
+      for (auto remaining = retry_delay;
+           remaining > std::chrono::seconds(0) && !stop.stop_requested() &&
+           !phone_disconnected.load();
+           remaining -= std::chrono::seconds(1))
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+      if (!phone_disconnected.load() && !stop.stop_requested())
+        carplay_start_requested = true;
+    }
   }
   std::cout << "Bridge daemon: stopping wired Android Auto receiver\n";
   receiver.stop();
@@ -1192,6 +1288,7 @@ int main(int argc, char **argv) {
         },
         stop);
   });
+  std::jthread carplay_preflight_worker;
   const int listener = socket(AF_INET, SOCK_STREAM, 0);
   int enabled = 1;
   setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &enabled, sizeof(enabled));
@@ -1266,13 +1363,15 @@ int main(int argc, char **argv) {
     };
     if (request.starts_with("GET / ") || request.starts_with("GET /?")) {
       const bool saved = request.find("saved=1") != std::string::npos;
+      const bool carplay_error =
+          request.find("carplay_error=1") != std::string::npos;
       const auto snapshot = management_snapshot(management_state);
       const auto configuration = [&] {
         std::lock_guard lock(config_mutex);
         return config;
       }();
       respond(200, "text/html; charset=utf-8",
-              page(configuration, snapshot, saved));
+              page(configuration, snapshot, saved, carplay_error));
     } else if (request.starts_with("GET /scan-status")) {
       const auto snapshot = management_snapshot(management_state);
       const auto phase = query_field(request, "phase");
@@ -1282,6 +1381,46 @@ int main(int argc, char **argv) {
               ? 204
               : 205;
       respond(status, "text/plain", "");
+    } else if (request.starts_with("GET /carplay-prepare-status")) {
+      const auto snapshot = management_snapshot(management_state);
+      respond(snapshot.carplay_preflight_running ? 204 : 205, "text/plain",
+              snapshot.carplay_preflight_status);
+    } else if (request.starts_with("POST /carplay-prepare ")) {
+      const auto selected_config = [&] {
+        std::lock_guard lock(config_mutex);
+        return config;
+      }();
+      bool start_preflight = false;
+      {
+        std::lock_guard lock(management_state.mutex);
+        if (!management_state.snapshot.carplay_preflight_running) {
+          management_state.snapshot.carplay_preflight_running = true;
+          management_state.snapshot.carplay_preflight_status = "queued";
+          start_preflight = true;
+        }
+      }
+      if (start_preflight && !selected_config.head_unit_mac.empty() &&
+          !selected_config.wifi_interface.empty()) {
+        carplay_preflight_worker =
+            std::jthread([program_path = argv[0],
+                          selected_config](const std::stop_token stop) {
+              run_carplay_preflight(program_path, selected_config,
+                                    management_state, stop);
+            });
+        respond(303, "text/plain", "", "Location: /\r\n");
+      } else {
+        {
+          std::lock_guard lock(management_state.mutex);
+          management_state.snapshot.carplay_preflight_running = false;
+          management_state.snapshot.carplay_preflight_status =
+              "configure a head-unit MAC and Wi-Fi interface first";
+        }
+        const auto location = selected_config.head_unit_mac.empty() ||
+                                      selected_config.wifi_interface.empty()
+                                  ? "Location: /?carplay_error=1\r\n"
+                                  : "Location: /\r\n";
+        respond(303, "text/plain", "", location);
+      }
     } else if (request.starts_with("POST /scan ")) {
       std::cout << "Management: Bluetooth scan requested\n";
       bool start_scan = false;
@@ -1352,6 +1491,8 @@ int main(int argc, char **argv) {
     close(client);
   }
   close(listener);
+  carplay_preflight_worker.request_stop();
+  carplay_preflight_worker.join();
   android_auto_worker.request_stop();
   android_auto_worker.join();
   close(signal_fd);

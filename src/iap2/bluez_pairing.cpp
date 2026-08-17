@@ -4,6 +4,7 @@
 #include <dbus/dbus.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <iostream>
@@ -244,6 +245,24 @@ void write_log(const PairingLogFunction &log, const std::string &message) {
   }
 }
 
+bool same_address(const std::string_view left, const std::string_view right) {
+  if (left.size() != right.size())
+    return false;
+  return std::equal(left.begin(), left.end(), right.begin(),
+                    [](const char a, const char b) {
+                      return std::toupper(static_cast<unsigned char>(a)) ==
+                             std::toupper(static_cast<unsigned char>(b));
+                    });
+}
+
+bool device_visible(const std::string_view mac) {
+  std::string error;
+  const auto devices = aa2acp::bridge::list_bluez_devices(&error);
+  return std::any_of(devices.begin(), devices.end(), [mac](const auto &device) {
+    return same_address(device.address, mac);
+  });
+}
+
 } // namespace
 
 bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
@@ -303,9 +322,17 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
   const auto discovery_seconds = std::clamp(timeout_seconds, 12, 30);
   const auto discovery_deadline = std::chrono::steady_clock::now() +
                                   std::chrono::seconds(discovery_seconds);
+  bool found = false;
   while (std::chrono::steady_clock::now() < discovery_deadline) {
     dbus_connection_read_write_dispatch(connection, 200);
+    if (device_visible(mac)) {
+      found = true;
+      write_log(log, "found " + std::string(mac) + " during discovery");
+      break;
+    }
   }
+  if (!found)
+    write_log(log, "discovery timeout reached for " + std::string(mac));
   write_log(log, "pairing " + std::string(mac) +
                      " using NoInputNoOutput (Just Works)");
   const int pair_timeout = timeout_seconds > 0 ? timeout_seconds * 1000 : 60000;
