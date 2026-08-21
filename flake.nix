@@ -62,6 +62,7 @@
             install -Dm755 aa2acp-bridge-daemon \
               $out/bin/aa2acp-bridge-daemon
           '';
+          meta.mainProgram = "aa2acp-bridge-daemon";
         };
     in {
       packages = forAllSystems (system: {
