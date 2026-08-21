@@ -39,9 +39,34 @@
           '';
           cmakeFlags = [ "-DAASDK_TEST=OFF" "-DSKIP_BUILD_PROTOBUF=ON" "-DSKIP_BUILD_ABSL=ON" ];
         };
+      mkBridgePackage = system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+          aasdkPkgs = nixpkgs-aasdk.legacyPackages.${system};
+        in pkgs.stdenv.mkDerivation {
+          pname = "aa2acp-bridge";
+          version = "0.1.0";
+          src = self;
+          nativeBuildInputs = with pkgs; [ cmake pkg-config ];
+          buildInputs = with pkgs; [
+            bluez bluez.dev dbus systemd.dev glib openssl.dev boost183 libusb1
+            ffmpeg-full ffmpeg-full.dev aasdkPkgs.protobuf
+            (mkAasdkPackage system)
+          ];
+          cmakeBuildType = "Debug";
+          doCheck = true;
+          checkPhase = ''
+            ctest --output-on-failure
+          '';
+          installPhase = ''
+            install -Dm755 aa2acp-bridge-daemon \
+              $out/bin/aa2acp-bridge-daemon
+          '';
+        };
     in {
       packages = forAllSystems (system: {
         aasdk = mkAasdkPackage system;
+        aa2acp-bridge = mkBridgePackage system;
       });
       devShells = forAllSystems (system:
         let
