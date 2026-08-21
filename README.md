@@ -49,7 +49,9 @@ Run the integrated daemon with:
 nix develop --command ./build/aa2acp-bridge-daemon
 ```
 
-The management UI listens on `http://127.0.0.1:8080`. Its configuration,
+The management UI listens on all IPv4 interfaces at port 8080. From a device
+connected to its management hotspot, open `http://10.42.0.1:8080` (or the
+hotspot gateway address if it was configured differently). Its configuration,
 AirPlay pairing identity, and 30 launch-rotated timestamped log files live in
 `$XDG_STATE_HOME/aa2acp` (normally `~/.local/state/aa2acp`).
 

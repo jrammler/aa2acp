@@ -1295,16 +1295,16 @@ int main(int argc, char **argv) {
   sockaddr_in address{};
   address.sin_family = AF_INET;
   address.sin_port = htons(static_cast<std::uint16_t>(port));
-  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  address.sin_addr.s_addr = htonl(INADDR_ANY);
   if (listener < 0 ||
       bind(listener, reinterpret_cast<sockaddr *>(&address), sizeof(address)) !=
           0 ||
       listen(listener, 8) != 0) {
-    std::cerr << "Unable to listen on 127.0.0.1:" << port << '\n';
+    std::cerr << "Unable to listen on 0.0.0.0:" << port << '\n';
     close(signal_fd);
     return 1;
   }
-  std::cout << "Bridge management UI listening on http://127.0.0.1:" << port
+  std::cout << "Bridge management UI listening on http://0.0.0.0:" << port
             << '\n';
   for (;;) {
     pollfd descriptors[]{{listener, POLLIN, 0}, {signal_fd, POLLIN, 0}};
