@@ -2091,22 +2091,30 @@ int main(int argc, char **argv) {
     } else if (request.starts_with("POST /bluetooth-confirm ")) {
       const auto id = form_field(body, "id");
       const auto decision = form_field(body, "decision");
-      const auto snapshot = management_snapshot(management_state);
+      std::optional<aa2acp::iap2::PairingConfirmationMessage> confirmation;
+      if (id && decision && (*decision == "confirm" || *decision == "reject")) {
+        std::lock_guard lock(management_state.mutex);
+        if (management_state.snapshot.pairing_confirmation &&
+            *id == std::to_string(
+                       management_state.snapshot.pairing_confirmation->id)) {
+          confirmation = management_state.snapshot.pairing_confirmation;
+          management_state.snapshot.pairing_confirmation.reset();
+        }
+      }
       bool accepted = false;
-      if (id && decision && snapshot.pairing_confirmation &&
-          *id == std::to_string(snapshot.pairing_confirmation->id) &&
-          (*decision == "confirm" || *decision == "reject") && carplay_worker) {
+      if (confirmation && carplay_worker) {
         accepted = carplay_worker->answer_pairing_confirmation(
-            *snapshot.pairing_confirmation, *decision == "confirm");
+            *confirmation, *decision == "confirm");
       }
       if (!accepted) {
+        if (confirmation) {
+          std::lock_guard lock(management_state.mutex);
+          if (!management_state.snapshot.pairing_confirmation)
+            management_state.snapshot.pairing_confirmation = *confirmation;
+        }
         respond(409, "text/plain",
                 "No matching Bluetooth confirmation is pending\n");
       } else {
-        {
-          std::lock_guard lock(management_state.mutex);
-          management_state.snapshot.pairing_confirmation.reset();
-        }
         aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
             << "Management: Bluetooth pairing confirmation " << *decision
             << " requested\n";
