@@ -120,13 +120,16 @@ public:
   ~WifiCleanup() {
     if (!joined_)
       return;
-    std::cout << "Bridge: cleaning up accessory Wi-Fi\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+        << "Bridge: cleaning up accessory Wi-Fi\n";
     if (!aa2acp::iap2::leave_with_networkmanager(interface_name_))
-      std::cerr << "Bridge: unable to disconnect accessory Wi-Fi\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+          << "Bridge: unable to disconnect accessory Wi-Fi\n";
     if (!management_ssid_.empty() &&
         !aa2acp::iap2::start_management_hotspot(
             interface_name_, management_ssid_, management_passphrase_))
-      std::cerr << "Bridge: unable to restore management hotspot\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+          << "Bridge: unable to restore management hotspot\n";
   }
 
   void mark_joined() { joined_ = true; }
@@ -356,17 +359,19 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
     if (socket_fd >= 0)
       break;
     if (attempt < kRfcommAttempts) {
-      std::cout << "Bluetooth: RFCOMM channel " << static_cast<int>(channel)
-                << " unavailable (attempt " << attempt << "/" << kRfcommAttempts
-                << "); retrying in 500 ms\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+          << "Bluetooth: RFCOMM channel " << static_cast<int>(channel)
+          << " unavailable (attempt " << attempt << "/" << kRfcommAttempts
+          << "); retrying in 500 ms\n";
       std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
   }
   if (socket_fd < 0) {
-    std::cerr << "Unable to open RFCOMM channel " << static_cast<int>(channel)
-              << " to " << address
-              << "; ensure the device is paired and the head unit is "
-                 "advertising iAP2\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Unable to open RFCOMM channel " << static_cast<int>(channel)
+        << " to " << address
+        << "; ensure the device is paired and the head unit is advertising "
+           "iAP2\n";
     return 1;
   }
   if (aa2acp::bridge::debug_logging_enabled())
@@ -440,7 +445,8 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
   }
   close(socket_fd);
   if (shutdown_requested != 0) {
-    std::cerr << "Bridge: shutdown requested during iAP2 phase\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+        << "Bridge: shutdown requested during iAP2 phase\n";
     return 128 + SIGTERM;
   }
   if (bridge && carplay_probe.done()) {
@@ -449,11 +455,13 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
     // AirPlay moves to its advertised AP gateway after WirelessCarPlayUpdate.
     const std::string host = "10.10.0.1";
     if (carplay_probe.airplay_port() == 0) {
-      std::cerr << "CarPlayStartSession did not provide an AirPlay port\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "CarPlayStartSession did not provide an AirPlay port\n";
       return 1;
     }
-    std::cout << "Bridge: starting AirPlay on " << host << ':'
-              << carplay_probe.airplay_port() << '\n';
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+        << "Bridge: starting AirPlay on " << host << ':'
+        << carplay_probe.airplay_port() << '\n';
     const auto run_airplay =
         [&] {
           const auto live_video =
@@ -502,17 +510,20 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
         };
     auto result = run_airplay();
     if (result != 0 && shutdown_requested == 0) {
-      std::cerr << "Bridge: AirPlay attempt failed; retrying once\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+          << "Bridge: AirPlay attempt failed; retrying once\n";
       std::this_thread::sleep_for(std::chrono::seconds(1));
       if (shutdown_requested == 0)
         result = run_airplay();
     }
     if (shutdown_requested != 0) {
-      std::cerr << "Bridge: shutdown requested during AirPlay phase\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+          << "Bridge: shutdown requested during AirPlay phase\n";
       return 128 + SIGTERM;
     }
     if (result != 0) {
-      std::cerr << "Bridge: AirPlay phase failed\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Bridge: AirPlay phase failed\n";
     }
     return result != 0 ? 1 : 0;
   }
