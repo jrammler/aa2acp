@@ -28,13 +28,18 @@
 
 namespace {
 
-volatile std::sig_atomic_t shutdown_requested = 0;
+volatile std::sig_atomic_t signal_shutdown_requested = 0;
+std::atomic_bool worker_stop_requested{};
 std::mutex pairing_confirmation_mutex;
 int pairing_confirmation_control_fd = -1;
 std::uint64_t next_pairing_confirmation_id = 1;
 std::uint64_t pending_pairing_confirmation_id{};
 int pending_pairing_confirmation_result = -1;
-void request_shutdown(int) { shutdown_requested = 1; }
+void request_shutdown(int) { signal_shutdown_requested = 1; }
+
+bool shutdown_requested() {
+  return signal_shutdown_requested != 0 || worker_stop_requested.load();
+}
 
 void install_shutdown_handlers() {
   sigset_t signals;
@@ -105,7 +110,7 @@ int connect_unix(const std::string &path) {
 bool receive_all(const int socket_fd, std::span<std::uint8_t> bytes,
                  const std::atomic_bool *stop_streams = nullptr) {
   std::size_t offset{};
-  while (offset < bytes.size() && shutdown_requested == 0 &&
+  while (offset < bytes.size() && !shutdown_requested() &&
          (stop_streams == nullptr || !stop_streams->load())) {
     pollfd descriptor{socket_fd, POLLIN, 0};
     if (poll(&descriptor, 1, 100) <= 0)
@@ -241,7 +246,6 @@ private:
 } // namespace
 
 int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
-  shutdown_requested = 0;
   // bridge-daemon captures this process through a pipe. Keep protocol progress
   // visible in the daemon log instead of waiting for process exit to flush it.
   std::cout.setf(std::ios::unitbuf);
@@ -435,8 +439,8 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
   link.start(std::chrono::steady_clock::now());
 
   std::array<std::uint8_t, 1024> buffer{};
-  while (std::chrono::steady_clock::now() < deadline &&
-         shutdown_requested == 0 && link.state() != aa2acp::iap2::State::Dead &&
+  while (std::chrono::steady_clock::now() < deadline && !shutdown_requested() &&
+         link.state() != aa2acp::iap2::State::Dead &&
          (!bootstrap ||
           (carplay ? (!carplay_probe.done() && !carplay_probe.failed())
                    : (!session.done() && !session.failed()))) &&
@@ -464,7 +468,7 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
     }
   }
   close(socket_fd);
-  if (shutdown_requested != 0) {
+  if (shutdown_requested()) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
         << "Bridge: shutdown requested during iAP2 phase\n";
     return 128 + SIGTERM;
@@ -527,20 +531,20 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
           .pairing_store = pairing_store,
           .head_unit_capabilities_store = head_unit_capabilities_store,
           .head_unit_mac = address,
-          .stop_requested = [] { return shutdown_requested != 0; },
+          .stop_requested = [] { return shutdown_requested(); },
           .stop_streams = [stop_streams] { stop_streams->store(true); },
       };
           return aa2acp::airplay::run_session(options);
         };
     auto result = run_airplay();
-    if (result != 0 && shutdown_requested == 0) {
+    if (result != 0 && !shutdown_requested()) {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
           << "Bridge: AirPlay attempt failed; retrying once\n";
       std::this_thread::sleep_for(std::chrono::seconds(1));
-      if (shutdown_requested == 0)
+      if (!shutdown_requested())
         result = run_airplay();
     }
-    if (shutdown_requested != 0) {
+    if (shutdown_requested()) {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
           << "Bridge: shutdown requested during AirPlay phase\n";
       return 128 + SIGTERM;
@@ -558,7 +562,14 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
                    : (link.state() == aa2acp::iap2::State::Normal ? 0 : 1);
 }
 
-void aa2acp::iap2::request_bluetooth_worker_stop() { shutdown_requested = 1; }
+void aa2acp::iap2::request_bluetooth_worker_stop() {
+  worker_stop_requested.store(true);
+}
+
+void aa2acp::iap2::reset_bluetooth_worker_stop() {
+  signal_shutdown_requested = 0;
+  worker_stop_requested.store(false);
+}
 
 void aa2acp::iap2::set_pairing_confirmation_control_fd(const int fd) {
   std::lock_guard lock(pairing_confirmation_mutex);

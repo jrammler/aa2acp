@@ -10,6 +10,7 @@ namespace aa2acp::iap2 {
 // isolated child process without depending on a sibling executable.
 int run_bluetooth_worker(int argc, char **argv);
 void request_bluetooth_worker_stop();
+void reset_bluetooth_worker_stop();
 
 struct PairingConfirmationMessage {
   std::uint64_t id{};

@@ -113,6 +113,7 @@ public:
         }
         if (request[0] != '\1')
           continue;
+        aa2acp::iap2::reset_bluetooth_worker_stop();
         std::vector<char *> argv;
         for (char *argument = request.data() + 1;
              argument < request.data() + count;
