@@ -1,6 +1,9 @@
 #include "aa2acp/iap2/network_manager.hpp"
 
+#include <arpa/inet.h>
 #include <fcntl.h>
+#include <ifaddrs.h>
+#include <netinet/in.h>
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -8,6 +11,7 @@
 #include <array>
 #include <chrono>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -18,6 +22,27 @@ namespace aa2acp::iap2 {
 namespace {
 
 constexpr char kManagementProfile[] = "aa2acp-management";
+
+std::optional<std::string> ipv4_address(const std::string &interface_name) {
+  ifaddrs *addresses{};
+  if (getifaddrs(&addresses) != 0)
+    return std::nullopt;
+  std::optional<std::string> address;
+  for (auto *entry = addresses; entry != nullptr; entry = entry->ifa_next) {
+    if (entry->ifa_addr == nullptr || entry->ifa_addr->sa_family != AF_INET ||
+        interface_name != entry->ifa_name)
+      continue;
+    std::array<char, INET_ADDRSTRLEN> text{};
+    const auto *ipv4 = reinterpret_cast<const sockaddr_in *>(entry->ifa_addr);
+    if (inet_ntop(AF_INET, &ipv4->sin_addr, text.data(), text.size()) !=
+        nullptr) {
+      address = text.data();
+      break;
+    }
+  }
+  freeifaddrs(addresses);
+  return address;
+}
 
 bool run_nmcli(std::vector<std::string> arguments,
                const bool allow_inactive = false, const bool quiet = false) {
@@ -228,9 +253,13 @@ bool start_management_hotspot(const std::string &interface_name,
                   "wpa-psk",      "wifi-sec.psk", passphrase},
                  false, true))
     return false;
-  return run_nmcli({"nmcli", "--wait", "30", "connection", "up", "id",
-                    kManagementProfile, "ifname", interface_name},
-                   false, true);
+  if (!run_nmcli({"nmcli", "--wait", "30", "connection", "up", "id",
+                  kManagementProfile, "ifname", interface_name},
+                 false, true))
+    return false;
+  if (const auto address = ipv4_address(interface_name))
+    std::cout << "Wi-Fi: management hotspot gateway is " << *address << '\n';
+  return true;
 }
 
 bool stop_management_hotspot(const std::string &interface_name) {

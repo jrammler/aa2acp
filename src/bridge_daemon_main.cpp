@@ -690,10 +690,12 @@ std::string page(const aa2acp::bridge::Config &config,
   output += "</select></label><label>Management hotspot SSID<input "
             "name=\"management_hotspot_ssid\" value=\"" +
             html_escape(config.management_hotspot_ssid) +
-            "\"></label><label>Management hotspot password<input "
-            "type=password name=\"management_hotspot_passphrase\" value=\"" +
-            html_escape(config.management_hotspot_passphrase) +
-            "\"></label><button type=submit>Save configuration</button></form>";
+            "\"></label><label>New management hotspot password (leave empty "
+            "to keep)<input type=password "
+            "name=\"management_hotspot_passphrase\"></label><label>Confirm "
+            "new hotspot password<input type=password "
+            "name=\"management_hotspot_passphrase_confirm\"></label><button "
+            "type=submit>Save configuration</button></form>";
   if (!config.head_unit_mac.empty() && !config.wifi_interface.empty())
     output +=
         "<form method=post action=\"/carplay-prepare\"><button type=submit " +
@@ -1481,11 +1483,17 @@ int main(int argc, char **argv) {
       !aa2acp::bridge::save_config(config_path, config))
     std::cerr << "Bridge daemon: unable to persist management hotspot "
                  "settings\n";
-  if (!config.wifi_interface.empty() &&
-      !aa2acp::iap2::start_management_hotspot(
+  const auto hotspot_started =
+      !config.wifi_interface.empty() &&
+      aa2acp::iap2::start_management_hotspot(
           config.wifi_interface, config.management_hotspot_ssid,
-          config.management_hotspot_passphrase))
+          config.management_hotspot_passphrase);
+  if (!hotspot_started)
     std::cerr << "Bridge daemon: unable to start management hotspot\n";
+  else if (management_hotspot_needs_setup(config))
+    std::cout << "Bridge daemon: management hotspot default password is '"
+              << kDefaultManagementHotspotPassphrase
+              << "'; change it at the management UI before using AA2ACP\n";
   std::jthread wifi_refresh_worker([](std::stop_token stop_token) {
     while (!stop_token.stop_requested()) {
       refresh_wifi_inventory(management_state);
@@ -1757,6 +1765,8 @@ int main(int argc, char **argv) {
       const auto hotspot_ssid = form_field(body, "management_hotspot_ssid");
       const auto hotspot_passphrase =
           form_field(body, "management_hotspot_passphrase");
+      const auto hotspot_passphrase_confirm =
+          form_field(body, "management_hotspot_passphrase_confirm");
       const auto previous = [&] {
         std::lock_guard lock(config_mutex);
         return config;
@@ -1764,10 +1774,19 @@ int main(int argc, char **argv) {
       const auto mac = selected && !selected->empty() ? *selected
                        : manual && !manual->empty()   ? *manual
                                                       : previous.head_unit_mac;
-      if (wifi && hotspot_ssid && hotspot_passphrase &&
-          aa2acp::bridge::save_config(
-              config_path, {mac, *wifi, *hotspot_ssid, *hotspot_passphrase,
-                            previous.airplay_pairing_store})) {
+      const auto new_hotspot_password =
+          hotspot_passphrase && !hotspot_passphrase->empty();
+      const auto effective_hotspot_passphrase =
+          new_hotspot_password ? *hotspot_passphrase
+                               : previous.management_hotspot_passphrase;
+      if (wifi && hotspot_ssid &&
+          (!new_hotspot_password ||
+           (hotspot_passphrase_confirm &&
+            *hotspot_passphrase_confirm == *hotspot_passphrase)) &&
+          aa2acp::bridge::save_config(config_path,
+                                      {mac, *wifi, *hotspot_ssid,
+                                       effective_hotspot_passphrase,
+                                       previous.airplay_pairing_store})) {
         if (mac != previous.head_unit_mac) {
           std::error_code error;
           const auto capabilities_store =
@@ -1784,7 +1803,7 @@ int main(int argc, char **argv) {
         }
         {
           std::lock_guard lock(config_mutex);
-          config = {mac, *wifi, *hotspot_ssid, *hotspot_passphrase,
+          config = {mac, *wifi, *hotspot_ssid, effective_hotspot_passphrase,
                     previous.airplay_pairing_store};
         }
         std::cout << "Management: saved head unit " << mac << " on " << *wifi
