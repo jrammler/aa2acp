@@ -1541,32 +1541,25 @@ int main(int argc, char **argv) {
   }
   std::cout << "Bridge management UI listening on http://0.0.0.0:" << port
             << '\n';
-  for (;;) {
-    pollfd descriptors[]{{listener, POLLIN, 0}, {signal_fd, POLLIN, 0}};
-    if (poll(descriptors, 2, -1) <= 0)
-      continue;
-    if ((descriptors[1].revents & POLLIN) != 0) {
-      signalfd_siginfo signal_info{};
-      if (read(signal_fd, &signal_info, sizeof(signal_info)) ==
-          static_cast<ssize_t>(sizeof(signal_info))) {
-        std::cout << "Bridge daemon: graceful shutdown requested\n";
-        break;
-      }
-      continue;
-    }
-    if ((descriptors[0].revents & POLLIN) == 0)
-      continue;
-    const int client = accept(listener, nullptr, nullptr);
-    if (client < 0)
-      continue;
+  const auto handle_client = [&](const int client) {
     std::array<char, 4096> buffer{};
     std::string request;
-    while (request.find("\r\n\r\n") == std::string::npos &&
-           request.size() <= 16 * 1024) {
+    const auto receive_more = [&] {
+      pollfd descriptor{client, POLLIN, 0};
+      if (poll(&descriptor, 1, 5000) <= 0 || (descriptor.revents & POLLIN) == 0)
+        return false;
       const auto count = recv(client, buffer.data(), buffer.size(), 0);
       if (count <= 0)
-        break;
+        return false;
       request.append(buffer.data(), static_cast<std::size_t>(count));
+      return true;
+    };
+    while (request.find("\r\n\r\n") == std::string::npos &&
+           request.size() <= 16 * 1024) {
+      if (!receive_more()) {
+        close(client);
+        return;
+      }
     }
     const auto header_end = request.find("\r\n\r\n");
     const auto content_marker = request.find("Content-Length: ");
@@ -1578,11 +1571,15 @@ int main(int argc, char **argv) {
                               ? 0U
                               : static_cast<std::size_t>(std::stoul(
                                     request.substr(start, end - start)));
+      if (length > 16 * 1024) {
+        close(client);
+        return;
+      }
       while (request.size() < header_end + 4 + length) {
-        const auto count = recv(client, buffer.data(), buffer.size(), 0);
-        if (count <= 0)
-          break;
-        request.append(buffer.data(), static_cast<std::size_t>(count));
+        if (!receive_more()) {
+          close(client);
+          return;
+        }
       }
     }
     const auto split = request.find("\r\n\r\n");
@@ -1818,7 +1815,72 @@ int main(int argc, char **argv) {
       respond(400, "text/plain", "Unknown endpoint\n");
     }
     close(client);
+  };
+
+  constexpr std::size_t kManagementWorkerCount = 4;
+  constexpr std::size_t kManagementQueueLimit = 16;
+  std::mutex request_queue_mutex;
+  std::condition_variable request_queue_ready;
+  std::deque<int> request_queue;
+  bool request_queue_stopping{};
+  std::vector<std::jthread> request_workers;
+  request_workers.reserve(kManagementWorkerCount);
+  for (std::size_t index = 0; index < kManagementWorkerCount; ++index) {
+    request_workers.emplace_back([&] {
+      for (;;) {
+        int client{};
+        {
+          std::unique_lock lock(request_queue_mutex);
+          request_queue_ready.wait(lock, [&] {
+            return request_queue_stopping || !request_queue.empty();
+          });
+          if (request_queue_stopping)
+            return;
+          client = request_queue.front();
+          request_queue.pop_front();
+        }
+        handle_client(client);
+      }
+    });
   }
+
+  for (;;) {
+    pollfd descriptors[]{{listener, POLLIN, 0}, {signal_fd, POLLIN, 0}};
+    if (poll(descriptors, 2, -1) <= 0)
+      continue;
+    if ((descriptors[1].revents & POLLIN) != 0) {
+      signalfd_siginfo signal_info{};
+      if (read(signal_fd, &signal_info, sizeof(signal_info)) ==
+          static_cast<ssize_t>(sizeof(signal_info))) {
+        std::cout << "Bridge daemon: graceful shutdown requested\n";
+        break;
+      }
+      continue;
+    }
+    if ((descriptors[0].revents & POLLIN) == 0)
+      continue;
+    const int client = accept4(listener, nullptr, nullptr, SOCK_CLOEXEC);
+    if (client < 0)
+      continue;
+    {
+      std::lock_guard lock(request_queue_mutex);
+      if (request_queue.size() >= kManagementQueueLimit) {
+        close(client);
+        continue;
+      }
+      request_queue.push_back(client);
+    }
+    request_queue_ready.notify_one();
+  }
+  {
+    std::lock_guard lock(request_queue_mutex);
+    request_queue_stopping = true;
+    for (const int client : request_queue)
+      close(client);
+    request_queue.clear();
+  }
+  request_queue_ready.notify_all();
+  request_workers.clear();
   close(listener);
   carplay_preflight_worker.request_stop();
   carplay_preflight_worker.join();
