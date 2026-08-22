@@ -22,5 +22,6 @@ bool request_pairing_confirmation(std::string_view address,
                                   std::uint32_t passkey, std::uint64_t *id);
 bool pairing_confirmation_result(std::uint64_t id, bool *confirmed);
 void answer_pairing_confirmation(std::uint64_t id, bool confirmed);
+void cancel_pairing_confirmation(std::uint64_t id);
 
 } // namespace aa2acp::iap2

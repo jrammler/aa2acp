@@ -778,6 +778,7 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     close(socket_fd);
     return 1;
   }
+  std::uint32_t next_cseq = 8;
   if (aa2acp::bridge::debug_logging_enabled())
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
         << "AirPlay: session SETUP received timing/event ports\n";
@@ -807,8 +808,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     const auto audio_response =
         send_encrypted(socket_fd, control, encrypted_read_buffer,
                        aa2acp::airplay::encode_request(
-                           "SETUP", "rtsp://127.0.0.1/stream", 8, audio_body,
-                           "application/x-apple-binary-plist"),
+                           "SETUP", "rtsp://127.0.0.1/stream", next_cseq++,
+                           audio_body, "application/x-apple-binary-plist"),
                        timeout_seconds, options.stop_requested);
     const auto audio_plist =
         audio_response ? aa2acp::airplay::decode_bplist(audio_response->body)
@@ -871,8 +872,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     const auto response =
         send_encrypted(socket_fd, control, encrypted_read_buffer,
                        aa2acp::airplay::encode_request(
-                           "SETUP", "rtsp://127.0.0.1/stream", 8, body,
-                           "application/x-apple-binary-plist"),
+                           "SETUP", "rtsp://127.0.0.1/stream", next_cseq++,
+                           body, "application/x-apple-binary-plist"),
                        timeout_seconds, options.stop_requested);
     const auto plist = response ? aa2acp::airplay::decode_bplist(response->body)
                                 : std::nullopt;
@@ -925,8 +926,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   const auto screen_response =
       send_encrypted(socket_fd, control, encrypted_read_buffer,
                      aa2acp::airplay::encode_request(
-                         "SETUP", "rtsp://127.0.0.1/stream", 9, screen_body,
-                         "application/x-apple-binary-plist"),
+                         "SETUP", "rtsp://127.0.0.1/stream", next_cseq++,
+                         screen_body, "application/x-apple-binary-plist"),
                      timeout_seconds, options.stop_requested);
   const auto screen_plist =
       screen_response ? aa2acp::airplay::decode_bplist(screen_response->body)
@@ -978,11 +979,12 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
         << "AirPlay: screen SETUP received data port " << *screen_port << '\n';
 
-  const auto record_response = send_encrypted(
-      socket_fd, control, encrypted_read_buffer,
-      aa2acp::airplay::encode_request("RECORD", "rtsp://127.0.0.1/stream", 10,
-                                      {}, "application/octet-stream"),
-      timeout_seconds, options.stop_requested);
+  const auto record_response =
+      send_encrypted(socket_fd, control, encrypted_read_buffer,
+                     aa2acp::airplay::encode_request(
+                         "RECORD", "rtsp://127.0.0.1/stream", next_cseq++, {},
+                         "application/octet-stream"),
+                     timeout_seconds, options.stop_requested);
   if (!record_response || record_response->status != 200) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
         << "Encrypted RECORD failed\n";

@@ -23,6 +23,7 @@
 #include <atomic>
 #include <cctype>
 #include <cerrno>
+#include <charconv>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -176,6 +177,13 @@ public:
     for (;;) {
       pollfd descriptors[]{{output_fd_, POLLIN, 0}, {control_fd_, POLLIN, 0}};
       if (poll(descriptors, 2, 100) > 0) {
+        if ((descriptors[0].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0 ||
+            (descriptors[1].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+          std::lock_guard state_lock(management_state.mutex);
+          management_state.snapshot.pairing_confirmation.reset();
+          active_child = -1;
+          return 1;
+        }
         if ((descriptors[0].revents & POLLIN) != 0) {
           std::array<char, 4096> output{};
           const auto count = read(output_fd_, output.data(), output.size());
@@ -585,8 +593,19 @@ bool send_response(const int client, const int status, const char *type,
       "Content-Type: " + type + "\r\n" + extra +
       "Content-Length: " + std::to_string(body.size()) +
       "\r\nConnection: close\r\n\r\n" + body;
-  return send(client, response.data(), response.size(), MSG_NOSIGNAL) ==
-         static_cast<ssize_t>(response.size());
+  std::size_t offset{};
+  while (offset < response.size()) {
+    const auto written = send(client, response.data() + offset,
+                              response.size() - offset, MSG_NOSIGNAL);
+    if (written > 0) {
+      offset += static_cast<std::size_t>(written);
+      continue;
+    }
+    if (written < 0 && errno == EINTR)
+      continue;
+    return false;
+  }
+  return true;
 }
 
 std::vector<std::string> wifi_interfaces() {
@@ -820,7 +839,10 @@ std::string page(const aa2acp::bridge::Config &config,
   if (!config.head_unit_mac.empty() && !config.wifi_interface.empty())
     output +=
         "<form method=post action=\"/carplay-prepare\"><button type=submit " +
-        std::string(snapshot.carplay_preflight_running ? "disabled" : "") +
+        std::string(snapshot.carplay_preflight_running ||
+                            snapshot.bluetooth_scan_running
+                        ? "disabled"
+                        : "") +
         ">Prepare/Test CarPlay</button></form>";
   if (!config.head_unit_mac.empty())
     output +=
@@ -1749,13 +1771,6 @@ int main(int argc, char **argv) {
         << "Bridge daemon: management hotspot default password is '"
         << kDefaultManagementHotspotPassphrase
         << "'; change it at the management UI before using AA2ACP\n";
-  std::jthread wifi_refresh_worker([](std::stop_token stop_token) {
-    while (!stop_token.stop_requested()) {
-      refresh_wifi_inventory(management_state);
-      for (int count = 0; count < 20 && !stop_token.stop_requested(); ++count)
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    }
-  });
   sigset_t signals;
   sigemptyset(&signals);
   sigaddset(&signals, SIGINT);
@@ -1765,6 +1780,13 @@ int main(int argc, char **argv) {
         << "Unable to block shutdown signals\n";
     return 1;
   }
+  std::jthread wifi_refresh_worker([](std::stop_token stop_token) {
+    while (!stop_token.stop_requested()) {
+      refresh_wifi_inventory(management_state);
+      for (int count = 0; count < 20 && !stop_token.stop_requested(); ++count)
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+  });
   const int signal_fd = signalfd(-1, &signals, SFD_CLOEXEC);
   if (signal_fd < 0) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
@@ -1802,9 +1824,20 @@ int main(int argc, char **argv) {
   const auto handle_client = [&](const int client) {
     std::array<char, 4096> buffer{};
     std::string request;
+    const auto request_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(10);
     const auto receive_more = [&] {
+      const auto remaining =
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              request_deadline - std::chrono::steady_clock::now());
+      if (remaining <= std::chrono::milliseconds::zero())
+        return false;
       pollfd descriptor{client, POLLIN, 0};
-      if (poll(&descriptor, 1, 5000) <= 0 || (descriptor.revents & POLLIN) == 0)
+      if (poll(&descriptor, 1,
+               static_cast<int>(
+                   std::min(remaining, std::chrono::milliseconds(5000))
+                       .count())) <= 0 ||
+          (descriptor.revents & POLLIN) == 0)
         return false;
       const auto count = recv(client, buffer.data(), buffer.size(), 0);
       if (count <= 0)
@@ -1825,11 +1858,15 @@ int main(int argc, char **argv) {
         content_marker != std::string::npos) {
       const auto start = content_marker + 16;
       const auto end = request.find("\r\n", start);
-      const auto length = end == std::string::npos
-                              ? 0U
-                              : static_cast<std::size_t>(std::stoul(
-                                    request.substr(start, end - start)));
-      if (length > 16 * 1024) {
+      std::size_t length{};
+      const auto text =
+          end == std::string::npos
+              ? std::string_view{}
+              : std::string_view(request).substr(start, end - start);
+      const auto parsed =
+          std::from_chars(text.data(), text.data() + text.size(), length);
+      if (text.empty() || parsed.ec != std::errc{} ||
+          parsed.ptr != text.data() + text.size() || length > 16 * 1024) {
         close(client);
         return;
       }
@@ -1971,7 +2008,8 @@ int main(int argc, char **argv) {
       bool start_preflight = false;
       {
         std::lock_guard lock(management_state.mutex);
-        if (!management_state.snapshot.carplay_preflight_running) {
+        if (!management_state.snapshot.carplay_preflight_running &&
+            !management_state.snapshot.bluetooth_scan_running) {
           management_state.snapshot.carplay_preflight_running = true;
           management_state.snapshot.carplay_preflight_status = "queued";
           start_preflight = true;
@@ -1989,7 +2027,9 @@ int main(int argc, char **argv) {
           std::lock_guard lock(management_state.mutex);
           management_state.snapshot.carplay_preflight_running = false;
           management_state.snapshot.carplay_preflight_status =
-              "configure a head-unit MAC and Wi-Fi interface first";
+              management_state.snapshot.bluetooth_scan_running
+                  ? "wait for Bluetooth scanning to finish first"
+                  : "configure a head-unit MAC and Wi-Fi interface first";
         }
         const auto location = selected_config.head_unit_mac.empty() ||
                                       selected_config.wifi_interface.empty()

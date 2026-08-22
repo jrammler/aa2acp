@@ -600,3 +600,11 @@ void aa2acp::iap2::answer_pairing_confirmation(const std::uint64_t id,
   if (pending_pairing_confirmation_id == id)
     pending_pairing_confirmation_result = confirmed ? 1 : 0;
 }
+
+void aa2acp::iap2::cancel_pairing_confirmation(const std::uint64_t id) {
+  std::lock_guard lock(pairing_confirmation_mutex);
+  if (pending_pairing_confirmation_id == id) {
+    pending_pairing_confirmation_id = 0;
+    pending_pairing_confirmation_result = -1;
+  }
+}

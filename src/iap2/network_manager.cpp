@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <ifaddrs.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -76,6 +77,9 @@ bool run_nmcli(std::vector<std::string> arguments,
   if (quiet) {
     posix_spawn_file_actions_destroy(&actions);
     close(output_pipe[1]);
+    const auto flags = fcntl(output_pipe[0], F_GETFL);
+    if (flags >= 0)
+      fcntl(output_pipe[0], F_SETFL, flags | O_NONBLOCK);
   }
   if (result != 0) {
     if (quiet)
@@ -87,16 +91,35 @@ bool run_nmcli(std::vector<std::string> arguments,
   int status{};
   // nmcli exits 6 when disconnecting an interface that is already inactive.
   // Leaving the car AP must be idempotent, so that state is a success here.
-  const auto waited = waitpid(child, &status, 0);
   std::string diagnostics;
-  if (quiet) {
+  pid_t waited{};
+  const auto drain_diagnostics = [&] {
+    if (!quiet)
+      return;
     std::array<char, 4096> buffer{};
     for (;;) {
       const auto count = read(output_pipe[0], buffer.data(), buffer.size());
-      if (count <= 0)
-        break;
-      diagnostics.append(buffer.data(), static_cast<std::size_t>(count));
+      if (count > 0) {
+        diagnostics.append(buffer.data(), static_cast<std::size_t>(count));
+        continue;
+      }
+      break;
     }
+  };
+  for (;;) {
+    drain_diagnostics();
+    waited = waitpid(child, &status, WNOHANG);
+    if (waited != 0)
+      break;
+    if (quiet) {
+      pollfd descriptor{output_pipe[0], POLLIN, 0};
+      poll(&descriptor, 1, 50);
+    } else {
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+  }
+  if (quiet) {
+    drain_diagnostics();
     close(output_pipe[0]);
   }
   const bool success = waited >= 0 && WIFEXITED(status) &&

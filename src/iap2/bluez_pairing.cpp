@@ -73,6 +73,24 @@ void resolve_pending_confirmation(DBusConnection *connection,
                 : "pairing confirmation timed out");
   dbus_message_unref(context->pending_confirmation);
   context->pending_confirmation = nullptr;
+  if (timed_out)
+    cancel_pairing_confirmation(context->confirmation_id);
+}
+
+void reject_pending_confirmation(DBusConnection *connection,
+                                 AgentContext *context, const char *reason) {
+  if (context == nullptr || context->pending_confirmation == nullptr)
+    return;
+  DBusMessage *reply = dbus_message_new_error(
+      context->pending_confirmation, "org.bluez.Error.Rejected", reason);
+  if (reply != nullptr) {
+    dbus_connection_send(connection, reply, nullptr);
+    dbus_connection_flush(connection);
+    dbus_message_unref(reply);
+  }
+  cancel_pairing_confirmation(context->confirmation_id);
+  dbus_message_unref(context->pending_confirmation);
+  context->pending_confirmation = nullptr;
 }
 
 void finish_call(DBusPendingCall *pending, void *user_data) {
@@ -197,6 +215,12 @@ bool agent_handler(DBusConnection *connection, DBusMessage *message,
                   agent_request_detail(message));
   }
   auto *mutable_context = const_cast<AgentContext *>(context);
+  if ((dbus_message_is_method_call(message, kAgentInterface, "Cancel") ||
+       dbus_message_is_method_call(message, kAgentInterface, "Release")) &&
+      mutable_context != nullptr) {
+    reject_pending_confirmation(connection, mutable_context,
+                                "Pairing confirmation cancelled");
+  }
   if (dbus_message_is_method_call(message, kAgentInterface,
                                   "RequestConfirmation") &&
       mutable_context != nullptr &&
@@ -221,6 +245,15 @@ bool agent_handler(DBusConnection *connection, DBusMessage *message,
     }
     write_log(*mutable_context->log, aa2acp::bridge::LogLevel::error,
               "unable to request management UI pairing confirmation");
+    DBusMessage *rejection = dbus_message_new_error(
+        message, "org.bluez.Error.Rejected",
+        "Unable to request management UI pairing confirmation");
+    if (rejection != nullptr) {
+      dbus_connection_send(connection, rejection, nullptr);
+      dbus_connection_flush(connection);
+      dbus_message_unref(rejection);
+    }
+    return true;
   }
   DBusMessage *reply = dbus_message_new_method_return(message);
   if (reply == nullptr) {
@@ -437,6 +470,8 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
     return false;
   }
   const auto cleanup_agent = [&] {
+    reject_pending_confirmation(connection, &agent_context,
+                                "Pairing session ended");
     std::string cleanup_name;
     std::string cleanup_detail;
     if (!call_unregister_agent(connection, cleanup_name, cleanup_detail) &&
