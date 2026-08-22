@@ -54,6 +54,8 @@ struct ManagementSnapshot {
   std::string bluetooth_error;
   bool carplay_preflight_running{};
   std::string carplay_preflight_status;
+  bool management_hotspot_password_pending{};
+  std::string pending_management_hotspot_ssid;
 };
 
 struct ManagementState {
@@ -62,6 +64,12 @@ struct ManagementState {
 };
 
 ManagementState management_state;
+std::mutex management_hotspot_password_mutex;
+struct PendingManagementHotspotUpdate {
+  std::string passphrase;
+  std::string ssid;
+};
+std::optional<PendingManagementHotspotUpdate> pending_management_hotspot_update;
 
 class CarPlayWorker final {
 public:
@@ -200,8 +208,23 @@ std::string management_hotspot_ssid(const std::string &interface_name) {
       suffix.push_back(static_cast<char>(
           std::toupper(static_cast<unsigned char>(character))));
   if (suffix.size() < 6)
-    return "AA2ACP-SETUP";
-  return "AA2ACP-" + suffix.substr(suffix.size() - 6);
+    return "AA2ACP-SETUP-1";
+  return "AA2ACP-" + suffix.substr(suffix.size() - 6) + "-1";
+}
+
+std::string next_management_hotspot_ssid(const std::string &ssid) {
+  const auto separator = ssid.rfind('-');
+  if (separator == std::string::npos || separator + 1 == ssid.size())
+    return ssid + "-2";
+  unsigned int counter{};
+  for (std::size_t index = separator + 1; index < ssid.size(); ++index) {
+    const auto character = ssid[index];
+    if (!std::isdigit(static_cast<unsigned char>(character)) ||
+        counter > 99999999U)
+      return ssid + "-2";
+    counter = counter * 10 + static_cast<unsigned int>(character - '0');
+  }
+  return ssid.substr(0, separator + 1) + std::to_string(counter + 1);
 }
 
 void ensure_management_hotspot_settings(aa2acp::bridge::Config &config) {
@@ -568,15 +591,30 @@ std::string page(const aa2acp::bridge::Config &config,
       "\">"
       "<h1>AA2ACP</h1><p>Configure the pinned CarPlay head unit.</p>";
   if (management_hotspot_needs_setup(config)) {
-    output +=
-        "<p class=\"status error\">Change the default management hotspot "
-        "password before using AA2ACP.</p><p>Connect to Wi-Fi network <b>" +
-        html_escape(config.management_hotspot_ssid) +
-        "</b>, then choose a new WPA2 password.</p><form method=post "
-        "action=\"/management-hotspot\"><label>New management hotspot "
-        "password<input required minlength=8 type=password "
-        "name=\"management_hotspot_passphrase\"></label><button "
-        "type=submit>Save password</button></form></body></html>";
+    output += "<p class=\"status error\">Change the default management "
+              "hotspot password before using AA2ACP.</p><p>Connect to Wi-Fi "
+              "network <b>" +
+              html_escape(config.management_hotspot_ssid) + "</b>.</p>";
+    if (snapshot.management_hotspot_password_pending) {
+      output +=
+          "<p>Your new password is ready. Applying it will disconnect this "
+          "device from the hotspot. Its new name will be <b>" +
+          html_escape(snapshot.pending_management_hotspot_ssid) +
+          "</b>.</p><form method=post "
+          "action=\"/management-hotspot/apply\"><button type=submit>Apply "
+          "new password</button></form>";
+    } else {
+      output += "<form method=post action=\"/management-hotspot\"><label>New "
+                "management hotspot password<input required minlength=8 "
+                "type=password name=\"management_hotspot_passphrase\"></label>"
+                "<label>Confirm new password<input required minlength=8 "
+                "type=password name=\"management_hotspot_passphrase_confirm\">"
+                "</label><label><input checked type=checkbox "
+                "name=\"management_hotspot_change_ssid\" value=\"1\">Use "
+                "a new hotspot name (recommended)</label><button type=submit>"
+                "Continue</button></form>";
+    }
+    output += "</body></html>";
     return output;
   }
   if (saved || carplay_error) {
@@ -1576,15 +1614,53 @@ int main(int argc, char **argv) {
               snapshot.carplay_preflight_status);
     } else if (request.starts_with("POST /management-hotspot ")) {
       const auto passphrase = form_field(body, "management_hotspot_passphrase");
+      const auto confirmation =
+          form_field(body, "management_hotspot_passphrase_confirm");
+      const auto change_ssid =
+          form_field(body, "management_hotspot_change_ssid").has_value();
+      if (!passphrase || !confirmation || *passphrase != *confirmation) {
+        respond(400, "text/plain", "Passwords do not match\n");
+      } else if (*passphrase == kDefaultManagementHotspotPassphrase ||
+                 passphrase->size() < 8 ||
+                 passphrase->find_first_of("\r\n=") != std::string::npos) {
+        respond(400, "text/plain", "Choose a different valid password\n");
+      } else {
+        const auto current = [&] {
+          std::lock_guard lock(config_mutex);
+          return config;
+        }();
+        const auto ssid =
+            change_ssid
+                ? next_management_hotspot_ssid(current.management_hotspot_ssid)
+                : current.management_hotspot_ssid;
+        {
+          std::lock_guard lock(management_hotspot_password_mutex);
+          pending_management_hotspot_update = {*passphrase, ssid};
+        }
+        {
+          std::lock_guard lock(management_state.mutex);
+          management_state.snapshot.management_hotspot_password_pending = true;
+          management_state.snapshot.pending_management_hotspot_ssid = ssid;
+        }
+        respond(303, "text/plain", "", "Location: /\r\n");
+      }
+    } else if (request.starts_with("POST /management-hotspot/apply ")) {
+      std::optional<PendingManagementHotspotUpdate> update;
+      {
+        std::lock_guard lock(management_hotspot_password_mutex);
+        update = std::move(pending_management_hotspot_update);
+        pending_management_hotspot_update.reset();
+      }
       const auto previous = [&] {
         std::lock_guard lock(config_mutex);
         return config;
       }();
-      auto updated = previous;
-      if (!passphrase || *passphrase == kDefaultManagementHotspotPassphrase) {
-        respond(400, "text/plain", "Choose a different password\n");
+      if (!update) {
+        respond(400, "text/plain", "No password update is pending\n");
       } else {
-        updated.management_hotspot_passphrase = *passphrase;
+        auto updated = previous;
+        updated.management_hotspot_passphrase = update->passphrase;
+        updated.management_hotspot_ssid = update->ssid;
         if (!aa2acp::bridge::save_config(config_path, updated)) {
           respond(400, "text/plain", "Invalid hotspot password\n");
         } else {
@@ -1592,10 +1668,22 @@ int main(int argc, char **argv) {
             std::lock_guard lock(config_mutex);
             config = updated;
           }
+          {
+            std::lock_guard lock(management_state.mutex);
+            management_state.snapshot.management_hotspot_password_pending =
+                false;
+            management_state.snapshot.pending_management_hotspot_ssid.clear();
+          }
+          respond(200, "text/html",
+                  "<!doctype html><title>AA2ACP</title><p>Password updated. "
+                  "This device will now disconnect from the hotspot.</p><p>"
+                  "Reconnect to Wi-Fi network <b>" +
+                      html_escape(updated.management_hotspot_ssid) +
+                      "</b>, reconnect using the new password, then <a "
+                      "href=\"/\">continue</a>.</p>");
           aa2acp::iap2::start_management_hotspot(
               updated.wifi_interface, updated.management_hotspot_ssid,
               updated.management_hotspot_passphrase);
-          respond(303, "text/plain", "", "Location: /?saved=1\r\n");
         }
       }
     } else if ([&] {

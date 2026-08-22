@@ -9,10 +9,12 @@ automatically and reaches the UI at the hotspot gateway address (normally
 optional boot/restart wrapper.
 
 On first start, AA2ACP selects the first usable Wi-Fi adapter and starts a
-hotspot named `AA2ACP-` followed by that adapter's MAC suffix. Its initial
-WPA2 password is `changeme`; the management UI permits no other action until
-the owner replaces it. The selected adapter, SSID, and password are persisted,
-and the UI lets the owner change all three later. On a single-radio
+hotspot named `AA2ACP-<MAC suffix>-1`. Its initial WPA2 password is
+`changeme`; the management UI permits no other action until the owner replaces
+it. Password setup asks for confirmation and, by default, changes the SSID by
+incrementing its final counter so a phone can connect to the new network
+without forgetting the old one. The selected adapter, SSID, and password are
+persisted, and the UI lets the owner change all three later. On a single-radio
 installation, the bridge stops the hotspot only while joining the car's
 CarPlay network and recreates it when that session ends.
 
