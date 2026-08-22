@@ -1577,6 +1577,15 @@ int main(int argc, char **argv) {
   for (int index = 1; index < argc; ++index)
     if (std::string_view(argv[index]) == "--no-file-log")
       file_logging = false;
+  // Start this process before installing the daemon tee. Its output is fed
+  // through that tee by the parent, so inheriting the tee would prefix it
+  // twice.
+  carplay_worker = std::make_unique<CarPlayWorker>();
+  if (!carplay_worker) {
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Unable to start CarPlay worker\n";
+    return 1;
+  }
   RecentLog recent_log;
   const auto log_path = file_logging ? next_daemon_log_path()
                                      : std::optional<std::filesystem::path>{};
@@ -1609,12 +1618,6 @@ int main(int argc, char **argv) {
     config.airplay_pairing_store =
         aa2acp::bridge::default_airplay_pairing_store();
   std::mutex config_mutex;
-  carplay_worker = std::make_unique<CarPlayWorker>();
-  if (!carplay_worker) {
-    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
-        << "Unable to start CarPlay worker\n";
-    return 1;
-  }
   refresh_bluetooth_inventory(management_state);
   refresh_wifi_inventory(management_state);
   if (config.wifi_interface.empty()) {
