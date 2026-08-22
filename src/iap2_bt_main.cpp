@@ -154,7 +154,8 @@ public:
                   << '\n';
         return std::nullopt;
       }
-      std::cout << "Bridge: connected to Android Auto video source\n";
+      if (aa2acp::bridge::debug_logging_enabled())
+        std::cout << "Bridge: connected to Android Auto video source\n";
     }
     std::array<std::uint8_t, 4> header{};
     if (!receive_all(socket_fd_, header))
@@ -193,7 +194,8 @@ public:
                   << '\n';
         return std::nullopt;
       }
-      std::cout << "Bridge: connected to Android Auto media audio source\n";
+      if (aa2acp::bridge::debug_logging_enabled())
+        std::cout << "Bridge: connected to Android Auto media audio source\n";
     }
     std::array<std::uint8_t, 4> header{};
     if (!receive_all(socket_fd_, header))
