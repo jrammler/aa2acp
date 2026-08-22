@@ -255,18 +255,25 @@ bool agent_handler(DBusConnection *connection, DBusMessage *message,
     }
     return true;
   }
+  if (dbus_message_is_method_call(message, kAgentInterface, "RequestPinCode") ||
+      dbus_message_is_method_call(message, kAgentInterface, "RequestPasskey")) {
+    DBusMessage *rejection = dbus_message_new_error(
+        message, "org.bluez.Error.Rejected",
+        "AA2ACP only supports Numeric Comparison pairing");
+    if (rejection != nullptr) {
+      dbus_connection_send(connection, rejection, nullptr);
+      dbus_connection_flush(connection);
+      dbus_message_unref(rejection);
+    }
+    if (context != nullptr && context->log != nullptr) {
+      write_log(*context->log, aa2acp::bridge::LogLevel::warning,
+                "rejected unsupported PIN/passkey pairing request");
+    }
+    return true;
+  }
   DBusMessage *reply = dbus_message_new_method_return(message);
   if (reply == nullptr) {
     return true;
-  }
-  if (dbus_message_is_method_call(message, kAgentInterface, "RequestPinCode")) {
-    const char *pin = "0000";
-    dbus_message_append_args(reply, DBUS_TYPE_STRING, &pin, DBUS_TYPE_INVALID);
-  } else if (dbus_message_is_method_call(message, kAgentInterface,
-                                         "RequestPasskey")) {
-    const dbus_uint32_t passkey = 0;
-    dbus_message_append_args(reply, DBUS_TYPE_UINT32, &passkey,
-                             DBUS_TYPE_INVALID);
   }
   dbus_connection_send(connection, reply, nullptr);
   dbus_connection_flush(connection);

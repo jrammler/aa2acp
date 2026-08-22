@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <iostream>
@@ -101,9 +102,11 @@ int connect_unix(const std::string &path) {
   return socket_fd;
 }
 
-bool receive_all(const int socket_fd, std::span<std::uint8_t> bytes) {
+bool receive_all(const int socket_fd, std::span<std::uint8_t> bytes,
+                 const std::atomic_bool *stop_streams = nullptr) {
   std::size_t offset{};
-  while (offset < bytes.size() && shutdown_requested == 0) {
+  while (offset < bytes.size() && shutdown_requested == 0 &&
+         (stop_streams == nullptr || !stop_streams->load())) {
     pollfd descriptor{socket_fd, POLLIN, 0};
     if (poll(&descriptor, 1, 100) <= 0)
       continue;
@@ -192,7 +195,8 @@ private:
 
 class AudioSocketReader {
 public:
-  explicit AudioSocketReader(std::string path) : path_(std::move(path)) {}
+  AudioSocketReader(std::string path, std::shared_ptr<std::atomic_bool> stop)
+      : path_(std::move(path)), stop_(std::move(stop)) {}
   ~AudioSocketReader() {
     if (socket_fd_ >= 0)
       close(socket_fd_);
@@ -212,7 +216,7 @@ public:
             << "Bridge: connected to Android Auto media audio source\n";
     }
     std::array<std::uint8_t, 4> header{};
-    if (!receive_all(socket_fd_, header))
+    if (!receive_all(socket_fd_, header, stop_.get()))
       return std::nullopt;
     const auto size = (static_cast<std::size_t>(header[0]) << 24) |
                       (static_cast<std::size_t>(header[1]) << 16) |
@@ -223,12 +227,14 @@ public:
       return std::nullopt;
     }
     std::vector<std::uint8_t> frame(size);
-    return receive_all(socket_fd_, frame) ? std::optional(std::move(frame))
-                                          : std::nullopt;
+    return receive_all(socket_fd_, frame, stop_.get())
+               ? std::optional(std::move(frame))
+               : std::nullopt;
   }
 
 private:
   std::string path_;
+  std::shared_ptr<std::atomic_bool> stop_;
   int socket_fd_{-1};
 };
 
@@ -478,22 +484,25 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
         << carplay_probe.airplay_port() << '\n';
     const auto run_airplay =
         [&] {
+          const auto stop_streams = std::make_shared<std::atomic_bool>();
           const auto live_video =
               video_socket.empty()
                   ? std::shared_ptr<VideoSocketReader>{}
                   : std::make_shared<VideoSocketReader>(video_socket);
-          const auto live_audio =
-              audio_socket.empty()
-                  ? std::shared_ptr<AudioSocketReader>{}
-                  : std::make_shared<AudioSocketReader>(audio_socket);
+          const auto live_audio = audio_socket.empty()
+                                      ? std::shared_ptr<AudioSocketReader>{}
+                                      : std::make_shared<AudioSocketReader>(
+                                            audio_socket, stop_streams);
           const auto live_guidance_audio =
               guidance_audio_socket.empty()
                   ? std::shared_ptr<AudioSocketReader>{}
-                  : std::make_shared<AudioSocketReader>(guidance_audio_socket);
+                  : std::make_shared<AudioSocketReader>(guidance_audio_socket,
+                                                        stop_streams);
           const auto live_system_audio =
               system_audio_socket.empty()
                   ? std::shared_ptr<AudioSocketReader>{}
-                  : std::make_shared<AudioSocketReader>(system_audio_socket);
+                  : std::make_shared<AudioSocketReader>(system_audio_socket,
+                                                        stop_streams);
           const aa2acp::airplay::SessionOptions options{
           .host = host,
           .port = static_cast<std::uint16_t>(carplay_probe.airplay_port()),
@@ -519,6 +528,7 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
           .head_unit_capabilities_store = head_unit_capabilities_store,
           .head_unit_mac = address,
           .stop_requested = [] { return shutdown_requested != 0; },
+          .stop_streams = [stop_streams] { stop_streams->store(true); },
       };
           return aa2acp::airplay::run_session(options);
         };

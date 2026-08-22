@@ -1136,6 +1136,13 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
       guidance_audio, options.next_guidance_audio, "guidance");
   auto system_sender =
       launch_auxiliary_audio(system_audio, options.next_system_audio, "system");
+  struct StreamStopGuard {
+    const std::function<void()> &stop;
+    ~StreamStopGuard() {
+      if (stop)
+        stop();
+    }
+  } stream_stop_guard{options.stop_streams};
   if (video_path.empty() && !options.next_video_frame) {
     close(socket_fd);
     return 0;

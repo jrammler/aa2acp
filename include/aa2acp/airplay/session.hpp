@@ -29,6 +29,9 @@ struct SessionOptions {
   std::filesystem::path head_unit_capabilities_store;
   std::string head_unit_mac;
   std::function<bool()> stop_requested;
+  // Called before the audio sender threads are joined, so a callback blocked
+  // waiting for Android Auto data can be interrupted during teardown.
+  std::function<void()> stop_streams;
 };
 
 int run_session(const SessionOptions &options);
