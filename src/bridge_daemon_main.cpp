@@ -2279,9 +2279,12 @@ int main(int argc, char **argv) {
   std::deque<int> request_queue;
   bool request_queue_stopping{};
   std::vector<std::jthread> request_workers;
+  std::array<std::atomic<int>, kManagementWorkerCount> active_clients;
+  for (auto &client : active_clients)
+    client.store(-1);
   request_workers.reserve(kManagementWorkerCount);
   for (std::size_t index = 0; index < kManagementWorkerCount; ++index) {
-    request_workers.emplace_back([&] {
+    request_workers.emplace_back([&, index] {
       for (;;) {
         int client{};
         {
@@ -2293,8 +2296,10 @@ int main(int argc, char **argv) {
             return;
           client = request_queue.front();
           request_queue.pop_front();
+          active_clients[index].store(client);
         }
         handle_client(client);
+        active_clients[index].store(-1);
       }
     });
   }
@@ -2336,12 +2341,17 @@ int main(int argc, char **argv) {
     request_queue.clear();
   }
   request_queue_ready.notify_all();
+  for (auto &client : active_clients) {
+    const auto fd = client.load();
+    if (fd >= 0)
+      shutdown(fd, SHUT_RDWR);
+  }
   request_workers.clear();
   close(listener);
   carplay_preflight_worker.request_stop();
+  bluetooth_scan_worker.request_stop();
   if (carplay_preflight_worker.joinable())
     carplay_preflight_worker.join();
-  bluetooth_scan_worker.request_stop();
   if (bluetooth_scan_worker.joinable())
     bluetooth_scan_worker.join();
   android_auto_worker.request_stop();
