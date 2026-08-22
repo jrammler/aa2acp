@@ -162,7 +162,9 @@ public:
           std::chrono::steady_clock::now() + std::chrono::seconds(2);
       pid_t waited{};
       do {
-        waited = waitpid(pid_, &status, WNOHANG);
+        do {
+          waited = waitpid(pid_, &status, WNOHANG);
+        } while (waited < 0 && errno == EINTR);
         if (waited == 0)
           std::this_thread::sleep_for(std::chrono::milliseconds(20));
       } while (waited == 0 && std::chrono::steady_clock::now() < deadline);
