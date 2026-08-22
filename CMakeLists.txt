@@ -64,6 +64,11 @@ add_library(bridge_media_forwarders src/bridge/media_forwarders.cpp)
 target_include_directories(bridge_media_forwarders PUBLIC include)
 target_compile_options(bridge_media_forwarders PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
+add_library(bridge_carplay_worker src/bridge/carplay_worker.cpp)
+target_include_directories(bridge_carplay_worker PUBLIC include)
+target_link_libraries(bridge_carplay_worker PUBLIC iap2_bluetooth_worker)
+target_compile_options(bridge_carplay_worker PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
 add_library(bridge_management_ui src/bridge/management_ui.cpp)
 target_include_directories(bridge_management_ui PUBLIC include)
 target_link_libraries(bridge_management_ui PUBLIC bridge_config bluez_inventory iap2_bluetooth_worker)
@@ -107,7 +112,7 @@ if(AA2ACP_BUILD_DIAGNOSTICS)
 endif()
 
 add_executable(aa2acp src/bridge_daemon_main.cpp)
-target_link_libraries(aa2acp PRIVATE bridge_config bridge_daemon_log bridge_media_forwarders bridge_management_ui bluez_inventory android_auto_usb h264_normalizer airplay_rtsp iap2_link iap2_bluetooth_worker)
+target_link_libraries(aa2acp PRIVATE bridge_config bridge_daemon_log bridge_media_forwarders bridge_management_ui bridge_carplay_worker bluez_inventory android_auto_usb h264_normalizer airplay_rtsp iap2_link iap2_bluetooth_worker)
 target_compile_options(aa2acp PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 add_executable(aa2acp-android-auto-usb src/android_auto_usb_main.cpp)

@@ -1,6 +1,7 @@
 #include "aa2acp/aa/wired_receiver.hpp"
 #include "aa2acp/airplay/head_unit_capabilities.hpp"
 #include "aa2acp/bridge/bluez_inventory.hpp"
+#include "aa2acp/bridge/carplay_worker.hpp"
 #include "aa2acp/bridge/config.hpp"
 #include "aa2acp/bridge/daemon_log.hpp"
 #include "aa2acp/bridge/h264_normalizer.hpp"
@@ -51,6 +52,7 @@
 namespace {
 
 using aa2acp::bridge::AudioSocketForwarder;
+using aa2acp::bridge::CarPlayWorker;
 using aa2acp::bridge::DaemonLog;
 using aa2acp::bridge::next_daemon_log_path;
 using aa2acp::bridge::RecentLog;
@@ -63,6 +65,8 @@ using aa2acp::bridge::management::render_logs_page;
 using aa2acp::bridge::management::render_page;
 using aa2acp::bridge::management::send_response;
 using aa2acp::bridge::management::wifi_interfaces;
+
+std::unique_ptr<CarPlayWorker> carplay_worker;
 
 using ManagementSnapshot = aa2acp::bridge::management::Snapshot;
 
@@ -78,210 +82,6 @@ struct PendingManagementHotspotUpdate {
   std::string ssid;
 };
 std::optional<PendingManagementHotspotUpdate> pending_management_hotspot_update;
-
-class CarPlayWorker final {
-public:
-  CarPlayWorker() {
-    int control[2];
-    int output[2];
-    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, control) != 0 ||
-        pipe2(output, O_CLOEXEC) != 0)
-      return;
-    pid_ = fork();
-    if (pid_ == 0) {
-      setpgid(0, 0);
-      close(control[0]);
-      close(output[0]);
-      dup2(output[1], STDOUT_FILENO);
-      dup2(output[1], STDERR_FILENO);
-      close(output[1]);
-      aa2acp::iap2::set_pairing_confirmation_control_fd(control[1]);
-      std::array<char, 8192> request{};
-      for (;;) {
-        const auto count = recv(control[1], request.data(), request.size(), 0);
-        if (count <= 0)
-          _exit(0);
-        if (request[0] == '\2') {
-          aa2acp::iap2::request_bluetooth_worker_stop();
-          continue;
-        }
-        if (request[0] == '\4' &&
-            count ==
-                static_cast<ssize_t>(
-                    1 + sizeof(aa2acp::iap2::PairingConfirmationMessage) + 1)) {
-          aa2acp::iap2::PairingConfirmationMessage confirmation{};
-          std::memcpy(&confirmation, request.data() + 1, sizeof(confirmation));
-          aa2acp::iap2::answer_pairing_confirmation(
-              confirmation.id, request[1 + sizeof(confirmation)] != 0);
-          continue;
-        }
-        if (request[0] != '\1')
-          continue;
-        aa2acp::iap2::reset_bluetooth_worker_stop();
-        std::vector<char *> argv;
-        for (char *argument = request.data() + 1;
-             argument < request.data() + count;
-             argument += std::strlen(argument) + 1)
-          argv.push_back(argument);
-        argv.push_back(nullptr);
-        std::vector<std::string> arguments;
-        for (const char *argument : argv)
-          if (argument)
-            arguments.emplace_back(argument);
-        std::thread([control_fd = control[1],
-                     arguments = std::move(arguments)] {
-          std::vector<char *> worker_argv;
-          for (const auto &argument : arguments)
-            worker_argv.push_back(const_cast<char *>(argument.data()));
-          worker_argv.push_back(nullptr);
-          const int result = aa2acp::iap2::run_bluetooth_worker(
-              static_cast<int>(worker_argv.size() - 1), worker_argv.data());
-          std::array<std::byte, 1 + sizeof(result)> response{};
-          response[0] = std::byte{2};
-          std::memcpy(response.data() + 1, &result, sizeof(result));
-          send(control_fd, response.data(), response.size(), MSG_NOSIGNAL);
-        }).detach();
-      }
-    }
-    close(control[1]);
-    close(output[1]);
-    if (pid_ > 0) {
-      control_fd_ = control[0];
-      output_fd_ = output[0];
-    } else {
-      close(control[0]);
-      close(output[0]);
-    }
-  }
-
-  ~CarPlayWorker() {
-    if (control_fd_ >= 0) {
-      shutdown(control_fd_, SHUT_RDWR);
-      close(control_fd_);
-      control_fd_ = -1;
-    }
-    if (pid_ > 0) {
-      int status{};
-      const auto deadline =
-          std::chrono::steady_clock::now() + std::chrono::seconds(2);
-      pid_t waited{};
-      do {
-        do {
-          waited = waitpid(pid_, &status, WNOHANG);
-        } while (waited < 0 && errno == EINTR);
-        if (waited == 0)
-          std::this_thread::sleep_for(std::chrono::milliseconds(20));
-      } while (waited == 0 && std::chrono::steady_clock::now() < deadline);
-      if (waited == 0) {
-        kill(pid_, SIGKILL);
-        while (waitpid(pid_, &status, 0) < 0 && errno == EINTR) {
-        }
-      }
-    }
-    if (output_fd_ >= 0)
-      close(output_fd_);
-  }
-
-  int run(std::vector<std::string> arguments, const std::stop_token stop,
-          const std::atomic_bool &phone_disconnected,
-          std::atomic<pid_t> &active_child) {
-    std::lock_guard lock(mutex_);
-    if (pid_ <= 0 || control_fd_ < 0)
-      return 1;
-    std::string request;
-    request.push_back('\1');
-    for (const auto &argument : arguments)
-      request.append(argument).push_back('\0');
-    if (request.size() > 8192 ||
-        send(control_fd_, request.data(), request.size(), MSG_NOSIGNAL) < 0)
-      return 1;
-    active_child = pid_;
-    bool stopping = false;
-    for (;;) {
-      pollfd descriptors[]{{output_fd_, POLLIN, 0}, {control_fd_, POLLIN, 0}};
-      if (poll(descriptors, 2, 100) > 0) {
-        if ((descriptors[0].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0 ||
-            (descriptors[1].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
-          std::lock_guard state_lock(management_state.mutex);
-          management_state.snapshot.pairing_confirmation.reset();
-          active_child = -1;
-          return 1;
-        }
-        if ((descriptors[0].revents & POLLIN) != 0) {
-          std::array<char, 4096> output{};
-          const auto count = read(output_fd_, output.data(), output.size());
-          if (count > 0) {
-            // Child output is already level-prefixed; preserve it verbatim.
-            std::cout.write(output.data(), count);
-            std::cout.flush();
-          }
-        }
-        if ((descriptors[1].revents & POLLIN) != 0) {
-          std::array<std::byte,
-                     1 + sizeof(aa2acp::iap2::PairingConfirmationMessage) + 1>
-              message{};
-          const auto count =
-              recv(control_fd_, message.data(), message.size(), 0);
-          if (count > 0 && message[0] == std::byte{3} &&
-              count ==
-                  static_cast<ssize_t>(
-                      1 + sizeof(aa2acp::iap2::PairingConfirmationMessage))) {
-            aa2acp::iap2::PairingConfirmationMessage confirmation{};
-            std::memcpy(&confirmation, message.data() + 1,
-                        sizeof(confirmation));
-            std::lock_guard state_lock(management_state.mutex);
-            management_state.snapshot.pairing_confirmation = confirmation;
-            management_state.snapshot.carplay_preflight_status =
-                "compare the Bluetooth pairing code in the management UI";
-            continue;
-          }
-          if (count == static_cast<ssize_t>(1 + sizeof(int)) &&
-              message[0] == std::byte{2}) {
-            int result{};
-            std::memcpy(&result, message.data() + 1, sizeof(result));
-            {
-              std::lock_guard state_lock(management_state.mutex);
-              management_state.snapshot.pairing_confirmation.reset();
-            }
-            active_child = -1;
-            return result;
-          }
-          active_child = -1;
-          return 1;
-        }
-      }
-      if (!stopping && (stop.stop_requested() || phone_disconnected.load())) {
-        aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
-            << "Bridge daemon: stopping active CarPlay session\n";
-        const char stop_command = '\2';
-        send(control_fd_, &stop_command, sizeof(stop_command), MSG_NOSIGNAL);
-        stopping = true;
-      }
-    }
-  }
-
-  bool answer_pairing_confirmation(
-      const aa2acp::iap2::PairingConfirmationMessage &confirmation,
-      const bool confirmed) {
-    std::array<std::byte, 1 + sizeof(confirmation) + 1> message{};
-    message[0] = std::byte{4};
-    std::memcpy(message.data() + 1, &confirmation, sizeof(confirmation));
-    message[1 + sizeof(confirmation)] = confirmed ? std::byte{1} : std::byte{0};
-    std::lock_guard lock(command_mutex_);
-    return control_fd_ >= 0 &&
-           send(control_fd_, message.data(), message.size(), MSG_NOSIGNAL) ==
-               static_cast<ssize_t>(message.size());
-  }
-
-private:
-  pid_t pid_{-1};
-  int control_fd_{-1};
-  int output_fd_{-1};
-  std::mutex mutex_;
-  std::mutex command_mutex_;
-};
-
-std::unique_ptr<CarPlayWorker> carplay_worker;
 
 constexpr char kDefaultManagementHotspotPassphrase[] = "changeme";
 
@@ -450,8 +250,25 @@ int run_carplay_session(const aa2acp::bridge::Config &config,
         << "Bridge daemon: CarPlay worker is unavailable\n";
     return 1;
   }
-  return carplay_worker->run(std::move(arguments), stop, phone_disconnected,
-                             active_child);
+  return carplay_worker->run(
+      std::move(arguments), stop, phone_disconnected, active_child,
+      {.on_connection_lost =
+           [] {
+             std::lock_guard state_lock(management_state.mutex);
+             management_state.snapshot.pairing_confirmation.reset();
+           },
+       .on_pairing_confirmation =
+           [](const aa2acp::iap2::PairingConfirmationMessage &confirmation) {
+             std::lock_guard state_lock(management_state.mutex);
+             management_state.snapshot.pairing_confirmation = confirmation;
+             management_state.snapshot.carplay_preflight_status =
+                 "compare the Bluetooth pairing code in the management UI";
+           },
+       .on_pairing_reset =
+           [] {
+             std::lock_guard state_lock(management_state.mutex);
+             management_state.snapshot.pairing_confirmation.reset();
+           }});
 }
 
 void run_carplay_preflight(const aa2acp::bridge::Config config,
