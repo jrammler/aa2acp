@@ -60,6 +60,10 @@ add_library(bridge_daemon_log src/bridge/daemon_log.cpp)
 target_include_directories(bridge_daemon_log PUBLIC include)
 target_compile_options(bridge_daemon_log PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
+add_library(bridge_media_forwarders src/bridge/media_forwarders.cpp)
+target_include_directories(bridge_media_forwarders PUBLIC include)
+target_compile_options(bridge_media_forwarders PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
 add_library(bluez_inventory src/bridge/bluez_inventory.cpp)
 target_include_directories(bluez_inventory PUBLIC include)
 target_link_libraries(bluez_inventory PUBLIC PkgConfig::DBUS)
@@ -98,7 +102,7 @@ if(AA2ACP_BUILD_DIAGNOSTICS)
 endif()
 
 add_executable(aa2acp src/bridge_daemon_main.cpp)
-target_link_libraries(aa2acp PRIVATE bridge_config bridge_daemon_log bluez_inventory android_auto_usb h264_normalizer airplay_rtsp iap2_link iap2_bluetooth_worker)
+target_link_libraries(aa2acp PRIVATE bridge_config bridge_daemon_log bridge_media_forwarders bluez_inventory android_auto_usb h264_normalizer airplay_rtsp iap2_link iap2_bluetooth_worker)
 target_compile_options(aa2acp PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 add_executable(aa2acp-android-auto-usb src/android_auto_usb_main.cpp)

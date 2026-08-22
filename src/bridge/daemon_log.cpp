@@ -1,5 +1,5 @@
-#include "aa2acp/bridge/config.hpp"
 #include "aa2acp/bridge/daemon_log.hpp"
+#include "aa2acp/bridge/config.hpp"
 
 #include <array>
 #include <cstdio>
