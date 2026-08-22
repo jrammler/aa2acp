@@ -258,10 +258,32 @@ std::string log_timestamp() {
   return text.data();
 }
 
+class RecentLog final {
+public:
+  static constexpr std::size_t kMaximumBytes = 200 * 1024;
+
+  void append(const std::string_view text) {
+    std::lock_guard lock(mutex_);
+    contents_ += text;
+    if (contents_.size() > kMaximumBytes)
+      contents_.erase(0, contents_.size() - kMaximumBytes);
+  }
+
+  std::string snapshot() const {
+    std::lock_guard lock(mutex_);
+    return contents_;
+  }
+
+private:
+  mutable std::mutex mutex_;
+  std::string contents_;
+};
+
 class TeeBuffer final : public std::streambuf {
 public:
-  TeeBuffer(std::streambuf *console, std::ofstream &file, std::mutex &mutex)
-      : console_(console), file_(file), mutex_(mutex) {}
+  TeeBuffer(std::streambuf *console, std::ofstream *file, RecentLog &recent,
+            std::mutex &mutex)
+      : console_(console), file_(file), recent_(recent), mutex_(mutex) {}
 
 private:
   int_type overflow(const int_type character) override {
@@ -282,8 +304,9 @@ private:
   int sync() override {
     std::lock_guard lock(mutex_);
     const auto console_result = console_->pubsync();
-    file_.flush();
-    return console_result == 0 && file_ ? 0 : -1;
+    if (file_ != nullptr)
+      file_->flush();
+    return console_result == 0 && (file_ == nullptr || *file_) ? 0 : -1;
   }
 
   bool write_locked(const std::string_view text) {
@@ -291,9 +314,12 @@ private:
       if (at_line_start_) {
         const auto timestamp = log_timestamp();
         if (console_->sputn(timestamp.data(), timestamp.size()) !=
-                static_cast<std::streamsize>(timestamp.size()) ||
-            !file_.write(timestamp.data(), timestamp.size()))
+            static_cast<std::streamsize>(timestamp.size()))
           return false;
+        if (file_ != nullptr &&
+            !file_->write(timestamp.data(), timestamp.size()))
+          return false;
+        recent_.append(timestamp);
         at_line_start_ = false;
       }
       const auto line_end = text.find('\n', offset);
@@ -301,9 +327,11 @@ private:
                              ? text.size() - offset
                              : line_end - offset + 1;
       if (console_->sputn(text.data() + offset, count) !=
-              static_cast<std::streamsize>(count) ||
-          !file_.write(text.data() + offset, count))
+          static_cast<std::streamsize>(count))
         return false;
+      if (file_ != nullptr && !file_->write(text.data() + offset, count))
+        return false;
+      recent_.append(text.substr(offset, count));
       at_line_start_ = text[offset + count - 1] == '\n';
       offset += count;
     }
@@ -311,21 +339,23 @@ private:
   }
 
   std::streambuf *console_;
-  std::ofstream &file_;
+  std::ofstream *file_;
+  RecentLog &recent_;
   std::mutex &mutex_;
   bool at_line_start_{true};
 };
 
 class DaemonLog final {
 public:
-  explicit DaemonLog(const std::filesystem::path &path)
-      : path_(path), file_(path, std::ios::app),
-        cout_buffer_(std::cout.rdbuf(), file_, mutex_),
-        cerr_buffer_(std::cerr.rdbuf(), file_, mutex_) {
-    if (file_) {
-      old_cout_ = std::cout.rdbuf(&cout_buffer_);
-      old_cerr_ = std::cerr.rdbuf(&cerr_buffer_);
-    }
+  DaemonLog(RecentLog &recent, const std::optional<std::filesystem::path> &path)
+      : path_(path),
+        file_(path_ ? *path_ : std::filesystem::path{}, std::ios::app),
+        cout_buffer_(std::cout.rdbuf(), file_ ? &file_ : nullptr, recent,
+                     mutex_),
+        cerr_buffer_(std::cerr.rdbuf(), file_ ? &file_ : nullptr, recent,
+                     mutex_) {
+    old_cout_ = std::cout.rdbuf(&cout_buffer_);
+    old_cerr_ = std::cerr.rdbuf(&cerr_buffer_);
   }
 
   ~DaemonLog() {
@@ -335,11 +365,10 @@ public:
       std::cerr.rdbuf(old_cerr_);
   }
 
-  bool active() const { return old_cout_ != nullptr; }
-  const std::filesystem::path &path() const { return path_; }
+  const std::optional<std::filesystem::path> &path() const { return path_; }
 
 private:
-  std::filesystem::path path_;
+  std::optional<std::filesystem::path> path_;
   std::ofstream file_;
   std::mutex mutex_;
   TeeBuffer cout_buffer_;
@@ -348,12 +377,12 @@ private:
   std::streambuf *old_cerr_{};
 };
 
-std::unique_ptr<DaemonLog> start_daemon_log() {
+std::optional<std::filesystem::path> next_daemon_log_path() {
   const auto directory = aa2acp::bridge::default_state_directory() / "logs";
   std::error_code error;
   std::filesystem::create_directories(directory, error);
   if (error)
-    return {};
+    return std::nullopt;
   std::vector<std::filesystem::directory_entry> logs;
   for (const auto &entry :
        std::filesystem::directory_iterator(directory, error)) {
@@ -372,8 +401,7 @@ std::unique_ptr<DaemonLog> start_daemon_log() {
   const auto path =
       directory / ("aa2acp-bridge-daemon-" + std::to_string(stamp) + "-" +
                    std::to_string(getpid()) + ".log");
-  auto log = std::make_unique<DaemonLog>(path);
-  return log->active() ? std::move(log) : nullptr;
+  return path;
 }
 
 std::string normalized_bluetooth_address(const std::string &value) {
@@ -697,6 +725,7 @@ std::string page(const aa2acp::bridge::Config &config,
             "new hotspot password<input type=password "
             "name=\"management_hotspot_passphrase_confirm\"></label><button "
             "type=submit>Save configuration</button></form>";
+  output += "<p><a href=\"/logs\">View recent logs</a></p>";
   if (!config.head_unit_mac.empty() && !config.wifi_interface.empty())
     output +=
         "<form method=post action=\"/carplay-prepare\"><button type=submit " +
@@ -720,6 +749,19 @@ std::string page(const aa2acp::bridge::Config &config,
       "1000);}catch{setTimeout(poll,2000);}};poll();})();</script></"
       "body></html>";
   return output;
+}
+
+std::string logs_page(const RecentLog &recent) {
+  return "<!doctype html><html><head><meta name=\"viewport\" "
+         "content=\"width=device-width,initial-scale=1\"><title>AA2ACP "
+         "logs</title><style>body{font:16px sans-serif;max-width:60rem;"
+         "margin:3rem auto;padding:0 1rem}pre{white-space:pre-wrap;"
+         "word-break:break-word;background:#f5f5f5;padding:1rem}</style></head>"
+         "<body><p><a href=\"/\">Back to management</a></p><h1>Recent "
+         "logs</h1><p>Current service run; newest " +
+         std::to_string(RecentLog::kMaximumBytes / 1024) +
+         " KiB retained.</p><pre>" + html_escape(recent.snapshot()) +
+         "</pre></body></html>";
 }
 
 class VideoSocketForwarder {
@@ -1458,9 +1500,12 @@ int main(int argc, char **argv) {
   for (int index = 1; index < argc; ++index)
     if (std::string_view(argv[index]) == "--no-file-log")
       file_logging = false;
-  auto daemon_log = file_logging ? start_daemon_log() : nullptr;
-  if (daemon_log)
-    std::cout << "Bridge daemon: logging to " << daemon_log->path() << '\n';
+  RecentLog recent_log;
+  const auto log_path = file_logging ? next_daemon_log_path()
+                                     : std::optional<std::filesystem::path>{};
+  DaemonLog daemon_log(recent_log, log_path);
+  if (log_path)
+    std::cout << "Bridge daemon: logging to " << *log_path << '\n';
   std::filesystem::path config_path = aa2acp::bridge::default_config_path();
   int port = 8080;
   for (int index = 1; index < argc; ++index) {
@@ -1625,6 +1670,9 @@ int main(int argc, char **argv) {
       }();
       respond(200, "text/html; charset=utf-8",
               page(configuration, snapshot, saved, carplay_error));
+    } else if (request.starts_with("GET /logs")) {
+      respond(200, "text/html; charset=utf-8", logs_page(recent_log),
+              "Cache-Control: no-store\r\n");
     } else if (request.starts_with("GET /scan-status")) {
       const auto snapshot = management_snapshot(management_state);
       const auto phase = query_field(request, "phase");
