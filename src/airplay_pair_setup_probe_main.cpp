@@ -1,4 +1,5 @@
 #include "aa2acp/airplay/session.hpp"
+#include "aa2acp/bridge/logging.hpp"
 
 #include <iostream>
 #include <string>
@@ -18,7 +19,7 @@ int main(int argc, char **argv) {
     else if (argument == "--pairing-store" && index + 1 < argc)
       options.pairing_store = argv[++index];
     else {
-      std::cerr
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
           << "usage: aa2acp-airplay-pair-setup-probe [--host HOST] [--port "
              "PORT] [--timeout SECONDS] [--video H264_FILE] "
              "[--pairing-store FILE]\n";

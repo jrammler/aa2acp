@@ -280,7 +280,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   const int timeout_seconds = options.timeout_seconds;
   const auto socket_fd = connect_tcp(host, port);
   if (socket_fd < 0) {
-    std::cerr << "Unable to connect to AirPlay " << host << ':' << port << '\n';
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Unable to connect to AirPlay " << host << ':' << port << '\n';
     return 1;
   }
   aa2acp::airplay::PairingRecord pairing;
@@ -300,7 +301,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     const auto request = aa2acp::airplay::encode_request(
         "POST", "/pair-setup", 1, m1, "application/pairing+tlv8");
     if (!send_all(socket_fd, request)) {
-      std::cerr << "Unable to send Pair-Setup M1\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Unable to send Pair-Setup M1\n";
       close(socket_fd);
       return 1;
     }
@@ -320,7 +322,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     }
     const auto response = aa2acp::airplay::parse_response(response_bytes);
     if (!response || response->status != 200) {
-      std::cerr << "Pair-Setup M1 did not receive RTSP 200\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Pair-Setup M1 did not receive RTSP 200\n";
       return 1;
     }
     const auto fields = aa2acp::airplay::decode_tlv8(response->body);
@@ -329,7 +332,7 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     const auto public_key = fields.find(0x03);
     if (state == fields.end() || state->second != aa2acp::airplay::Bytes{2} ||
         salt == fields.end() || public_key == fields.end()) {
-      std::cerr
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
           << "Pair-Setup M2 is missing state=2, salt, or SRP public key\n";
       return 1;
     }
@@ -339,7 +342,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
           << "B, SRP public key=" << public_key->second.size() << "B)\n";
     aa2acp::airplay::SrpClient srp;
     if (!srp.process_challenge(salt->second, public_key->second)) {
-      std::cerr << "Unable to process Pair-Setup SRP challenge\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Unable to process Pair-Setup SRP challenge\n";
       close(socket_fd);
       return 1;
     }
@@ -348,7 +352,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     const auto m3_request = aa2acp::airplay::encode_request(
         "POST", "/pair-setup", 2, m3, "application/pairing+tlv8");
     if (!send_all(socket_fd, m3_request)) {
-      std::cerr << "Unable to send Pair-Setup M3\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Unable to send Pair-Setup M3\n";
       close(socket_fd);
       return 1;
     }
@@ -369,7 +374,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     }
     const auto m4_response = aa2acp::airplay::parse_response(response_bytes);
     if (!m4_response || m4_response->status != 200) {
-      std::cerr << "Pair-Setup M3 did not receive RTSP 200\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Pair-Setup M3 did not receive RTSP 200\n";
       return 1;
     }
     const auto m4_fields = aa2acp::airplay::decode_tlv8(m4_response->body);
@@ -379,11 +385,13 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
         m4_state->second != aa2acp::airplay::Bytes{4} ||
         server_proof == m4_fields.end() ||
         !srp.verify_server(server_proof->second)) {
-      std::cerr << "Pair-Setup M4 server proof validation failed\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Pair-Setup M4 server proof validation failed\n";
       return 1;
     }
     if (aa2acp::bridge::debug_logging_enabled())
-      std::cout << "AirPlay: Pair-Setup M4 server proof validated\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+          << "AirPlay: Pair-Setup M4 server proof validated\n";
 
     const auto encryption_key = aa2acp::airplay::hkdf_sha512(
         srp.session_key(), "Pair-Setup-Encrypt-Salt", "Pair-Setup-Encrypt-Info",
@@ -391,7 +399,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     const auto controller = aa2acp::airplay::ed25519_generate();
     const auto controller_id = random_controller_id();
     if (encryption_key.size() != 32 || !controller || !controller_id) {
-      std::cerr << "Unable to create Pair-Setup controller identity\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Unable to create Pair-Setup controller identity\n";
       close(socket_fd);
       return 1;
     }
@@ -407,7 +416,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     const auto controller_signature = aa2acp::airplay::ed25519_sign(
         controller->private_key, controller_signed);
     if (controller_sign_key.size() != 32 || !controller_signature) {
-      std::cerr << "Unable to sign Pair-Setup controller identity\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Unable to sign Pair-Setup controller identity\n";
       close(socket_fd);
       return 1;
     }
@@ -419,7 +429,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     const auto encrypted =
         aa2acp::airplay::seal(encryption_key, "PS-Msg05", inner);
     if (!encrypted) {
-      std::cerr << "Unable to encrypt Pair-Setup M5\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Unable to encrypt Pair-Setup M5\n";
       close(socket_fd);
       return 1;
     }
@@ -428,7 +439,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     const auto m5_request = aa2acp::airplay::encode_request(
         "POST", "/pair-setup", 3, m5, "application/pairing+tlv8");
     if (!send_all(socket_fd, m5_request)) {
-      std::cerr << "Unable to send Pair-Setup M5\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Unable to send Pair-Setup M5\n";
       close(socket_fd);
       return 1;
     }
@@ -449,7 +461,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     }
     const auto m6_response = aa2acp::airplay::parse_response(response_bytes);
     if (!m6_response || m6_response->status != 200) {
-      std::cerr << "Pair-Setup M5 did not receive RTSP 200\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Pair-Setup M5 did not receive RTSP 200\n";
       return 1;
     }
     const auto m6_fields = aa2acp::airplay::decode_tlv8(m6_response->body);
@@ -462,7 +475,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
                                     m6_encrypted->second);
     if (m6_state == m6_fields.end() ||
         m6_state->second != aa2acp::airplay::Bytes{6} || !decrypted) {
-      std::cerr << "Pair-Setup M6 validation failed\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Pair-Setup M6 validation failed\n";
       return 1;
     }
     const auto accessory = aa2acp::airplay::decode_tlv8(*decrypted);
@@ -475,7 +489,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     if (accessory_id == accessory.end() || accessory_key == accessory.end() ||
         accessory_signature == accessory.end() ||
         accessory_sign_key.size() != 32) {
-      std::cerr << "Pair-Setup M6 identity is incomplete\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Pair-Setup M6 identity is incomplete\n";
       return 1;
     }
     aa2acp::airplay::Bytes accessory_signed(accessory_sign_key);
@@ -488,16 +503,19 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     if (!aa2acp::airplay::ed25519_verify(accessory_key->second,
                                          accessory_signed,
                                          accessory_signature->second)) {
-      std::cerr << "Pair-Setup M6 accessory signature validation failed\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Pair-Setup M6 accessory signature validation failed\n";
       close(socket_fd);
       return 1;
     }
     if (aa2acp::bridge::debug_logging_enabled())
-      std::cout << "AirPlay: Pair-Setup M6 accessory identity validated\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+          << "AirPlay: Pair-Setup M6 accessory identity validated\n";
     pairing = {*controller_id, *controller, accessory_key->second};
     if (!pairing_store.empty() &&
         !aa2acp::airplay::save_pairing_record(pairing_store, pairing)) {
-      std::cerr << "Unable to save persistent AirPlay pairing\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Unable to save persistent AirPlay pairing\n";
       close(socket_fd);
       return 1;
     }
@@ -505,7 +523,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
 
   const auto ephemeral = aa2acp::airplay::x25519_generate();
   if (!ephemeral) {
-    std::cerr << "Unable to create Pair-Verify ephemeral key\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Unable to create Pair-Verify ephemeral key\n";
     close(socket_fd);
     return 1;
   }
@@ -514,7 +533,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   const auto verify_m1_request = aa2acp::airplay::encode_request(
       "POST", "/pair-verify", 4, verify_m1, "application/pairing+tlv8");
   if (!send_all(socket_fd, verify_m1_request)) {
-    std::cerr << "Unable to send Pair-Verify M1\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Unable to send Pair-Verify M1\n";
     close(socket_fd);
     return 1;
   }
@@ -536,7 +556,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   const auto verify_m2_response =
       aa2acp::airplay::parse_response(response_bytes);
   if (!verify_m2_response || verify_m2_response->status != 200) {
-    std::cerr << "Pair-Verify M1 did not receive RTSP 200\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Pair-Verify M1 did not receive RTSP 200\n";
     close(socket_fd);
     return 1;
   }
@@ -560,7 +581,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   if (verify_m2_state == verify_m2.end() ||
       verify_m2_state->second != aa2acp::airplay::Bytes{2} || !shared ||
       verify_key.size() != 32 || !verify_m2_plain) {
-    std::cerr << "Pair-Verify M2 is incomplete or could not be decrypted\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Pair-Verify M2 is incomplete or could not be decrypted\n";
     close(socket_fd);
     return 1;
   }
@@ -569,7 +591,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   const auto verify_accessory_signature = verify_identity.find(0x0a);
   if (verify_accessory_id == verify_identity.end() ||
       verify_accessory_signature == verify_identity.end()) {
-    std::cerr << "Pair-Verify M2 identity is incomplete\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Pair-Verify M2 identity is incomplete\n";
     close(socket_fd);
     return 1;
   }
@@ -583,7 +606,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   if (!aa2acp::airplay::ed25519_verify(pairing.accessory_public_key,
                                        verify_accessory_signed,
                                        verify_accessory_signature->second)) {
-    std::cerr << "Pair-Verify M2 accessory signature validation failed\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Pair-Verify M2 accessory signature validation failed\n";
     close(socket_fd);
     return 1;
   }
@@ -597,7 +621,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   const auto verify_controller_signature = aa2acp::airplay::ed25519_sign(
       pairing.controller.private_key, verify_controller_signed);
   if (!verify_controller_signature) {
-    std::cerr << "Unable to sign Pair-Verify M3\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Unable to sign Pair-Verify M3\n";
     close(socket_fd);
     return 1;
   }
@@ -608,7 +633,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   const auto verify_m3_encrypted =
       aa2acp::airplay::seal(verify_key, "PV-Msg03", verify_m3_inner);
   if (!verify_m3_encrypted) {
-    std::cerr << "Unable to encrypt Pair-Verify M3\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Unable to encrypt Pair-Verify M3\n";
     close(socket_fd);
     return 1;
   }
@@ -617,7 +643,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   const auto verify_m3_request = aa2acp::airplay::encode_request(
       "POST", "/pair-verify", 5, verify_m3, "application/pairing+tlv8");
   if (!send_all(socket_fd, verify_m3_request)) {
-    std::cerr << "Unable to send Pair-Verify M3\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Unable to send Pair-Verify M3\n";
     close(socket_fd);
     return 1;
   }
@@ -639,14 +666,16 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   const auto verify_m4_response =
       aa2acp::airplay::parse_response(response_bytes);
   if (!verify_m4_response || verify_m4_response->status != 200) {
-    std::cerr << "Pair-Verify M3 did not receive RTSP 200\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Pair-Verify M3 did not receive RTSP 200\n";
     return 1;
   }
   const auto verify_m4 = aa2acp::airplay::decode_tlv8(verify_m4_response->body);
   const auto verify_m4_state = verify_m4.find(0x06);
   if (verify_m4_state == verify_m4.end() ||
       verify_m4_state->second != aa2acp::airplay::Bytes{4}) {
-    std::cerr << "Pair-Verify M4 validation failed\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Pair-Verify M4 validation failed\n";
     return 1;
   }
   const auto control_write = aa2acp::airplay::hkdf_sha512(
@@ -654,12 +683,14 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   const auto control_read = aa2acp::airplay::hkdf_sha512(
       *shared, "Control-Salt", "Control-Read-Encryption-Key", 32);
   if (control_write.size() != 32 || control_read.size() != 32) {
-    std::cerr << "Unable to derive control channel keys\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Unable to derive control channel keys\n";
     return 1;
   }
   if (aa2acp::bridge::debug_logging_enabled())
-    std::cout << "AirPlay: Pair-Verify M4 validated; encrypted control keys "
-                 "derived\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+        << "AirPlay: Pair-Verify M4 validated; encrypted control keys "
+           "derived\n";
 
   aa2acp::airplay::ControlCipher control(control_read, control_write);
   aa2acp::airplay::Bytes encrypted_read_buffer;
@@ -682,17 +713,21 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   if (!info_response || info_response->status != 200 ||
       !dictionary_of(info_plist)) {
     if (info_response) {
-      std::cerr << "Encrypted /info response status=" << info_response->status
-                << ", body=" << info_response->body.size() << "B\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Encrypted /info response status=" << info_response->status
+          << ", body=" << info_response->body.size() << "B\n";
     } else {
-      std::cerr << "Encrypted /info had no decryptable RTSP response\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Encrypted /info had no decryptable RTSP response\n";
     }
-    std::cerr << "Encrypted /info request failed\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Encrypted /info request failed\n";
     close(socket_fd);
     return 1;
   }
   if (aa2acp::bridge::debug_logging_enabled())
-    std::cout << "AirPlay: encrypted /info capabilities received\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+        << "AirPlay: encrypted /info capabilities received\n";
   const auto *info = dictionary_of(info_plist);
   const auto carplay_capabilities =
       info ? aa2acp::airplay::head_unit_capabilities(*info,
@@ -701,18 +736,20 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   if (!options.head_unit_capabilities_store.empty() &&
       !options.head_unit_mac.empty()) {
     if (!carplay_capabilities) {
-      std::cerr
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
           << "AirPlay: /info did not provide valid head-unit capabilities\n";
     } else if (!save_head_unit_capabilities(
                    options.head_unit_capabilities_store,
                    *carplay_capabilities)) {
-      std::cerr << "AirPlay: unable to cache head-unit capabilities\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+          << "AirPlay: unable to cache head-unit capabilities\n";
     } else {
       if (aa2acp::bridge::debug_logging_enabled())
-        std::cout << "AirPlay: cached head-unit capabilities: display "
-                  << carplay_capabilities->width_pixels << 'x'
-                  << carplay_capabilities->height_pixels << " at up to "
-                  << carplay_capabilities->max_fps << " FPS\n";
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+            << "AirPlay: cached head-unit capabilities: display "
+            << carplay_capabilities->width_pixels << 'x'
+            << carplay_capabilities->height_pixels << " at up to "
+            << carplay_capabilities->max_fps << " FPS\n";
     }
   }
 
@@ -736,12 +773,14 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   if (!session_response || session_response->status != 200 || !session_info ||
       !integer_at(*session_info, "timingPort") ||
       !integer_at(*session_info, "eventPort")) {
-    std::cerr << "Encrypted session SETUP failed\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Encrypted session SETUP failed\n";
     close(socket_fd);
     return 1;
   }
   if (aa2acp::bridge::debug_logging_enabled())
-    std::cout << "AirPlay: session SETUP received timing/event ports\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+        << "AirPlay: session SETUP received timing/event ports\n";
 
   constexpr std::string_view main_audio_stream_id =
       "8B4C4DF6-AE7F-48F5-A36B-546EEAAEF4B5";
@@ -795,13 +834,15 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     if (!audio_response || audio_response->status != 200 || !audio_port ||
         *audio_port == 0 || *audio_port > UINT16_MAX ||
         audio_key.size() != 32) {
-      std::cerr << "Encrypted media-audio SETUP failed\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Encrypted media-audio SETUP failed\n";
       close(socket_fd);
       return 1;
     }
     if (aa2acp::bridge::debug_logging_enabled())
-      std::cout << "AirPlay: media-audio SETUP received data port "
-                << *audio_port << '\n';
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+          << "AirPlay: media-audio SETUP received data port " << *audio_port
+          << '\n';
   }
 
   struct AuxiliaryAudioStream {
@@ -851,12 +892,14 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
         "DataStream-Output-Encryption-Key", 32);
     if (!response || response->status != 200 || !port || *port == 0 ||
         *port > UINT16_MAX || key.size() != 32) {
-      std::cerr << "Encrypted " << name << "-audio SETUP failed\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Encrypted " << name << "-audio SETUP failed\n";
       return std::nullopt;
     }
     if (aa2acp::bridge::debug_logging_enabled())
-      std::cout << "AirPlay: " << name << "-audio SETUP received data port "
-                << *port << '\n';
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+          << "AirPlay: " << name << "-audio SETUP received data port " << *port
+          << '\n';
     return AuxiliaryAudioStream{*port, key};
   };
   const auto guidance_audio = setup_auxiliary_audio(
@@ -904,30 +947,36 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   if (!screen_response || screen_response->status != 200 || !screen_port ||
       *screen_port == 0 || *screen_port > UINT16_MAX) {
     if (screen_response) {
-      std::cerr << "Encrypted screen SETUP response status="
-                << screen_response->status
-                << ", body=" << screen_response->body.size() << "B\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Encrypted screen SETUP response status="
+          << screen_response->status
+          << ", body=" << screen_response->body.size() << "B\n";
       if (screen_info) {
-        std::cerr << "Screen SETUP plist keys:";
+        std::ostringstream details;
+        details << "Screen SETUP plist keys:";
         for (const auto &[key, value] : *screen_info) {
-          std::cerr << ' ' << key;
+          details << ' ' << key;
           if (const auto *number = std::get_if<std::uint64_t>(&value.data))
-            std::cerr << '=' << *number;
+            details << '=' << *number;
         }
-        std::cerr << '\n';
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+            << details.str() << '\n';
       } else {
-        std::cerr << "Screen SETUP plist could not be decoded\n";
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+            << "Screen SETUP plist could not be decoded\n";
       }
     } else {
-      std::cerr << "Encrypted screen SETUP had no decryptable RTSP response\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Encrypted screen SETUP had no decryptable RTSP response\n";
     }
-    std::cerr << "Encrypted screen SETUP failed\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Encrypted screen SETUP failed\n";
     close(socket_fd);
     return 1;
   }
   if (aa2acp::bridge::debug_logging_enabled())
-    std::cout << "AirPlay: screen SETUP received data port " << *screen_port
-              << '\n';
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+        << "AirPlay: screen SETUP received data port " << *screen_port << '\n';
 
   const auto record_response = send_encrypted(
       socket_fd, control, encrypted_read_buffer,
@@ -935,19 +984,22 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
                                       {}, "application/octet-stream"),
       timeout_seconds, options.stop_requested);
   if (!record_response || record_response->status != 200) {
-    std::cerr << "Encrypted RECORD failed\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Encrypted RECORD failed\n";
     close(socket_fd);
     return 1;
   }
   if (aa2acp::bridge::debug_logging_enabled())
-    std::cout << "AirPlay: encrypted RECORD accepted\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+        << "AirPlay: encrypted RECORD accepted\n";
   std::jthread audio_sender;
   if (options.next_media_audio && audio_port) {
     audio_sender = std::jthread([&] {
       const auto media_socket = connect_udp(
           host, std::to_string(static_cast<std::uint16_t>(*audio_port)));
       if (media_socket < 0) {
-        std::cerr << "Unable to establish encrypted media-audio stream\n";
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+            << "Unable to establish encrypted media-audio stream\n";
         return;
       }
       std::uint16_t sequence{};
@@ -979,7 +1031,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
         const auto encrypted = aa2acp::airplay::seal_with_nonce(
             audio_key, nonce12, payload, std::span(header).subspan(4, 8));
         if (!encrypted) {
-          std::cerr << "Unable to encrypt Android Auto media audio\n";
+          aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+              << "Unable to encrypt Android Auto media audio\n";
           break;
         }
         aa2acp::airplay::Bytes packet(header.begin(), header.end());
@@ -987,7 +1040,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
         packet.insert(packet.end(), nonce.begin(), nonce.end());
         if (send(media_socket, packet.data(), packet.size(), MSG_NOSIGNAL) !=
             static_cast<ssize_t>(packet.size())) {
-          std::cerr << "Unable to send encrypted Android Auto media audio\n";
+          aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+              << "Unable to send encrypted Android Auto media audio\n";
           break;
         }
         ++sequence;
@@ -995,14 +1049,16 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
         ++nonce_counter;
         ++sent_packets;
         if (sent_packets == 1 && aa2acp::bridge::debug_logging_enabled()) {
-          std::cout << "AirPlay: forwarding Android Auto media audio "
-                    << "(48 kHz stereo PCM)\n";
+          aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+              << "AirPlay: forwarding Android Auto media audio "
+                 "(48 kHz stereo PCM)\n";
         }
       }
       close(media_socket);
       if (aa2acp::bridge::debug_logging_enabled())
-        std::cout << "AirPlay: encrypted Android Auto media audio sent "
-                  << sent_packets << " packets\n";
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+            << "AirPlay: encrypted Android Auto media audio sent "
+            << sent_packets << " packets\n";
     });
   }
   const auto launch_auxiliary_audio =
@@ -1057,8 +1113,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
       }
       close(fd);
       if (aa2acp::bridge::debug_logging_enabled())
-        std::cout << "AirPlay: encrypted Android Auto " << name
-                  << " audio ended\n";
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+            << "AirPlay: encrypted Android Auto " << name << " audio ended\n";
     });
   };
   auto guidance_sender = launch_auxiliary_audio(
@@ -1084,7 +1140,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     if (config)
       break;
     if (!options.next_video_frame) {
-      std::cerr << "Unable to parse H.264 SPS/PPS from " << video_path << '\n';
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Unable to parse H.264 SPS/PPS from " << video_path << '\n';
       close(socket_fd);
       return 1;
     }
@@ -1098,7 +1155,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
         close(socket_fd);
         return 0;
       }
-      std::cerr << "Android Auto video ended before H.264 SPS/PPS arrived\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Android Auto video ended before H.264 SPS/PPS arrived\n";
       close(socket_fd);
       return 1;
     }
@@ -1111,7 +1169,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
       "DataStream-Output-Encryption-Key", 32);
   const auto data_socket = connect_tcp(host, std::to_string(*screen_port));
   if (stream_key.size() != 32 || data_socket < 0) {
-    std::cerr << "Unable to establish encrypted screen data stream\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Unable to establish encrypted screen data stream\n";
     close(socket_fd);
     return 1;
   }
@@ -1120,7 +1179,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   config_header[4] = 1;
   if (!send_all(data_socket, config_header) ||
       !send_all(data_socket, *config)) {
-    std::cerr << "Unable to send H.264 video config\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Unable to send H.264 video config\n";
     close(data_socket);
     close(socket_fd);
     return 1;
@@ -1163,7 +1223,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
       return 0;
     }
     if (!send_access_unit({nalu})) {
-      std::cerr << "Unable to send encrypted H.264 frame\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Unable to send encrypted H.264 frame\n";
       close(data_socket);
       close(socket_fd);
       return 1;
@@ -1172,7 +1233,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   }
   for (const auto &access_unit : initial_access_units) {
     if (!send_access_unit(h264_nalus(access_unit))) {
-      std::cerr << "Unable to send encrypted H.264 frame\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Unable to send encrypted H.264 frame\n";
       close(data_socket);
       close(socket_fd);
       return 1;
@@ -1185,7 +1247,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     if (!access_unit)
       break;
     if (!send_access_unit(h264_nalus(*access_unit))) {
-      std::cerr << "Unable to send encrypted H.264 frame\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Unable to send encrypted H.264 frame\n";
       close(data_socket);
       close(socket_fd);
       return 1;
@@ -1195,7 +1258,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   close(data_socket);
   close(socket_fd);
   if (aa2acp::bridge::debug_logging_enabled())
-    std::cout << "AirPlay: encrypted H.264 stream sent " << sent_frames
-              << " frames\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+        << "AirPlay: encrypted H.264 stream sent " << sent_frames
+        << " frames\n";
   return 0;
 }

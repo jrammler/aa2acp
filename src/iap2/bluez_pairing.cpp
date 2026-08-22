@@ -247,10 +247,6 @@ void write_log(const PairingLogFunction &log,
   }
 }
 
-void write_log(const PairingLogFunction &log, const std::string &message) {
-  write_log(log, aa2acp::bridge::LogLevel::info, message);
-}
-
 bool same_address(const std::string_view left, const std::string_view right) {
   if (left.size() != right.size())
     return false;
@@ -277,7 +273,7 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
   dbus_error_init(&error);
   DBusConnection *connection = dbus_bus_get(DBUS_BUS_SYSTEM, &error);
   if (connection == nullptr) {
-    write_log(log,
+    write_log(log, aa2acp::bridge::LogLevel::error,
               std::string("cannot connect to system D-Bus: ") +
                   (error.message == nullptr ? "unknown error" : error.message));
     dbus_error_free(&error);
@@ -285,40 +281,48 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
   }
   const auto path = device_path(mac);
   if (aa2acp::bridge::bluez_device_is_paired(mac)) {
-    write_log(log, "reusing existing BlueZ bond for " + std::string(mac));
+    write_log(log, aa2acp::bridge::LogLevel::info,
+              "reusing existing BlueZ bond for " + std::string(mac));
     std::string name;
     std::string detail;
     if (!call_set_trusted(connection, path, name, detail)) {
-      write_log(log, "setting Trusted failed: " + name + " " + detail);
+      write_log(log, aa2acp::bridge::LogLevel::warning,
+                "setting Trusted failed: " + name + " " + detail);
       return false;
     }
     return true;
   }
   if (!dbus_connection_register_object_path(connection, kAgentPath,
                                             &kAgentVTable, nullptr)) {
-    write_log(log, "cannot register BlueZ pairing agent");
+    write_log(log, aa2acp::bridge::LogLevel::error,
+              "cannot register BlueZ pairing agent");
     return false;
   }
 
   std::string name;
   std::string detail;
   if (!call_register_agent(connection, "RegisterAgent", name, detail)) {
-    write_log(log, "RegisterAgent failed: " + name + " " + detail);
+    write_log(log, aa2acp::bridge::LogLevel::error,
+              "RegisterAgent failed: " + name + " " + detail);
     dbus_connection_unregister_object_path(connection, kAgentPath);
     return false;
   }
   if (!call_request_default_agent(connection, name, detail)) {
-    write_log(log, "RequestDefaultAgent failed: " + name + " " + detail);
+    write_log(log, aa2acp::bridge::LogLevel::warning,
+              "RequestDefaultAgent failed: " + name + " " + detail);
   }
 
   if (!call_set_le_discovery_filter(connection, name, detail)) {
-    write_log(log, "SetDiscoveryFilter(le) failed: " + name + " " + detail);
+    write_log(log, aa2acp::bridge::LogLevel::warning,
+              "SetDiscoveryFilter(le) failed: " + name + " " + detail);
   }
   if (!call_no_arguments(connection, kAdapterPath, kAdapterInterface,
                          "StartDiscovery", 5000, name, detail)) {
-    write_log(log, "StartDiscovery failed: " + name + " " + detail);
+    write_log(log, aa2acp::bridge::LogLevel::warning,
+              "StartDiscovery failed: " + name + " " + detail);
   } else {
-    write_log(log, "scanning for " + std::string(mac));
+    write_log(log, aa2acp::bridge::LogLevel::info,
+              "scanning for " + std::string(mac));
   }
   // After a bond is removed, BlueZ removes its Device1 object too. A head unit
   // can take several inquiry intervals to reappear, so five seconds is not
@@ -333,23 +337,27 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
     dbus_connection_read_write_dispatch(connection, 200);
     if (device_visible(mac)) {
       found = true;
-      write_log(log, "found " + std::string(mac) + " during discovery");
+      write_log(log, aa2acp::bridge::LogLevel::info,
+                "found " + std::string(mac) + " during discovery");
       break;
     }
   }
   if (!found) {
-    write_log(log, "discovery timeout reached for " + std::string(mac));
+    write_log(log, aa2acp::bridge::LogLevel::error,
+              "discovery timeout reached for " + std::string(mac));
     std::string cleanup_name;
     std::string cleanup_detail;
     call_no_arguments(connection, kAdapterPath, kAdapterInterface,
                       "StopDiscovery", 5000, cleanup_name, cleanup_detail);
     dbus_connection_unregister_object_path(connection, kAgentPath);
-    write_log(log, "Bluetooth device " + std::string(mac) +
-                       " was not found; pairing was not attempted");
+    write_log(log, aa2acp::bridge::LogLevel::error,
+              "Bluetooth device " + std::string(mac) +
+                  " was not found; pairing was not attempted");
     return false;
   }
-  write_log(log, "pairing " + std::string(mac) +
-                     " using NoInputNoOutput (Just Works)");
+  write_log(log, aa2acp::bridge::LogLevel::info,
+            "pairing " + std::string(mac) +
+                " using NoInputNoOutput (Just Works)");
   const int pair_timeout = timeout_seconds > 0 ? timeout_seconds * 1000 : 60000;
   // Device1 objects can disappear and be recreated while discovery updates a
   // freshly removed bond. Retry the method on the stable address-derived path
@@ -360,7 +368,8 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
                                "Pair", pair_timeout, name, detail);
     if (!paired && name == "org.freedesktop.DBus.Error.UnknownObject" &&
         attempt < 2) {
-      write_log(log, "device object changed during discovery; retrying pair");
+      write_log(log, aa2acp::bridge::LogLevel::warning,
+                "device object changed during discovery; retrying pair");
       const auto retry_deadline =
           std::chrono::steady_clock::now() + std::chrono::seconds(2);
       while (std::chrono::steady_clock::now() < retry_deadline)
@@ -377,21 +386,23 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
       pair_error_name == "org.bluez.Error.AlreadyExists" ||
       pair_error_name == "org.bluez.Error.AlreadyPaired";
   if (!paired && !already_paired) {
-    write_log(log, "Pair failed: " + pair_error_name + " " + pair_error_detail);
+    write_log(log, aa2acp::bridge::LogLevel::error,
+              "Pair failed: " + pair_error_name + " " + pair_error_detail);
     dbus_connection_unregister_object_path(connection, kAgentPath);
     return false;
   }
   if (already_paired) {
-    write_log(log, "device was already paired");
+    write_log(log, aa2acp::bridge::LogLevel::info, "device was already paired");
   } else {
-    write_log(log, "pairing succeeded");
+    write_log(log, aa2acp::bridge::LogLevel::info, "pairing succeeded");
   }
   if (!call_set_trusted(connection, path, name, detail)) {
-    write_log(log, "setting Trusted failed: " + name + " " + detail);
+    write_log(log, aa2acp::bridge::LogLevel::warning,
+              "setting Trusted failed: " + name + " " + detail);
     dbus_connection_unregister_object_path(connection, kAgentPath);
     return false;
   }
-  write_log(log, "device is trusted");
+  write_log(log, aa2acp::bridge::LogLevel::info, "device is trusted");
   dbus_connection_unregister_object_path(connection, kAgentPath);
   return true;
 }

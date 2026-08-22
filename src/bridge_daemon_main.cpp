@@ -165,6 +165,7 @@ public:
           std::array<char, 4096> output{};
           const auto count = read(output_fd_, output.data(), output.size());
           if (count > 0) {
+            // Child output is already level-prefixed; preserve it verbatim.
             std::cout.write(output.data(), count);
             std::cout.flush();
           }
@@ -180,7 +181,8 @@ public:
         }
       }
       if (!stopping && (stop.stop_requested() || phone_disconnected.load())) {
-        std::cout << "Bridge daemon: stopping active CarPlay session\n";
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+            << "Bridge daemon: stopping active CarPlay session\n";
         const char stop_command = '\2';
         send(control_fd_, &stop_command, sizeof(stop_command), MSG_NOSIGNAL);
         stopping = true;
@@ -608,7 +610,8 @@ void run_bluetooth_scan(ManagementState &state) {
     state.snapshot.bluetooth_scan_phase = phase;
   };
   const auto log = [](const std::string &message) {
-    std::cout << "Management Bluetooth: " << message << '\n';
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+        << "Management Bluetooth: " << message << '\n';
   };
   set_phase(2, "LE discovery in progress");
   aa2acp::bridge::discover_bluez_devices("le", 30, log);
@@ -622,7 +625,8 @@ void run_bluetooth_scan(ManagementState &state) {
     state.snapshot.bluetooth_scan_phase_id = 4;
     state.snapshot.bluetooth_scan_phase = "last discovery completed";
   }
-  std::cout << "Management Bluetooth: discovery finished\n";
+  aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+      << "Management Bluetooth: discovery finished\n";
 }
 
 std::string page(const aa2acp::bridge::Config &config,
@@ -800,11 +804,13 @@ public:
         dump_path != nullptr && *dump_path != '\0') {
       dump_.open(dump_path, std::ios::binary | std::ios::trunc);
       if (dump_)
-        std::cout << "Bridge daemon: capturing Android Auto H.264 to "
-                  << dump_path << '\n';
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+            << "Bridge daemon: capturing Android Auto H.264 to " << dump_path
+            << '\n';
       else
-        std::cerr << "Bridge daemon: unable to capture Android Auto H.264 to "
-                  << dump_path << '\n';
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+            << "Bridge daemon: unable to capture Android Auto H.264 to "
+            << dump_path << '\n';
     }
     listener_ = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (listener_ < 0 ||
@@ -1249,6 +1255,7 @@ int run_carplay_session(const aa2acp::bridge::Config &config,
       std::array<char, 4096> output{};
       const auto count = read(output_pipe[0], output.data(), output.size());
       if (count > 0) {
+        // Child output is already level-prefixed; preserve it verbatim.
         std::cout.write(output.data(), count);
         std::cout.flush();
         descriptor.revents = 0;
@@ -1269,8 +1276,9 @@ int run_carplay_session(const aa2acp::bridge::Config &config,
         forward_output(100);
       active_child = -1;
       if (!WIFEXITED(status)) {
-        std::cout << "Bridge daemon: cleaning up CarPlay Wi-Fi after worker "
-                     "failure\n";
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+            << "Bridge daemon: cleaning up CarPlay Wi-Fi after worker "
+               "failure\n";
         if (!aa2acp::iap2::leave_with_networkmanager(config.wifi_interface))
           aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
               << "Bridge daemon: unable to disconnect CarPlay Wi-Fi\n";
@@ -1284,10 +1292,11 @@ int run_carplay_session(const aa2acp::bridge::Config &config,
       while (output_pipe[0] >= 0)
         forward_output(100);
       if (forced || !WIFEXITED(status)) {
-        std::cout << "Bridge daemon: cleaning up CarPlay Wi-Fi after "
-                  << (forced ? "forced worker termination"
-                             : "abnormal worker termination")
-                  << '\n';
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+            << "Bridge daemon: cleaning up CarPlay Wi-Fi after "
+            << (forced ? "forced worker termination"
+                       : "abnormal worker termination")
+            << '\n';
         if (!aa2acp::iap2::leave_with_networkmanager(config.wifi_interface))
           aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
               << "Bridge daemon: unable to disconnect CarPlay Wi-Fi\n";
@@ -1573,7 +1582,8 @@ int main(int argc, char **argv) {
                                      : std::optional<std::filesystem::path>{};
   DaemonLog daemon_log(recent_log, log_path);
   if (log_path)
-    std::cout << "Bridge daemon: logging to " << *log_path << '\n';
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+        << "Bridge daemon: logging to " << *log_path << '\n';
   std::filesystem::path config_path = aa2acp::bridge::default_config_path();
   int port = 8080;
   for (int index = 1; index < argc; ++index) {
@@ -1585,8 +1595,9 @@ int main(int argc, char **argv) {
     else if (argument == "--no-file-log")
       continue;
     else {
-      std::cerr << "usage: aa2acp-bridge-daemon [--config PATH] [--port PORT] "
-                   "[--no-file-log]\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "usage: aa2acp-bridge-daemon [--config PATH] [--port PORT] "
+             "[--no-file-log]\n";
       return 2;
     }
   }
@@ -1600,7 +1611,8 @@ int main(int argc, char **argv) {
   std::mutex config_mutex;
   carplay_worker = std::make_unique<CarPlayWorker>();
   if (!carplay_worker) {
-    std::cerr << "Unable to start CarPlay worker\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Unable to start CarPlay worker\n";
     return 1;
   }
   refresh_bluetooth_inventory(management_state);
@@ -1614,19 +1626,21 @@ int main(int argc, char **argv) {
   ensure_management_hotspot_settings(config);
   if (!config.wifi_interface.empty() &&
       !aa2acp::bridge::save_config(config_path, config))
-    std::cerr << "Bridge daemon: unable to persist management hotspot "
-                 "settings\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+        << "Bridge daemon: unable to persist management hotspot settings\n";
   const auto hotspot_started =
       !config.wifi_interface.empty() &&
       aa2acp::iap2::start_management_hotspot(
           config.wifi_interface, config.management_hotspot_ssid,
           config.management_hotspot_passphrase);
   if (!hotspot_started)
-    std::cerr << "Bridge daemon: unable to start management hotspot\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Bridge daemon: unable to start management hotspot\n";
   else if (management_hotspot_needs_setup(config))
-    std::cout << "Bridge daemon: management hotspot default password is '"
-              << kDefaultManagementHotspotPassphrase
-              << "'; change it at the management UI before using AA2ACP\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+        << "Bridge daemon: management hotspot default password is '"
+        << kDefaultManagementHotspotPassphrase
+        << "'; change it at the management UI before using AA2ACP\n";
   std::jthread wifi_refresh_worker([](std::stop_token stop_token) {
     while (!stop_token.stop_requested()) {
       refresh_wifi_inventory(management_state);
@@ -1639,12 +1653,14 @@ int main(int argc, char **argv) {
   sigaddset(&signals, SIGINT);
   sigaddset(&signals, SIGTERM);
   if (sigprocmask(SIG_BLOCK, &signals, nullptr) != 0) {
-    std::cerr << "Unable to block shutdown signals\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Unable to block shutdown signals\n";
     return 1;
   }
   const int signal_fd = signalfd(-1, &signals, SFD_CLOEXEC);
   if (signal_fd < 0) {
-    std::cerr << "Unable to create shutdown signal descriptor\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Unable to create shutdown signal descriptor\n";
     return 1;
   }
   std::jthread android_auto_worker(
@@ -1668,12 +1684,13 @@ int main(int argc, char **argv) {
       bind(listener, reinterpret_cast<sockaddr *>(&address), sizeof(address)) !=
           0 ||
       listen(listener, 8) != 0) {
-    std::cerr << "Unable to listen on 0.0.0.0:" << port << '\n';
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Unable to listen on 0.0.0.0:" << port << '\n';
     close(signal_fd);
     return 1;
   }
-  std::cout << "Bridge management UI listening on http://0.0.0.0:" << port
-            << '\n';
+  aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+      << "Bridge management UI listening on http://0.0.0.0:" << port << '\n';
   const auto handle_client = [&](const int client) {
     std::array<char, 4096> buffer{};
     std::string request;
@@ -1870,7 +1887,8 @@ int main(int argc, char **argv) {
         respond(303, "text/plain", "", location);
       }
     } else if (request.starts_with("POST /scan ")) {
-      std::cout << "Management: Bluetooth scan requested\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+          << "Management: Bluetooth scan requested\n";
       bool start_scan = false;
       {
         std::lock_guard lock(management_state.mutex);
@@ -1890,8 +1908,9 @@ int main(int argc, char **argv) {
         std::lock_guard lock(management_state.mutex);
         management_state.snapshot.show_unnamed_bluetooth_devices = show_unnamed;
       }
-      std::cout << "Management: unnamed Bluetooth devices "
-                << (show_unnamed ? "shown" : "hidden") << '\n';
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+          << "Management: unnamed Bluetooth devices "
+          << (show_unnamed ? "shown" : "hidden") << '\n';
       respond(303, "text/plain", "", "Location: /\r\n");
     } else if (request.starts_with("POST /config ")) {
       const auto manual = form_field(body, "manual_mac");
@@ -1927,13 +1946,14 @@ int main(int argc, char **argv) {
           const auto capabilities_store =
               aa2acp::bridge::default_head_unit_capabilities_store();
           if (std::filesystem::remove(capabilities_store, error)) {
-            std::cout
+            aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
                 << "Management: invalidated cached head-unit capabilities "
                    "after head-unit change\n";
           } else if (error) {
-            std::cerr << "Management: unable to invalidate cached head-unit "
-                         "capabilities: "
-                      << error.message() << '\n';
+            aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+                << "Management: unable to invalidate cached head-unit "
+                   "capabilities: "
+                << error.message() << '\n';
           }
         }
         {
@@ -1941,15 +1961,17 @@ int main(int argc, char **argv) {
           config = {mac, *wifi, *hotspot_ssid, effective_hotspot_passphrase,
                     previous.airplay_pairing_store};
         }
-        std::cout << "Management: saved head unit " << mac << " on " << *wifi
-                  << '\n';
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+            << "Management: saved head unit " << mac << " on " << *wifi << '\n';
         respond(303, "text/plain", "", "Location: /?saved=1\r\n");
       } else {
-        std::cout << "Management: rejected invalid configuration\n";
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+            << "Management: rejected invalid configuration\n";
         respond(400, "text/plain", "Invalid configuration\n");
       }
     } else {
-      std::cout << "Management: unknown request\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+          << "Management: unknown request\n";
       respond(400, "text/plain", "Unknown endpoint\n");
     }
     close(client);
@@ -1990,7 +2012,8 @@ int main(int argc, char **argv) {
       signalfd_siginfo signal_info{};
       if (read(signal_fd, &signal_info, sizeof(signal_info)) ==
           static_cast<ssize_t>(sizeof(signal_info))) {
-        std::cout << "Bridge daemon: graceful shutdown requested\n";
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+            << "Bridge daemon: graceful shutdown requested\n";
         break;
       }
       continue;
@@ -2025,5 +2048,6 @@ int main(int argc, char **argv) {
   android_auto_worker.request_stop();
   android_auto_worker.join();
   close(signal_fd);
-  std::cout << "Bridge daemon: stopped\n";
+  aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+      << "Bridge daemon: stopped\n";
 }

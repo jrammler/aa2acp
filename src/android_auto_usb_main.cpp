@@ -1,4 +1,5 @@
 #include "aa2acp/aa/wired_receiver.hpp"
+#include "aa2acp/bridge/logging.hpp"
 
 #include <csignal>
 #include <iostream>
@@ -37,12 +38,16 @@ int main() {
   std::signal(SIGINT, handle_signal);
   std::signal(SIGTERM, handle_signal);
   aa2acp::aa::WiredReceiver receiver([](const auto &event) {
-    std::cout << "Android Auto USB [" << event_name(event.type)
-              << "]: " << event.detail << '\n';
+    const auto level = event.type == aa2acp::aa::WiredReceiverEventType::error
+                           ? aa2acp::bridge::LogLevel::error
+                           : aa2acp::bridge::LogLevel::info;
+    aa2acp::bridge::log(level) << "Android Auto USB [" << event_name(event.type)
+                               << "]: " << event.detail << '\n';
   });
   std::string error;
   if (!receiver.start(&error)) {
-    std::cerr << "Android Auto USB: " << error << '\n';
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Android Auto USB: " << error << '\n';
     return 1;
   }
   while (!stop_requested)

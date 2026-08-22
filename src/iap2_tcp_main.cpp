@@ -1,3 +1,4 @@
+#include "aa2acp/bridge/logging.hpp"
 #include "aa2acp/iap2/bootstrap.hpp"
 #include "aa2acp/iap2/carplay_probe.hpp"
 #include "aa2acp/iap2/link_layer.hpp"
@@ -82,7 +83,7 @@ int main(int argc, char **argv) {
       carplay = true;
       wifi_config = true;
     } else {
-      std::cerr
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
           << "usage: aa2acp-iap2-tcp [--host HOST] [--port PORT] [--timeout "
              "SECONDS] [--bootstrap] [--carplay] [--wifi-config]\n";
       return 2;
@@ -91,17 +92,21 @@ int main(int argc, char **argv) {
 
   const auto socket_fd = connect_tcp(host, port);
   if (socket_fd < 0) {
-    std::cerr << "Unable to connect to " << host << ':' << port << '\n';
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Unable to connect to " << host << ':' << port << '\n';
     return 1;
   }
-  std::cout << "Connected to " << host << ':' << port << '\n';
+  aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+      << "Connected to " << host << ':' << port << '\n';
   aa2acp::iap2::BootstrapSession session;
   aa2acp::iap2::CarPlayProbe carplay_probe;
   aa2acp::iap2::PhoneLink link(
       [socket_fd](const std::span<const std::uint8_t> bytes) {
         return send_all(socket_fd, bytes);
       },
-      [](const char *message) { std::cout << message << '\n'; },
+      [](const char *message) {
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug) << message << '\n';
+      },
       [&session, &carplay_probe,
        &carplay](const std::span<const std::uint8_t> bytes) {
         if (carplay && session.done()) {
@@ -130,7 +135,8 @@ int main(int argc, char **argv) {
     if (result > 0 && (descriptor.revents & POLLIN) != 0) {
       const auto count = recv(socket_fd, buffer.data(), buffer.size(), 0);
       if (count <= 0) {
-        std::cerr << "Connection closed by accessory\n";
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+            << "Connection closed by accessory\n";
         break;
       }
       link.receive(std::span(buffer).first(static_cast<std::size_t>(count)),

@@ -311,7 +311,7 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
                index + 1 < argc) {
       management_hotspot_passphrase = argv[++index];
     } else {
-      std::cerr
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
           << "usage: aa2acp-iap2-bt [--mac MAC] [--channel N] [--timeout "
              "SECONDS] "
              "[--bootstrap] [--carplay] [--wifi-config] [--join-wifi] "
@@ -326,18 +326,21 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
 
   if (leave_wifi) {
     if (wifi_interface.empty()) {
-      std::cerr << "--leave-wifi requires --wifi-interface\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "--leave-wifi requires --wifi-interface\n";
       return 2;
     }
     return aa2acp::iap2::leave_with_networkmanager(wifi_interface) ? 0 : 1;
   }
 
   if (address.empty()) {
-    std::cerr << "--mac is required\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "--mac is required\n";
     return 2;
   }
   if ((wifi_config || join_wifi || bridge) && wifi_interface.empty()) {
-    std::cerr << "--wifi-interface is required for a CarPlay Wi-Fi session\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "--wifi-interface is required for a CarPlay Wi-Fi session\n";
     return 2;
   }
 
