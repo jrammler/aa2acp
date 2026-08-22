@@ -282,10 +282,23 @@ private:
 class TeeBuffer final : public std::streambuf {
 public:
   TeeBuffer(std::streambuf *console, std::ofstream *file, RecentLog &recent,
-            std::mutex &mutex)
-      : console_(console), file_(file), recent_(recent), mutex_(mutex) {}
+            std::mutex &mutex, const aa2acp::bridge::LogLevel default_level)
+      : console_(console), file_(file), recent_(recent), mutex_(mutex),
+        default_level_(default_level) {}
 
 private:
+  static bool has_log_level_prefix(const std::string_view text) {
+    for (const auto level :
+         {aa2acp::bridge::LogLevel::debug, aa2acp::bridge::LogLevel::info,
+          aa2acp::bridge::LogLevel::warning, aa2acp::bridge::LogLevel::error}) {
+      const std::string prefix =
+          "[" + std::string(aa2acp::bridge::log_level_name(level)) + "] ";
+      if (text.starts_with(prefix))
+        return true;
+    }
+    return false;
+  }
+
   int_type overflow(const int_type character) override {
     if (traits_type::eq_int_type(character, traits_type::eof()))
       return traits_type::not_eof(character);
@@ -313,13 +326,25 @@ private:
     for (std::size_t offset = 0; offset < text.size();) {
       if (at_line_start_) {
         const auto timestamp = log_timestamp();
+        const bool explicit_level = has_log_level_prefix(text.substr(offset));
+        const std::string prefix =
+            explicit_level ? ""
+                           : "[" +
+                                 std::string(aa2acp::bridge::log_level_name(
+                                     default_level_)) +
+                                 "] ";
         if (console_->sputn(timestamp.data(), timestamp.size()) !=
-            static_cast<std::streamsize>(timestamp.size()))
+                static_cast<std::streamsize>(timestamp.size()) ||
+            (!prefix.empty() &&
+             console_->sputn(prefix.data(), prefix.size()) !=
+                 static_cast<std::streamsize>(prefix.size())))
           return false;
         if (file_ != nullptr &&
-            !file_->write(timestamp.data(), timestamp.size()))
+            (!file_->write(timestamp.data(), timestamp.size()) ||
+             !file_->write(prefix.data(), prefix.size())))
           return false;
         recent_.append(timestamp);
+        recent_.append(prefix);
         at_line_start_ = false;
       }
       const auto line_end = text.find('\n', offset);
@@ -342,6 +367,7 @@ private:
   std::ofstream *file_;
   RecentLog &recent_;
   std::mutex &mutex_;
+  aa2acp::bridge::LogLevel default_level_;
   bool at_line_start_{true};
 };
 
@@ -351,9 +377,9 @@ public:
       : path_(path),
         file_(path_ ? *path_ : std::filesystem::path{}, std::ios::app),
         cout_buffer_(std::cout.rdbuf(), file_ ? &file_ : nullptr, recent,
-                     mutex_),
+                     mutex_, aa2acp::bridge::LogLevel::info),
         cerr_buffer_(std::cerr.rdbuf(), file_ ? &file_ : nullptr, recent,
-                     mutex_) {
+                     mutex_, aa2acp::bridge::LogLevel::error) {
     old_cout_ = std::cout.rdbuf(&cout_buffer_);
     old_cerr_ = std::cerr.rdbuf(&cerr_buffer_);
   }
