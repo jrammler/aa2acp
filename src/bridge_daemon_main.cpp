@@ -55,6 +55,7 @@ struct ManagementSnapshot {
   std::string bluetooth_error;
   bool carplay_preflight_running{};
   std::string carplay_preflight_status;
+  std::optional<aa2acp::iap2::PairingConfirmationMessage> pairing_confirmation;
   bool management_hotspot_password_pending{};
   std::string pending_management_hotspot_ssid;
 };
@@ -88,6 +89,7 @@ public:
       dup2(output[1], STDOUT_FILENO);
       dup2(output[1], STDERR_FILENO);
       close(output[1]);
+      aa2acp::iap2::set_pairing_confirmation_control_fd(control[1]);
       std::array<char, 8192> request{};
       for (;;) {
         const auto count = recv(control[1], request.data(), request.size(), 0);
@@ -95,6 +97,16 @@ public:
           _exit(0);
         if (request[0] == '\2') {
           aa2acp::iap2::request_bluetooth_worker_stop();
+          continue;
+        }
+        if (request[0] == '\4' &&
+            count ==
+                static_cast<ssize_t>(
+                    1 + sizeof(aa2acp::iap2::PairingConfirmationMessage) + 1)) {
+          aa2acp::iap2::PairingConfirmationMessage confirmation{};
+          std::memcpy(&confirmation, request.data() + 1, sizeof(confirmation));
+          aa2acp::iap2::answer_pairing_confirmation(
+              confirmation.id, request[1 + sizeof(confirmation)] != 0);
           continue;
         }
         if (request[0] != '\1')
@@ -117,7 +129,10 @@ public:
           worker_argv.push_back(nullptr);
           const int result = aa2acp::iap2::run_bluetooth_worker(
               static_cast<int>(worker_argv.size() - 1), worker_argv.data());
-          send(control_fd, &result, sizeof(result), MSG_NOSIGNAL);
+          std::array<std::byte, 1 + sizeof(result)> response{};
+          response[0] = std::byte{2};
+          std::memcpy(response.data() + 1, &result, sizeof(result));
+          send(control_fd, response.data(), response.size(), MSG_NOSIGNAL);
         }).detach();
       }
     }
@@ -171,8 +186,32 @@ public:
           }
         }
         if ((descriptors[1].revents & POLLIN) != 0) {
-          int result{};
-          if (recv(control_fd_, &result, sizeof(result), 0) == sizeof(result)) {
+          std::array<std::byte,
+                     1 + sizeof(aa2acp::iap2::PairingConfirmationMessage) + 1>
+              message{};
+          const auto count =
+              recv(control_fd_, message.data(), message.size(), 0);
+          if (count > 0 && message[0] == std::byte{3} &&
+              count ==
+                  static_cast<ssize_t>(
+                      1 + sizeof(aa2acp::iap2::PairingConfirmationMessage))) {
+            aa2acp::iap2::PairingConfirmationMessage confirmation{};
+            std::memcpy(&confirmation, message.data() + 1,
+                        sizeof(confirmation));
+            std::lock_guard state_lock(management_state.mutex);
+            management_state.snapshot.pairing_confirmation = confirmation;
+            management_state.snapshot.carplay_preflight_status =
+                "compare the Bluetooth pairing code in the management UI";
+            continue;
+          }
+          if (count == static_cast<ssize_t>(1 + sizeof(int)) &&
+              message[0] == std::byte{2}) {
+            int result{};
+            std::memcpy(&result, message.data() + 1, sizeof(result));
+            {
+              std::lock_guard state_lock(management_state.mutex);
+              management_state.snapshot.pairing_confirmation.reset();
+            }
             active_child = -1;
             return result;
           }
@@ -190,11 +229,25 @@ public:
     }
   }
 
+  bool answer_pairing_confirmation(
+      const aa2acp::iap2::PairingConfirmationMessage &confirmation,
+      const bool confirmed) {
+    std::array<std::byte, 1 + sizeof(confirmation) + 1> message{};
+    message[0] = std::byte{4};
+    std::memcpy(message.data() + 1, &confirmation, sizeof(confirmation));
+    message[1 + sizeof(confirmation)] = confirmed ? std::byte{1} : std::byte{0};
+    std::lock_guard lock(command_mutex_);
+    return control_fd_ >= 0 &&
+           send(control_fd_, message.data(), message.size(), MSG_NOSIGNAL) ==
+               static_cast<ssize_t>(message.size());
+  }
+
 private:
   pid_t pid_{-1};
   int control_fd_{-1};
   int output_fd_{-1};
   std::mutex mutex_;
+  std::mutex command_mutex_;
 };
 
 std::unique_ptr<CarPlayWorker> carplay_worker;
@@ -686,6 +739,21 @@ std::string page(const aa2acp::bridge::Config &config,
   if (!snapshot.carplay_preflight_status.empty())
     output += "<p class=status>CarPlay preparation: " +
               html_escape(snapshot.carplay_preflight_status) + "</p>";
+  if (snapshot.pairing_confirmation) {
+    auto code = std::to_string(snapshot.pairing_confirmation->passkey);
+    code.insert(0, 6 - std::min<std::size_t>(6, code.size()), '0');
+    output += "<div class=status><p>Compare this Bluetooth pairing code with "
+              "the code shown by the car:</p><p style=\"font-size:2rem;letter-"
+              "spacing:.15em\"><b>" +
+              html_escape(code) +
+              "</b></p><form "
+              "method=post action=\"/bluetooth-confirm\"><input type=hidden "
+              "name=\"id\" value=\"" +
+              std::to_string(snapshot.pairing_confirmation->id) +
+              "\"><button name=\"decision\" value=\"confirm\" type=submit>"
+              "Codes match — Confirm</button><button name=\"decision\" "
+              "value=\"reject\" type=submit>Reject</button></form></div>";
+  }
   if (!snapshot.bluetooth_error.empty())
     output += "<p class=hint>Bluetooth refresh failed: " +
               html_escape(snapshot.bluetooth_error) + "</p>";
@@ -1810,8 +1878,11 @@ int main(int argc, char **argv) {
       respond(status, "text/plain", "");
     } else if (request.starts_with("GET /carplay-prepare-status")) {
       const auto snapshot = management_snapshot(management_state);
-      respond(snapshot.carplay_preflight_running ? 204 : 205, "text/plain",
-              snapshot.carplay_preflight_status);
+      respond(snapshot.carplay_preflight_running &&
+                      !snapshot.pairing_confirmation
+                  ? 204
+                  : 205,
+              "text/plain", snapshot.carplay_preflight_status);
     } else if (request.starts_with("POST /management-hotspot ")) {
       const auto passphrase = form_field(body, "management_hotspot_passphrase");
       const auto confirmation =
@@ -1925,6 +1996,30 @@ int main(int argc, char **argv) {
                                   ? "Location: /?carplay_error=1\r\n"
                                   : "Location: /\r\n";
         respond(303, "text/plain", "", location);
+      }
+    } else if (request.starts_with("POST /bluetooth-confirm ")) {
+      const auto id = form_field(body, "id");
+      const auto decision = form_field(body, "decision");
+      const auto snapshot = management_snapshot(management_state);
+      bool accepted = false;
+      if (id && decision && snapshot.pairing_confirmation &&
+          *id == std::to_string(snapshot.pairing_confirmation->id) &&
+          (*decision == "confirm" || *decision == "reject") && carplay_worker) {
+        accepted = carplay_worker->answer_pairing_confirmation(
+            *snapshot.pairing_confirmation, *decision == "confirm");
+      }
+      if (!accepted) {
+        respond(409, "text/plain",
+                "No matching Bluetooth confirmation is pending\n");
+      } else {
+        {
+          std::lock_guard lock(management_state.mutex);
+          management_state.snapshot.pairing_confirmation.reset();
+        }
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+            << "Management: Bluetooth pairing confirmation " << *decision
+            << " requested\n";
+        respond(303, "text/plain", "", "Location: /\r\n");
       }
     } else if (request.starts_with("POST /bluetooth-forget ")) {
       const auto selected_config = [&] {

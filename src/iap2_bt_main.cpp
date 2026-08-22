@@ -18,14 +18,21 @@
 
 #include <array>
 #include <chrono>
+#include <cstring>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 
 namespace {
 
 volatile std::sig_atomic_t shutdown_requested = 0;
+std::mutex pairing_confirmation_mutex;
+int pairing_confirmation_control_fd = -1;
+std::uint64_t next_pairing_confirmation_id = 1;
+std::uint64_t pending_pairing_confirmation_id{};
+int pending_pairing_confirmation_result = -1;
 void request_shutdown(int) { shutdown_requested = 1; }
 
 void install_shutdown_handlers() {
@@ -542,3 +549,50 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
 }
 
 void aa2acp::iap2::request_bluetooth_worker_stop() { shutdown_requested = 1; }
+
+void aa2acp::iap2::set_pairing_confirmation_control_fd(const int fd) {
+  std::lock_guard lock(pairing_confirmation_mutex);
+  pairing_confirmation_control_fd = fd;
+}
+
+bool aa2acp::iap2::request_pairing_confirmation(const std::string_view address,
+                                                const std::uint32_t passkey,
+                                                std::uint64_t *id) {
+  std::lock_guard lock(pairing_confirmation_mutex);
+  if (pairing_confirmation_control_fd < 0 || address.size() >= 18 ||
+      pending_pairing_confirmation_id != 0)
+    return false;
+  PairingConfirmationMessage message{next_pairing_confirmation_id++, passkey};
+  std::copy(address.begin(), address.end(), message.address);
+  std::array<std::byte, 1 + sizeof(message)> packet{};
+  packet[0] = std::byte{3};
+  std::memcpy(packet.data() + 1, &message, sizeof(message));
+  if (send(pairing_confirmation_control_fd, packet.data(), packet.size(),
+           MSG_NOSIGNAL) != static_cast<ssize_t>(packet.size()))
+    return false;
+  pending_pairing_confirmation_id = message.id;
+  pending_pairing_confirmation_result = -1;
+  if (id != nullptr)
+    *id = message.id;
+  return true;
+}
+
+bool aa2acp::iap2::pairing_confirmation_result(const std::uint64_t id,
+                                               bool *confirmed) {
+  std::lock_guard lock(pairing_confirmation_mutex);
+  if (pending_pairing_confirmation_id != id ||
+      pending_pairing_confirmation_result < 0)
+    return false;
+  if (confirmed != nullptr)
+    *confirmed = pending_pairing_confirmation_result == 1;
+  pending_pairing_confirmation_id = 0;
+  pending_pairing_confirmation_result = -1;
+  return true;
+}
+
+void aa2acp::iap2::answer_pairing_confirmation(const std::uint64_t id,
+                                               const bool confirmed) {
+  std::lock_guard lock(pairing_confirmation_mutex);
+  if (pending_pairing_confirmation_id == id)
+    pending_pairing_confirmation_result = confirmed ? 1 : 0;
+}

@@ -1,5 +1,6 @@
 #include "aa2acp/iap2/bluez_pairing.hpp"
 #include "aa2acp/bridge/bluez_inventory.hpp"
+#include "aa2acp/iap2/bluetooth_worker.hpp"
 
 #include <dbus/dbus.h>
 
@@ -32,10 +33,47 @@ struct CallResult {
 
 struct AgentContext {
   const PairingLogFunction *log;
+  DBusMessage *pending_confirmation{};
+  std::uint64_t confirmation_id{};
+  std::chrono::steady_clock::time_point confirmation_deadline{};
 };
 
 void write_log(const PairingLogFunction &log, aa2acp::bridge::LogLevel level,
                const std::string &message);
+
+void resolve_pending_confirmation(DBusConnection *connection,
+                                  AgentContext *context) {
+  if (context == nullptr || context->pending_confirmation == nullptr)
+    return;
+  bool confirmed{};
+  const bool answered =
+      pairing_confirmation_result(context->confirmation_id, &confirmed);
+  const bool timed_out = !answered && std::chrono::steady_clock::now() >=
+                                          context->confirmation_deadline;
+  if (!answered && !timed_out)
+    return;
+  DBusMessage *reply =
+      answered && confirmed
+          ? dbus_message_new_method_return(context->pending_confirmation)
+          : dbus_message_new_error(context->pending_confirmation,
+                                   "org.bluez.Error.Rejected",
+                                   "Pairing confirmation rejected");
+  if (reply != nullptr) {
+    dbus_connection_send(connection, reply, nullptr);
+    dbus_connection_flush(connection);
+    dbus_message_unref(reply);
+  }
+  write_log(*context->log,
+            answered && confirmed ? aa2acp::bridge::LogLevel::info
+                                  : aa2acp::bridge::LogLevel::warning,
+            answered
+                ? (confirmed
+                       ? "pairing confirmation accepted from management UI"
+                       : "pairing confirmation rejected from management UI")
+                : "pairing confirmation timed out");
+  dbus_message_unref(context->pending_confirmation);
+  context->pending_confirmation = nullptr;
+}
 
 void finish_call(DBusPendingCall *pending, void *user_data) {
   auto &result = *static_cast<CallResult *>(user_data);
@@ -60,7 +98,7 @@ void finish_call(DBusPendingCall *pending, void *user_data) {
 
 bool await_call(DBusConnection *connection, DBusMessage *message,
                 const int timeout_ms, std::string &error_name,
-                std::string &error_message) {
+                std::string &error_message, AgentContext *context = nullptr) {
   DBusPendingCall *pending = nullptr;
   if (dbus_connection_send_with_reply(connection, message, &pending,
                                       timeout_ms) == 0 ||
@@ -74,6 +112,7 @@ bool await_call(DBusConnection *connection, DBusMessage *message,
       std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
   while (!result.complete && std::chrono::steady_clock::now() < deadline) {
     dbus_connection_read_write_dispatch(connection, 100);
+    resolve_pending_confirmation(connection, context);
   }
   dbus_pending_call_unref(pending);
   if (!result.complete) {
@@ -93,13 +132,14 @@ DBusMessage *new_call(const char *path, const char *interface,
 bool call_no_arguments(DBusConnection *connection, const char *path,
                        const char *interface, const char *method,
                        const int timeout_ms, std::string &name,
-                       std::string &detail) {
+                       std::string &detail, AgentContext *context = nullptr) {
   DBusMessage *message = new_call(path, interface, method);
   if (message == nullptr) {
     detail = "unable to allocate D-Bus message";
     return false;
   }
-  const bool result = await_call(connection, message, timeout_ms, name, detail);
+  const bool result =
+      await_call(connection, message, timeout_ms, name, detail, context);
   dbus_message_unref(message);
   return result;
 }
@@ -155,6 +195,32 @@ bool agent_handler(DBusConnection *connection, DBusMessage *message,
               "pairing agent request " +
                   std::string(member == nullptr ? "unknown" : member) +
                   agent_request_detail(message));
+  }
+  auto *mutable_context = const_cast<AgentContext *>(context);
+  if (dbus_message_is_method_call(message, kAgentInterface,
+                                  "RequestConfirmation") &&
+      mutable_context != nullptr &&
+      mutable_context->pending_confirmation == nullptr) {
+    DBusMessageIter arguments;
+    dbus_message_iter_init(message, &arguments);
+    const char *device = nullptr;
+    dbus_message_iter_get_basic(&arguments, &device);
+    dbus_message_iter_next(&arguments);
+    dbus_uint32_t passkey{};
+    dbus_message_iter_get_basic(&arguments, &passkey);
+    std::uint64_t id{};
+    if (request_pairing_confirmation(device == nullptr ? "" : device, passkey,
+                                     &id)) {
+      mutable_context->pending_confirmation = dbus_message_ref(message);
+      mutable_context->confirmation_id = id;
+      mutable_context->confirmation_deadline =
+          std::chrono::steady_clock::now() + std::chrono::seconds(50);
+      write_log(*mutable_context->log, aa2acp::bridge::LogLevel::info,
+                "pairing confirmation is awaiting management UI approval");
+      return true;
+    }
+    write_log(*mutable_context->log, aa2acp::bridge::LogLevel::error,
+              "unable to request management UI pairing confirmation");
   }
   DBusMessage *reply = dbus_message_new_method_return(message);
   if (reply == nullptr) {
@@ -438,8 +504,9 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
   // rather than treating that transient UnknownObject as a pairing failure.
   bool paired = false;
   for (int attempt = 0; attempt < 3 && !paired; ++attempt) {
-    paired = call_no_arguments(connection, path.c_str(), kDeviceInterface,
-                               "Pair", pair_timeout, name, detail);
+    paired =
+        call_no_arguments(connection, path.c_str(), kDeviceInterface, "Pair",
+                          pair_timeout, name, detail, &agent_context);
     if (!paired && name == "org.freedesktop.DBus.Error.UnknownObject" &&
         attempt < 2) {
       write_log(log, aa2acp::bridge::LogLevel::warning,
