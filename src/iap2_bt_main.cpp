@@ -559,11 +559,15 @@ bool aa2acp::iap2::request_pairing_confirmation(const std::string_view address,
                                                 const std::uint32_t passkey,
                                                 std::uint64_t *id) {
   std::lock_guard lock(pairing_confirmation_mutex);
-  if (pairing_confirmation_control_fd < 0 || address.size() >= 18 ||
+  if (pairing_confirmation_control_fd < 0 ||
       pending_pairing_confirmation_id != 0)
     return false;
   PairingConfirmationMessage message{next_pairing_confirmation_id++, passkey};
-  std::copy(address.begin(), address.end(), message.address);
+  // BlueZ Agent1 supplies a device object path here, not necessarily a MAC
+  // address. The UI only needs the numeric code, so retain an address only
+  // when it fits the optional display field.
+  if (address.size() < sizeof(message.address))
+    std::copy(address.begin(), address.end(), message.address);
   std::array<std::byte, 1 + sizeof(message)> packet{};
   packet[0] = std::byte{3};
   std::memcpy(packet.data() + 1, &message, sizeof(message));
