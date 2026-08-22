@@ -1020,7 +1020,7 @@ public:
   ~VideoSocketForwarder() {
     worker_.request_stop();
     close_listener();
-    close_client();
+    shutdown_client();
     frames_ready_.notify_all();
     if (!path_.empty())
       unlink(path_.c_str());
@@ -1194,12 +1194,10 @@ private:
     }
   }
 
-  void close_client() {
-    const auto client = client_.exchange(-1);
-    if (client >= 0) {
+  void shutdown_client() {
+    const auto client = client_.load();
+    if (client >= 0)
       shutdown(client, SHUT_RDWR);
-      close(client);
-    }
   }
 
   std::filesystem::path path_;
@@ -1248,7 +1246,7 @@ public:
   ~AudioSocketForwarder() {
     worker_.request_stop();
     close_listener();
-    close_client();
+    shutdown_client();
     frames_ready_.notify_all();
     if (!path_.empty())
       unlink(path_.c_str());
@@ -1337,12 +1335,10 @@ private:
     }
   }
 
-  void close_client() {
-    const auto client = client_.exchange(-1);
-    if (client >= 0) {
+  void shutdown_client() {
+    const auto client = client_.load();
+    if (client >= 0)
       shutdown(client, SHUT_RDWR);
-      close(client);
-    }
   }
 
   std::filesystem::path path_;
