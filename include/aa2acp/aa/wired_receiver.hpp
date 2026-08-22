@@ -19,6 +19,7 @@ enum class WiredReceiverEventType {
   control_session_ready,
   video_stream_configured,
   video_stream_started,
+  transport_teardown,
   disconnected,
   error,
 };

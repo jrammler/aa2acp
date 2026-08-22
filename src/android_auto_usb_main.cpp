@@ -24,6 +24,8 @@ const char *event_name(const aa2acp::aa::WiredReceiverEventType type) {
     return "video-configured";
   case aa2acp::aa::WiredReceiverEventType::video_stream_started:
     return "video";
+  case aa2acp::aa::WiredReceiverEventType::transport_teardown:
+    return "teardown";
   case aa2acp::aa::WiredReceiverEventType::disconnected:
     return "disconnected";
   case aa2acp::aa::WiredReceiverEventType::error:
@@ -38,9 +40,12 @@ int main() {
   std::signal(SIGINT, handle_signal);
   std::signal(SIGTERM, handle_signal);
   aa2acp::aa::WiredReceiver receiver([](const auto &event) {
-    const auto level = event.type == aa2acp::aa::WiredReceiverEventType::error
-                           ? aa2acp::bridge::LogLevel::error
-                           : aa2acp::bridge::LogLevel::info;
+    const auto level =
+        event.type == aa2acp::aa::WiredReceiverEventType::error
+            ? aa2acp::bridge::LogLevel::error
+        : event.type == aa2acp::aa::WiredReceiverEventType::transport_teardown
+            ? aa2acp::bridge::LogLevel::debug
+            : aa2acp::bridge::LogLevel::info;
     aa2acp::bridge::log(level) << "Android Auto USB [" << event_name(event.type)
                                << "]: " << event.detail << '\n';
   });

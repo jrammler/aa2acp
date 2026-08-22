@@ -1443,6 +1443,13 @@ int run_wired_android_auto_receiver(
             aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
                 << "Bridge daemon: Android Auto video stream started\n";
           break;
+        case aa2acp::aa::WiredReceiverEventType::transport_teardown:
+          if (aa2acp::bridge::debug_logging_enabled())
+            aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+                << "Bridge daemon: expected Android Auto USB transport "
+                   "teardown: "
+                << event.detail << '\n';
+          break;
         case aa2acp::aa::WiredReceiverEventType::disconnected:
           aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
               << "Bridge daemon: Android Auto USB disconnected\n";

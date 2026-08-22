@@ -401,7 +401,7 @@ public:
       sensor_->start();
       microphone_->start();
     } catch (const aasdk::error::Error &error) {
-      fail(error.what());
+      fail(error);
     }
   }
 
@@ -425,7 +425,7 @@ public:
       send_handshake();
       receive_next();
     } catch (const aasdk::error::Error &error) {
-      fail(error.what());
+      fail(error);
     }
   }
 
@@ -443,7 +443,7 @@ public:
       }
       receive_next();
     } catch (const aasdk::error::Error &error) {
-      fail(error.what());
+      fail(error);
     }
   }
 
@@ -578,9 +578,7 @@ public:
                                std::to_string(count) + " channels; " +
                                resolution_detail + ")"});
         },
-        [self = shared_from_this()](const auto &error) {
-          self->fail(error.what());
-        });
+        [self = shared_from_this()](const auto &error) { self->fail(error); });
     control_->sendServiceDiscoveryResponse(response, std::move(promise));
     receive_next();
   }
@@ -637,7 +635,7 @@ public:
     receive_next();
   }
   void onChannelError(const aasdk::error::Error &error) override {
-    fail(error.what());
+    fail(error);
   }
 
   void onChannelOpenRequest(
@@ -743,13 +741,13 @@ private:
   template <typename Sender> void send(Sender sender) {
     auto promise = aasdk::channel::SendPromise::defer(strand_);
     promise->then([] {}, [self = shared_from_this()](
-                             const auto &error) { self->fail(error.what()); });
+                             const auto &error) { self->fail(error); });
     sender(std::move(promise));
   }
   template <typename Sender> void send_video(Sender sender) {
     auto promise = aasdk::channel::SendPromise::defer(strand_);
     promise->then([] {}, [self = shared_from_this()](
-                             const auto &error) { self->fail(error.what()); });
+                             const auto &error) { self->fail(error); });
     sender(std::move(promise));
   }
   void receive_next() { control_->receive(shared_from_this()); }
@@ -764,10 +762,18 @@ private:
         });
     receive_video_next();
   }
-  void fail(const std::string &detail) {
+  void fail(const std::string &detail) { fail(detail, false); }
+  void fail(const aasdk::error::Error &error) {
+    const bool expected_usb_unplug =
+        error.getCode() == aasdk::error::ErrorCode::USB_TRANSFER &&
+        error.getNativeCode() == 1;
+    fail(error.what(), expected_usb_unplug);
+  }
+  void fail(const std::string &detail, const bool expected_usb_unplug) {
     if (failed_.exchange(true))
       return;
-    callback_({WiredReceiverEventType::error,
+    callback_({expected_usb_unplug ? WiredReceiverEventType::transport_teardown
+                                   : WiredReceiverEventType::error,
                "Android Auto control session: " + detail});
     ended_callback_();
   }
