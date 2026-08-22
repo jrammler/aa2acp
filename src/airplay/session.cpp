@@ -291,7 +291,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     if (stored) {
       pairing = *stored;
       if (aa2acp::bridge::debug_logging_enabled())
-        std::cout << "AirPlay: loaded persistent pairing identity\n";
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+            << "AirPlay: loaded persistent pairing identity\n";
     }
   }
   if (pairing.controller.private_key.empty()) {
@@ -333,9 +334,9 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
       return 1;
     }
     if (aa2acp::bridge::debug_logging_enabled())
-      std::cout << "AirPlay: Pair-Setup M2 received (salt="
-                << salt->second.size()
-                << "B, SRP public key=" << public_key->second.size() << "B)\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+          << "AirPlay: Pair-Setup M2 received (salt=" << salt->second.size()
+          << "B, SRP public key=" << public_key->second.size() << "B)\n";
     aa2acp::airplay::SrpClient srp;
     if (!srp.process_challenge(salt->second, public_key->second)) {
       std::cerr << "Unable to process Pair-Setup SRP challenge\n";
