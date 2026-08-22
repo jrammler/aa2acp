@@ -79,7 +79,9 @@ public:
     auto &output = level_ == LogLevel::warning || level_ == LogLevel::error
                        ? std::cerr
                        : std::cout;
-    output << '[' << log_level_name(level_) << "] > " << message_.str();
+    const std::string text =
+        "[" + std::string(log_level_name(level_)) + "] > " + message_.str();
+    output.write(text.data(), static_cast<std::streamsize>(text.size()));
   }
 
   template <typename Value> LogLine &operator<<(const Value &value) {
