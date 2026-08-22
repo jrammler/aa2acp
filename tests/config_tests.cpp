@@ -17,6 +17,10 @@ int main() {
          restored->management_hotspot_passphrase ==
              expected.management_hotspot_passphrase &&
          restored->airplay_pairing_store == expected.airplay_pairing_store);
+  auto malformed = expected;
+  malformed.management_hotspot_ssid += '\0';
+  malformed.management_hotspot_ssid += "suffix";
+  assert(!aa2acp::bridge::save_config(path, malformed));
   std::filesystem::remove(path);
   assert(aa2acp::bridge::default_config_path().filename() == "config");
   assert(aa2acp::bridge::default_airplay_pairing_store().filename() ==
