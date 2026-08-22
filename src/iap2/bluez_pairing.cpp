@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstdint>
 #include <iostream>
+#include <sstream>
 #include <string>
 
 namespace aa2acp::iap2 {
@@ -28,6 +29,13 @@ struct CallResult {
   std::string error_name;
   std::string error_message;
 };
+
+struct AgentContext {
+  const PairingLogFunction *log;
+};
+
+void write_log(const PairingLogFunction &log, aa2acp::bridge::LogLevel level,
+               const std::string &message);
 
 void finish_call(DBusPendingCall *pending, void *user_data) {
   auto &result = *static_cast<CallResult *>(user_data);
@@ -96,7 +104,34 @@ bool call_no_arguments(DBusConnection *connection, const char *path,
   return result;
 }
 
-bool agent_handler(DBusConnection *connection, DBusMessage *message, void *) {
+std::string agent_request_detail(DBusMessage *message) {
+  DBusMessageIter arguments;
+  if (!dbus_message_iter_init(message, &arguments))
+    return {};
+
+  std::ostringstream detail;
+  const int first_type = dbus_message_iter_get_arg_type(&arguments);
+  if (first_type == DBUS_TYPE_OBJECT_PATH) {
+    const char *device = nullptr;
+    dbus_message_iter_get_basic(&arguments, &device);
+    detail << " for " << (device == nullptr ? "unknown device" : device);
+    dbus_message_iter_next(&arguments);
+  }
+  const int second_type = dbus_message_iter_get_arg_type(&arguments);
+  if (second_type == DBUS_TYPE_UINT32) {
+    dbus_uint32_t value{};
+    dbus_message_iter_get_basic(&arguments, &value);
+    detail << " with value " << value;
+  } else if (second_type == DBUS_TYPE_STRING) {
+    const char *value = nullptr;
+    dbus_message_iter_get_basic(&arguments, &value);
+    detail << " for service " << (value == nullptr ? "unknown" : value);
+  }
+  return detail.str();
+}
+
+bool agent_handler(DBusConnection *connection, DBusMessage *message,
+                   void *user_data) {
   if (!dbus_message_is_method_call(message, kAgentInterface, "Release") &&
       !dbus_message_is_method_call(message, kAgentInterface, "Cancel") &&
       !dbus_message_is_method_call(message, kAgentInterface,
@@ -112,6 +147,15 @@ bool agent_handler(DBusConnection *connection, DBusMessage *message, void *) {
       !dbus_message_is_method_call(message, kAgentInterface,
                                    "RequestPasskey")) {
     return false;
+  }
+  const auto *context = static_cast<AgentContext *>(user_data);
+  const char *member = dbus_message_get_member(message);
+  if (context != nullptr && context->log != nullptr &&
+      *context->log != nullptr) {
+    write_log(*context->log, aa2acp::bridge::LogLevel::info,
+              "pairing agent request " +
+                  std::string(member == nullptr ? "unknown" : member) +
+                  agent_request_detail(message));
   }
   DBusMessage *reply = dbus_message_new_method_return(message);
   if (reply == nullptr) {
@@ -158,9 +202,28 @@ bool call_register_agent(DBusConnection *connection, const char *method,
     return false;
   }
   const char *agent_path = kAgentPath;
-  const char *capability = "NoInputNoOutput";
+  // Numeric Comparison is widely used by CarPlay head units.  DisplayYesNo
+  // allows BlueZ to select it, while the agent can accept confirmation without
+  // requiring a separate display or input device.
+  const char *capability = "DisplayYesNo";
   dbus_message_append_args(message, DBUS_TYPE_OBJECT_PATH, &agent_path,
                            DBUS_TYPE_STRING, &capability, DBUS_TYPE_INVALID);
+  const bool result = await_call(connection, message, 5000, name, detail);
+  dbus_message_unref(message);
+  return result;
+}
+
+bool call_unregister_agent(DBusConnection *connection, std::string &name,
+                           std::string &detail) {
+  DBusMessage *message =
+      new_call("/org/bluez", kAgentManager, "UnregisterAgent");
+  if (message == nullptr) {
+    detail = "unable to allocate D-Bus message";
+    return false;
+  }
+  const char *agent_path = kAgentPath;
+  dbus_message_append_args(message, DBUS_TYPE_OBJECT_PATH, &agent_path,
+                           DBUS_TYPE_INVALID);
   const bool result = await_call(connection, message, 5000, name, detail);
   dbus_message_unref(message);
   return result;
@@ -292,8 +355,9 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
     }
     return true;
   }
+  AgentContext agent_context{&log};
   if (!dbus_connection_register_object_path(connection, kAgentPath,
-                                            &kAgentVTable, nullptr)) {
+                                            &kAgentVTable, &agent_context)) {
     write_log(log, aa2acp::bridge::LogLevel::error,
               "cannot register BlueZ pairing agent");
     return false;
@@ -307,6 +371,17 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
     dbus_connection_unregister_object_path(connection, kAgentPath);
     return false;
   }
+  const auto cleanup_agent = [&] {
+    std::string cleanup_name;
+    std::string cleanup_detail;
+    if (!call_unregister_agent(connection, cleanup_name, cleanup_detail) &&
+        cleanup_name != "org.bluez.Error.DoesNotExist") {
+      write_log(log, aa2acp::bridge::LogLevel::warning,
+                "UnregisterAgent failed: " + cleanup_name + " " +
+                    cleanup_detail);
+    }
+    dbus_connection_unregister_object_path(connection, kAgentPath);
+  };
   if (!call_request_default_agent(connection, name, detail)) {
     write_log(log, aa2acp::bridge::LogLevel::warning,
               "RequestDefaultAgent failed: " + name + " " + detail);
@@ -349,7 +424,7 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
     std::string cleanup_detail;
     call_no_arguments(connection, kAdapterPath, kAdapterInterface,
                       "StopDiscovery", 5000, cleanup_name, cleanup_detail);
-    dbus_connection_unregister_object_path(connection, kAgentPath);
+    cleanup_agent();
     write_log(log, aa2acp::bridge::LogLevel::error,
               "Bluetooth device " + std::string(mac) +
                   " was not found; pairing was not attempted");
@@ -357,7 +432,7 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
   }
   write_log(log, aa2acp::bridge::LogLevel::info,
             "pairing " + std::string(mac) +
-                " using NoInputNoOutput (Just Works)");
+                " using DisplayYesNo (automatic numeric confirmation)");
   const int pair_timeout = timeout_seconds > 0 ? timeout_seconds * 1000 : 60000;
   // Device1 objects can disappear and be recreated while discovery updates a
   // freshly removed bond. Retry the method on the stable address-derived path
@@ -388,7 +463,7 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
   if (!paired && !already_paired) {
     write_log(log, aa2acp::bridge::LogLevel::error,
               "Pair failed: " + pair_error_name + " " + pair_error_detail);
-    dbus_connection_unregister_object_path(connection, kAgentPath);
+    cleanup_agent();
     return false;
   }
   if (already_paired) {
@@ -399,11 +474,11 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
   if (!call_set_trusted(connection, path, name, detail)) {
     write_log(log, aa2acp::bridge::LogLevel::warning,
               "setting Trusted failed: " + name + " " + detail);
-    dbus_connection_unregister_object_path(connection, kAgentPath);
+    cleanup_agent();
     return false;
   }
   write_log(log, aa2acp::bridge::LogLevel::info, "device is trusted");
-  dbus_connection_unregister_object_path(connection, kAgentPath);
+  cleanup_agent();
   return true;
 }
 
