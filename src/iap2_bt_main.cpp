@@ -155,7 +155,8 @@ public:
         return std::nullopt;
       }
       if (aa2acp::bridge::debug_logging_enabled())
-        std::cout << "Bridge: connected to Android Auto video source\n";
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+            << "Bridge: connected to Android Auto video source\n";
     }
     std::array<std::uint8_t, 4> header{};
     if (!receive_all(socket_fd_, header))
@@ -195,7 +196,8 @@ public:
         return std::nullopt;
       }
       if (aa2acp::bridge::debug_logging_enabled())
-        std::cout << "Bridge: connected to Android Auto media audio source\n";
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+            << "Bridge: connected to Android Auto media audio source\n";
     }
     std::array<std::uint8_t, 4> header{};
     if (!receive_all(socket_fd_, header))
@@ -368,8 +370,9 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
     return 1;
   }
   if (aa2acp::bridge::debug_logging_enabled())
-    std::cout << "RFCOMM connected to " << address << ':'
-              << static_cast<int>(channel) << '\n';
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+        << "RFCOMM connected to " << address << ':' << static_cast<int>(channel)
+        << '\n';
   aa2acp::iap2::BootstrapSession session;
   aa2acp::iap2::CarPlayProbe carplay_probe(address);
   aa2acp::iap2::PhoneLink link(
@@ -378,7 +381,8 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
       },
       [](const char *message) {
         if (aa2acp::bridge::debug_logging_enabled())
-          std::cout << message << '\n';
+          aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+              << message << '\n';
       },
       [&session, &carplay_probe,
        &carplay](const std::span<const std::uint8_t> bytes) {

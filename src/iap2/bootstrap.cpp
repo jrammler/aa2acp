@@ -14,7 +14,8 @@ void BootstrapSession::begin() {
   stage_ = Stage::AwaitIdentification;
   send_empty(csm::kStartIdentification);
   if (aa2acp::bridge::debug_logging_enabled())
-    std::cout << "CSM: sent StartIdentification\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+        << "CSM: sent StartIdentification\n";
 }
 
 void BootstrapSession::receive(const std::span<const std::uint8_t> bytes) {
@@ -36,13 +37,14 @@ void BootstrapSession::send_empty(const std::uint16_t id) {
 
 void BootstrapSession::fail(const char *message) {
   stage_ = Stage::Failed;
-  std::cerr << "CSM: " << message << '\n';
+  aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+      << "CSM: " << message << '\n';
 }
 
 void BootstrapSession::handle(const csm::Message &message) {
   if (aa2acp::bridge::debug_logging_enabled())
-    std::cout << "CSM: received 0x" << std::hex << message.id << std::dec
-              << '\n';
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+        << "CSM: received 0x" << std::hex << message.id << std::dec << '\n';
   if (stage_ == Stage::AwaitIdentification) {
     if (message.id == csm::kIdentificationRejected) {
       fail("identification rejected");
@@ -74,7 +76,8 @@ void BootstrapSession::handle(const csm::Message &message) {
       return;
     }
     if (aa2acp::bridge::debug_logging_enabled())
-      std::cout << "CSM: sent authentication challenge\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+          << "CSM: sent authentication challenge\n";
     stage_ = Stage::AwaitResponse;
     return;
   }
@@ -90,8 +93,9 @@ void BootstrapSession::handle(const csm::Message &message) {
       }
       send_empty(csm::kAuthenticationSucceeded);
       stage_ = Stage::Done;
-      std::cout << "CSM: identification and software-MFi signature validation "
-                   "complete\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+          << "CSM: identification and software-MFi signature validation "
+             "complete\n";
     }
   }
 }

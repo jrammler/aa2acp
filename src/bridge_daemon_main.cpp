@@ -327,12 +327,14 @@ private:
       if (at_line_start_) {
         const auto timestamp = log_timestamp();
         const bool explicit_level = has_log_level_prefix(text.substr(offset));
+        const auto level =
+            aa2acp::bridge::current_log_level().value_or(default_level_);
+        const char marker = offset == 0 ? '>' : '|';
         const std::string prefix =
-            explicit_level ? ""
-                           : "[" +
-                                 std::string(aa2acp::bridge::log_level_name(
-                                     default_level_)) +
-                                 "] ";
+            explicit_level
+                ? ""
+                : "[" + std::string(aa2acp::bridge::log_level_name(level)) +
+                      "] " + marker + " ";
         if (console_->sputn(timestamp.data(), timestamp.size()) !=
                 static_cast<std::streamsize>(timestamp.size()) ||
             (!prefix.empty() &&
@@ -864,9 +866,10 @@ public:
       }
       if (aa2acp::bridge::debug_logging_enabled() &&
           (received_video_count_ <= 5 || received_video_count_ % 60 == 0)) {
-        std::cout << "Bridge daemon: Android Auto H.264 access unit #"
-                  << received_video_count_ << " (" << frame.size()
-                  << " bytes; NAL type:size=" << nalu_summary << ")\n";
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+            << "Bridge daemon: Android Auto H.264 access unit #"
+            << received_video_count_ << " (" << frame.size()
+            << " bytes; NAL type:size=" << nalu_summary << ")\n";
       }
       if (keyframe) {
         // CarPlay setup can take longer than the ordinary frame queue. Keep
@@ -875,8 +878,9 @@ public:
         frames_.clear();
         frames_.push_back(keyframe_);
         if (aa2acp::bridge::debug_logging_enabled())
-          std::cout << "Bridge daemon: retained Android Auto H.264 keyframe "
-                       "and dependent frame sequence\n";
+          aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+              << "Bridge daemon: retained Android Auto H.264 keyframe "
+                 "and dependent frame sequence\n";
       } else if (frames_.size() < 600) {
         frames_.push_back(std::move(frame));
       }
@@ -965,10 +969,11 @@ private:
         continue;
       }
       if (aa2acp::bridge::debug_logging_enabled())
-        std::cout << "Bridge daemon: forwarded Android Auto H.264 "
-                  << (config.empty() ? "without cached config" : "config")
-                  << (has_keyframe ? " and cached keyframe sequence\n"
-                                   : " and awaiting keyframe\n");
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+            << "Bridge daemon: forwarded Android Auto H.264 "
+            << (config.empty() ? "without cached config" : "config")
+            << (has_keyframe ? " and cached keyframe sequence\n"
+                             : " and awaiting keyframe\n");
       while (!stop.stop_requested()) {
         Bytes frame;
         {
@@ -1054,8 +1059,9 @@ public:
     ++received_packets_;
     if (aa2acp::bridge::debug_logging_enabled() &&
         (received_packets_ <= 3 || received_packets_ % 500 == 0)) {
-      std::cout << "Bridge daemon: Android Auto " << name_ << " audio packet #"
-                << received_packets_ << " (" << pcm.size() << " bytes)\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+          << "Bridge daemon: Android Auto " << name_ << " audio packet #"
+          << received_packets_ << " (" << pcm.size() << " bytes)\n";
     }
     if (frames_.size() >= 100)
       frames_.pop_front();
@@ -1096,8 +1102,9 @@ private:
       if (client < 0)
         continue;
       if (aa2acp::bridge::debug_logging_enabled())
-        std::cout << "Bridge daemon: connected to Android Auto " << name_
-                  << " audio source\n";
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+            << "Bridge daemon: connected to Android Auto " << name_
+            << " audio source\n";
       while (!stop.stop_requested()) {
         Bytes frame;
         {
@@ -1374,17 +1381,20 @@ int run_wired_android_auto_receiver(
           break;
         case aa2acp::aa::WiredReceiverEventType::control_session_ready:
           if (aa2acp::bridge::debug_logging_enabled())
-            std::cout << "Bridge daemon: Android Auto control session ready: "
-                      << event.detail << '\n';
+            aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+                << "Bridge daemon: Android Auto control session ready: "
+                << event.detail << '\n';
           break;
         case aa2acp::aa::WiredReceiverEventType::video_stream_configured:
           if (aa2acp::bridge::debug_logging_enabled())
-            std::cout << "Bridge daemon: Android Auto video configured: "
-                      << event.detail << '\n';
+            aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+                << "Bridge daemon: Android Auto video configured: "
+                << event.detail << '\n';
           break;
         case aa2acp::aa::WiredReceiverEventType::video_stream_started:
           if (aa2acp::bridge::debug_logging_enabled())
-            std::cout << "Bridge daemon: Android Auto video stream started\n";
+            aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+                << "Bridge daemon: Android Auto video stream started\n";
           break;
         case aa2acp::aa::WiredReceiverEventType::disconnected:
           std::cout << "Bridge daemon: Android Auto USB disconnected\n";
@@ -1398,8 +1408,9 @@ int run_wired_android_auto_receiver(
           if (!phone_disconnected.load())
             std::cerr << "Bridge daemon: " << event.detail << '\n';
           else if (aa2acp::bridge::debug_logging_enabled())
-            std::cout << "Bridge daemon: ignored Android Auto teardown error: "
-                      << event.detail << '\n';
+            aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+                << "Bridge daemon: ignored Android Auto teardown error: "
+                << event.detail << '\n';
           break;
         }
       },
@@ -1682,7 +1693,8 @@ int main(int argc, char **argv) {
                              const std::string &response_body,
                              const std::string &extra = {}) {
       if (aa2acp::bridge::debug_logging_enabled())
-        std::cout << "Management: " << request_line << " -> " << status << '\n';
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+            << "Management: " << request_line << " -> " << status << '\n';
       return send_response(client, status, type, response_body, extra);
     };
     if (request.starts_with("GET / ") || request.starts_with("GET /?")) {

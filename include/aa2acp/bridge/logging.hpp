@@ -50,6 +50,21 @@ inline bool debug_logging_enabled() {
   return log_level_enabled(LogLevel::debug);
 }
 
+inline thread_local std::optional<LogLevel> active_log_level;
+
+class ScopedLogLevel final {
+public:
+  explicit ScopedLogLevel(const LogLevel level) : previous_(active_log_level) {
+    active_log_level = level;
+  }
+  ~ScopedLogLevel() { active_log_level = previous_; }
+
+private:
+  std::optional<LogLevel> previous_;
+};
+
+inline std::optional<LogLevel> current_log_level() { return active_log_level; }
+
 class LogLine final {
 public:
   explicit LogLine(const LogLevel level)
@@ -60,10 +75,11 @@ public:
   ~LogLine() {
     if (!enabled_ || message_.tellp() == std::streampos(0))
       return;
+    ScopedLogLevel scope(level_);
     auto &output = level_ == LogLevel::warning || level_ == LogLevel::error
                        ? std::cerr
                        : std::cout;
-    output << '[' << log_level_name(level_) << "] " << message_.str();
+    output << '[' << log_level_name(level_) << "] > " << message_.str();
   }
 
   template <typename Value> LogLine &operator<<(const Value &value) {
