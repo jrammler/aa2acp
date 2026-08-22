@@ -3,6 +3,7 @@
 #include <dbus/dbus.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <thread>
 
@@ -138,6 +139,27 @@ bool set_filter(DBusConnection *connection, const std::string &transport,
   return reply != nullptr;
 }
 
+bool valid_address(const std::string_view address) {
+  if (address.size() != 17)
+    return false;
+  for (std::size_t index = 0; index < address.size(); ++index) {
+    if (index % 3 == 2) {
+      if (address[index] != ':')
+        return false;
+    } else if (!std::isxdigit(static_cast<unsigned char>(address[index]))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+std::string device_path(const std::string_view address) {
+  std::string path = "/org/bluez/hci0/dev_";
+  for (const char character : address)
+    path.push_back(character == ':' ? '_' : character);
+  return path;
+}
+
 void log_message(const std::function<void(const std::string &)> &log,
                  const std::string &message) {
   if (log)
@@ -212,6 +234,43 @@ bool bluez_device_is_paired(const std::string_view address) {
                      [address](const BluetoothDevice &device) {
                        return device.address == address && device.paired;
                      });
+}
+
+bool forget_bluez_device(const std::string_view address, std::string *error) {
+  if (!valid_address(address)) {
+    if (error != nullptr)
+      *error = "invalid Bluetooth address";
+    return false;
+  }
+  Connection connection;
+  if (connection.get() == nullptr) {
+    if (error != nullptr)
+      *error = connection.error();
+    return false;
+  }
+  DBusMessage *request = dbus_message_new_method_call(
+      kBluez, kAdapterPath, kAdapterInterface, "RemoveDevice");
+  if (request == nullptr) {
+    if (error != nullptr)
+      *error = "unable to allocate D-Bus request";
+    return false;
+  }
+  const auto path = device_path(address);
+  const char *object_path = path.c_str();
+  dbus_message_append_args(request, DBUS_TYPE_OBJECT_PATH, &object_path,
+                           DBUS_TYPE_INVALID);
+  DBusError dbus_error;
+  dbus_error_init(&dbus_error);
+  DBusMessage *reply = dbus_connection_send_with_reply_and_block(
+      connection.get(), request, 5000, &dbus_error);
+  dbus_message_unref(request);
+  if (reply != nullptr)
+    dbus_message_unref(reply);
+  if (reply == nullptr && error != nullptr)
+    *error = dbus_error.message == nullptr ? "BlueZ RemoveDevice failed"
+                                           : dbus_error.message;
+  dbus_error_free(&dbus_error);
+  return reply != nullptr;
 }
 
 bool discover_bluez_devices(

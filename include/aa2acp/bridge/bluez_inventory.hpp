@@ -20,6 +20,11 @@ struct BluetoothDevice {
 std::vector<BluetoothDevice> list_bluez_devices(std::string *error = nullptr);
 bool bluez_device_is_paired(std::string_view address);
 
+// Removes a device and its bond from the local BlueZ adapter. The remote
+// device's pairing state is outside BlueZ's control.
+bool forget_bluez_device(std::string_view address,
+                         std::string *error = nullptr);
+
 // Populate BlueZ's cache with a bounded scan. BlueZ only permits one discovery
 // transport at a time, so the caller may invoke this once for LE and once for
 // BR/EDR. The function is intended to run on a background worker.

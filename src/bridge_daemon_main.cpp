@@ -754,6 +754,15 @@ std::string page(const aa2acp::bridge::Config &config,
         "<form method=post action=\"/carplay-prepare\"><button type=submit " +
         std::string(snapshot.carplay_preflight_running ? "disabled" : "") +
         ">Prepare/Test CarPlay</button></form>";
+  if (!config.head_unit_mac.empty())
+    output +=
+        "<form method=post action=\"/bluetooth-forget\" onsubmit=\"return "
+        "confirm('Forget the local Bluetooth bond? You may also need to "
+        "clear the pairing on the head unit.');\"><button type=submit " +
+        std::string(snapshot.carplay_preflight_running ? "disabled" : "") +
+        ">Forget Bluetooth bond</button></form><p class=hint>This removes "
+        "the bond from AA2ACP only. It keeps the configured head unit; clear "
+        "or restart pairing on the head unit too if it remains stuck.</p>";
   output +=
       "<script>(()=>{const filter=document.querySelector('#show-unnamed');"
       "if(filter)filter.addEventListener('change',()=>filter.form."
@@ -1916,6 +1925,39 @@ int main(int argc, char **argv) {
                                   ? "Location: /?carplay_error=1\r\n"
                                   : "Location: /\r\n";
         respond(303, "text/plain", "", location);
+      }
+    } else if (request.starts_with("POST /bluetooth-forget ")) {
+      const auto selected_config = [&] {
+        std::lock_guard lock(config_mutex);
+        return config;
+      }();
+      const auto snapshot = management_snapshot(management_state);
+      std::string error;
+      if (selected_config.head_unit_mac.empty()) {
+        respond(400, "text/plain", "No configured Bluetooth device\n");
+      } else if (snapshot.carplay_preflight_running) {
+        respond(409, "text/plain",
+                "Cannot forget a Bluetooth bond while CarPlay preparation is "
+                "running\n");
+      } else if (!aa2acp::bridge::forget_bluez_device(
+                     selected_config.head_unit_mac, &error)) {
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+            << "Management: unable to forget Bluetooth bond for "
+            << selected_config.head_unit_mac << ": " << error << '\n';
+        respond(400, "text/plain",
+                "Unable to forget Bluetooth bond: " + error + "\n");
+      } else {
+        refresh_bluetooth_inventory(management_state);
+        {
+          std::lock_guard lock(management_state.mutex);
+          management_state.snapshot.carplay_preflight_status =
+              "local Bluetooth bond removed; clear or restart pairing on the "
+              "head unit if needed";
+        }
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+            << "Management: removed Bluetooth bond for "
+            << selected_config.head_unit_mac << '\n';
+        respond(303, "text/plain", "", "Location: /\r\n");
       }
     } else if (request.starts_with("POST /scan ")) {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
