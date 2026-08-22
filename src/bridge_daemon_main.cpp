@@ -956,6 +956,7 @@ public:
   ~VideoSocketForwarder() {
     worker_.request_stop();
     close_listener();
+    close_client();
     frames_ready_.notify_all();
     if (!path_.empty())
       unlink(path_.c_str());
@@ -1078,6 +1079,7 @@ private:
       const auto client = accept4(listener_, nullptr, nullptr, SOCK_CLOEXEC);
       if (client < 0)
         continue;
+      client_.store(client);
       Bytes config;
       bool has_keyframe = false;
       {
@@ -1115,7 +1117,8 @@ private:
         if (!send_frame(client, frame))
           break;
       }
-      close(client);
+      if (client_.exchange(-1) == client)
+        close(client);
     }
   }
 
@@ -1126,8 +1129,17 @@ private:
     }
   }
 
+  void close_client() {
+    const auto client = client_.exchange(-1);
+    if (client >= 0) {
+      shutdown(client, SHUT_RDWR);
+      close(client);
+    }
+  }
+
   std::filesystem::path path_;
   int listener_{-1};
+  std::atomic<int> client_{-1};
   std::jthread worker_;
   std::mutex mutex_;
   std::condition_variable frames_ready_;
@@ -1171,6 +1183,7 @@ public:
   ~AudioSocketForwarder() {
     worker_.request_stop();
     close_listener();
+    close_client();
     frames_ready_.notify_all();
     if (!path_.empty())
       unlink(path_.c_str());
@@ -1227,6 +1240,7 @@ private:
       const auto client = accept4(listener_, nullptr, nullptr, SOCK_CLOEXEC);
       if (client < 0)
         continue;
+      client_.store(client);
       if (aa2acp::bridge::debug_logging_enabled())
         aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
             << "Bridge daemon: connected to Android Auto " << name_
@@ -1246,7 +1260,8 @@ private:
         if (!send_frame(client, frame))
           break;
       }
-      close(client);
+      if (client_.exchange(-1) == client)
+        close(client);
     }
   }
 
@@ -1257,9 +1272,18 @@ private:
     }
   }
 
+  void close_client() {
+    const auto client = client_.exchange(-1);
+    if (client >= 0) {
+      shutdown(client, SHUT_RDWR);
+      close(client);
+    }
+  }
+
   std::filesystem::path path_;
   std::string name_;
   int listener_{-1};
+  std::atomic<int> client_{-1};
   std::jthread worker_;
   std::mutex mutex_;
   std::condition_variable frames_ready_;
