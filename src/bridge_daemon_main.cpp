@@ -1222,7 +1222,8 @@ int run_carplay_session(const aa2acp::bridge::Config &config,
   argv.push_back(nullptr);
   int output_pipe[2];
   if (pipe2(output_pipe, O_CLOEXEC) != 0) {
-    std::cerr << "Bridge daemon: unable to capture CarPlay session output\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Bridge daemon: unable to capture CarPlay session output\n";
     return 1;
   }
   const pid_t child = fork();
@@ -1238,7 +1239,8 @@ int run_carplay_session(const aa2acp::bridge::Config &config,
   close(output_pipe[1]);
   if (child < 0) {
     close(output_pipe[0]);
-    std::cerr << "Bridge daemon: unable to start CarPlay session\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Bridge daemon: unable to start CarPlay session\n";
     return 1;
   }
   auto forward_output = [&](const int timeout) {
@@ -1270,7 +1272,8 @@ int run_carplay_session(const aa2acp::bridge::Config &config,
         std::cout << "Bridge daemon: cleaning up CarPlay Wi-Fi after worker "
                      "failure\n";
         if (!aa2acp::iap2::leave_with_networkmanager(config.wifi_interface))
-          std::cerr << "Bridge daemon: unable to disconnect CarPlay Wi-Fi\n";
+          aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+              << "Bridge daemon: unable to disconnect CarPlay Wi-Fi\n";
       }
       return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
     }
@@ -1286,7 +1289,8 @@ int run_carplay_session(const aa2acp::bridge::Config &config,
                              : "abnormal worker termination")
                   << '\n';
         if (!aa2acp::iap2::leave_with_networkmanager(config.wifi_interface))
-          std::cerr << "Bridge daemon: unable to disconnect CarPlay Wi-Fi\n";
+          aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+              << "Bridge daemon: unable to disconnect CarPlay Wi-Fi\n";
       }
       active_child = -1;
       return 128 + SIGTERM;
@@ -1380,14 +1384,16 @@ int run_wired_android_auto_receiver(
        &carplay_preparation_failed, &active_carplay_child](const auto &event) {
         switch (event.type) {
         case aa2acp::aa::WiredReceiverEventType::waiting_for_phone:
-          std::cout << "Bridge daemon: Android Auto USB idle: " << event.detail
-                    << '\n';
+          aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+              << "Bridge daemon: Android Auto USB idle: " << event.detail
+              << '\n';
           break;
         case aa2acp::aa::WiredReceiverEventType::aoap_transport_ready:
           phone_disconnected = false;
           carplay_preparation_failed = false;
-          std::cout << "Bridge daemon: Android Auto USB transport ready: "
-                    << event.detail << '\n';
+          aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+              << "Bridge daemon: Android Auto USB transport ready: "
+              << event.detail << '\n';
           carplay_start_requested = true;
           break;
         case aa2acp::aa::WiredReceiverEventType::control_session_ready:
@@ -1408,16 +1414,19 @@ int run_wired_android_auto_receiver(
                 << "Bridge daemon: Android Auto video stream started\n";
           break;
         case aa2acp::aa::WiredReceiverEventType::disconnected:
-          std::cout << "Bridge daemon: Android Auto USB disconnected\n";
+          aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+              << "Bridge daemon: Android Auto USB disconnected\n";
           phone_disconnected = true;
           if (active_carplay_child.load() > 0) {
-            std::cout << "Bridge daemon: stopping CarPlay after Android Auto "
-                         "disconnect\n";
+            aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+                << "Bridge daemon: stopping CarPlay after Android Auto "
+                   "disconnect\n";
           }
           break;
         case aa2acp::aa::WiredReceiverEventType::error:
           if (!phone_disconnected.load())
-            std::cerr << "Bridge daemon: " << event.detail << '\n';
+            aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+                << "Bridge daemon: " << event.detail << '\n';
           else if (aa2acp::bridge::debug_logging_enabled())
             aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
                 << "Bridge daemon: ignored Android Auto teardown error: "
@@ -1430,7 +1439,8 @@ int run_wired_android_auto_receiver(
         std::string error;
         const auto normalized = h264_normalizer.normalize(frame, &error);
         if (normalized.empty()) {
-          std::cerr << "Bridge daemon: " << error << '\n';
+          aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+              << "Bridge daemon: " << error << '\n';
           return;
         }
         for (const auto &access_unit : normalized)
@@ -1476,28 +1486,33 @@ int run_wired_android_auto_receiver(
                 capabilities->system_pcm_16k_mono};
           std::this_thread::sleep_for(std::chrono::milliseconds(50));
         } while (std::chrono::steady_clock::now() < deadline);
-        std::cerr << "Bridge daemon: CarPlay capabilities unavailable after "
-                     "5 seconds; using 1280x720 fallback\n";
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+            << "Bridge daemon: CarPlay capabilities unavailable after 5 "
+               "seconds; using 1280x720 fallback\n";
         return std::nullopt;
       });
   std::string error;
   if (!receiver.start(&error)) {
-    std::cerr << "Bridge daemon: unable to start Android Auto USB receiver: "
-              << error << '\n';
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Bridge daemon: unable to start Android Auto USB receiver: " << error
+        << '\n';
     return 1;
   }
-  std::cout << "Bridge daemon: wired Android Auto receiver started\n";
+  aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+      << "Bridge daemon: wired Android Auto receiver started\n";
   auto retry_delay = std::chrono::seconds(0);
   while (!stop.stop_requested()) {
     if (!carplay_start_requested.exchange(false)) {
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
       continue;
     }
-    std::cout << "Bridge daemon: preparing CarPlay for Android Auto\n";
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+        << "Bridge daemon: preparing CarPlay for Android Auto\n";
     const auto config = config_provider();
     if (config.head_unit_mac.empty() || config.wifi_interface.empty()) {
-      std::cerr << "Bridge daemon: configure a head-unit MAC and Wi-Fi "
-                   "interface first\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+          << "Bridge daemon: configure a head-unit MAC and Wi-Fi interface "
+             "first\n";
       continue;
     }
     const auto result = run_carplay_session(
@@ -1506,15 +1521,18 @@ int run_wired_android_auto_receiver(
     if (stop.stop_requested())
       break;
     if (phone_disconnected.load()) {
-      std::cout << "Bridge daemon: CarPlay session stopped after Android Auto "
-                   "disconnect\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+          << "Bridge daemon: CarPlay session stopped after Android Auto "
+             "disconnect\n";
       continue;
     }
     if (result != 0)
-      std::cerr << "Bridge daemon: CarPlay video session ended with " << result
-                << '\n';
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+          << "Bridge daemon: CarPlay video session ended with " << result
+          << '\n';
     else
-      std::cout << "Bridge daemon: CarPlay video session ended\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+          << "Bridge daemon: CarPlay video session ended\n";
     if (result == 0) {
       retry_delay = std::chrono::seconds(0);
     } else {
@@ -1523,8 +1541,9 @@ int run_wired_android_auto_receiver(
         retry_delay = std::chrono::seconds(1);
       else
         retry_delay = std::min(retry_delay * 2, std::chrono::seconds(30));
-      std::cout << "Bridge daemon: retrying CarPlay in " << retry_delay.count()
-                << " seconds\n";
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+          << "Bridge daemon: retrying CarPlay in " << retry_delay.count()
+          << " seconds\n";
       for (auto remaining = retry_delay;
            remaining > std::chrono::seconds(0) && !stop.stop_requested() &&
            !phone_disconnected.load();
@@ -1534,7 +1553,8 @@ int run_wired_android_auto_receiver(
         carplay_start_requested = true;
     }
   }
-  std::cout << "Bridge daemon: stopping wired Android Auto receiver\n";
+  aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+      << "Bridge daemon: stopping wired Android Auto receiver\n";
   receiver.stop();
   return 0;
 }

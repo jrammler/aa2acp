@@ -153,8 +153,9 @@ public:
     if (socket_fd_ < 0) {
       socket_fd_ = connect_unix(path_);
       if (socket_fd_ < 0) {
-        std::cerr << "Unable to connect to Android Auto video socket " << path_
-                  << '\n';
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+            << "Unable to connect to Android Auto video socket " << path_
+            << '\n';
         return std::nullopt;
       }
       if (aa2acp::bridge::debug_logging_enabled())
@@ -168,8 +169,8 @@ public:
                       (static_cast<std::size_t>(header[1]) << 16) |
                       (static_cast<std::size_t>(header[2]) << 8) | header[3];
     if (size == 0 || size > 4 * 1024 * 1024) {
-      std::cerr << "Invalid Android Auto H.264 access-unit size " << size
-                << '\n';
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Invalid Android Auto H.264 access-unit size " << size << '\n';
       return std::nullopt;
     }
     std::vector<std::uint8_t> frame(size);
@@ -194,8 +195,9 @@ public:
     if (socket_fd_ < 0) {
       socket_fd_ = connect_unix(path_);
       if (socket_fd_ < 0) {
-        std::cerr << "Unable to connect to Android Auto audio socket " << path_
-                  << '\n';
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+            << "Unable to connect to Android Auto audio socket " << path_
+            << '\n';
         return std::nullopt;
       }
       if (aa2acp::bridge::debug_logging_enabled())
@@ -209,7 +211,8 @@ public:
                       (static_cast<std::size_t>(header[1]) << 16) |
                       (static_cast<std::size_t>(header[2]) << 8) | header[3];
     if (size == 0 || size > 64 * 1024) {
-      std::cerr << "Invalid Android Auto PCM packet size " << size << '\n';
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Invalid Android Auto PCM packet size " << size << '\n';
       return std::nullopt;
     }
     std::vector<std::uint8_t> frame(size);
@@ -428,7 +431,8 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
     if (result > 0 && (descriptor.revents & POLLIN) != 0) {
       const auto count = recv(socket_fd, buffer.data(), buffer.size(), 0);
       if (count <= 0) {
-        std::cerr << "RFCOMM connection closed by accessory\n";
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+            << "RFCOMM connection closed by accessory\n";
         break;
       }
       link.receive(std::span(buffer).first(static_cast<std::size_t>(count)),
