@@ -12,16 +12,13 @@
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
-      mkPackageSet = system: {
-        pkgs = nixpkgs.legacyPackages.${system};
-        aasdkPkgs = nixpkgs-aasdk.legacyPackages.${system};
-      };
-      mkAasdkPackage = { pkgs, aasdkPkgs }:
-        aasdkPkgs.stdenv.mkDerivation {
+      mkAasdkPackage = system:
+        let aasdkPkgs = nixpkgs-aasdk.legacyPackages.${system};
+        in aasdkPkgs.stdenv.mkDerivation {
           pname = "aasdk";
           version = "2026-05-13";
           src = aasdk;
-          nativeBuildInputs = with aasdkPkgs.buildPackages; [ cmake pkg-config protobuf ];
+          nativeBuildInputs = with aasdkPkgs; [ cmake pkg-config protobuf ];
           buildInputs = with aasdkPkgs; [ boost183 libusb1 openssl protobuf ];
           postPatch = ''
             substituteInPlace CMakeLists.txt --replace-fail 'DESTINATION /etc/aasdk' 'DESTINATION etc/aasdk'
@@ -42,16 +39,19 @@
           '';
           cmakeFlags = [ "-DAASDK_TEST=OFF" "-DSKIP_BUILD_PROTOBUF=ON" "-DSKIP_BUILD_ABSL=ON" ];
         };
-      mkPackage = { pkgs, aasdkPkgs, checks }:
-        pkgs.stdenv.mkDerivation {
+      mkPackage = system: checks:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+          aasdkPkgs = nixpkgs-aasdk.legacyPackages.${system};
+        in pkgs.stdenv.mkDerivation {
           pname = "aa2acp";
           version = "0.1.0";
           src = self;
-          nativeBuildInputs = with pkgs.buildPackages; [ cmake pkg-config ];
+          nativeBuildInputs = with pkgs; [ cmake pkg-config ];
           buildInputs = with pkgs; [
             bluez bluez.dev dbus systemd.dev glib openssl.dev boost183 libusb1
             ffmpeg-full ffmpeg-full.dev aasdkPkgs.protobuf
-            (mkAasdkPackage { inherit pkgs aasdkPkgs; })
+            (mkAasdkPackage system)
           ];
           cmakeBuildType = "Debug";
           cmakeFlags = [ "-DBUILD_TESTING=${if checks then "ON" else "OFF"}" ];
@@ -65,26 +65,15 @@
           meta.mainProgram = "aa2acp";
         };
     in {
-      packages = forAllSystems (system:
-        let
-          packageSet = mkPackageSet system;
-          crossPackageSet = {
-            pkgs = packageSet.pkgs.pkgsCross.aarch64-multiplatform;
-            aasdkPkgs = packageSet.aasdkPkgs.pkgsCross.aarch64-multiplatform;
-          };
-        in {
-          aasdk = mkAasdkPackage packageSet;
-          aa2acp = mkPackage (packageSet // { checks = true; });
-          aa2acp-unchecked = mkPackage (packageSet // { checks = false; });
-        } // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
-          aa2acp-aarch64-unchecked = mkPackage (crossPackageSet // {
-            checks = false;
-          });
-        });
+      packages = forAllSystems (system: {
+        aasdk = mkAasdkPackage system;
+        aa2acp = mkPackage system true;
+        aa2acp-unchecked = mkPackage system false;
+      });
       devShells = forAllSystems (system:
         let
-          packageSet = mkPackageSet system;
-          inherit (packageSet) pkgs aasdkPkgs;
+          pkgs = nixpkgs.legacyPackages.${system};
+          aasdkPkgs = nixpkgs-aasdk.legacyPackages.${system};
         in {
           default = pkgs.mkShell {
             buildInputs = with pkgs; [
