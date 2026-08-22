@@ -606,9 +606,21 @@ bool send_response(const int client, const int status, const char *type,
       "Content-Length: " + std::to_string(body.size()) +
       "\r\nConnection: close\r\n\r\n" + body;
   std::size_t offset{};
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(5);
   while (offset < response.size()) {
-    const auto written = send(client, response.data() + offset,
-                              response.size() - offset, MSG_NOSIGNAL);
+    const auto remaining =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now())
+            .count();
+    if (remaining <= 0)
+      return false;
+    pollfd descriptor{client, POLLOUT, 0};
+    if (poll(&descriptor, 1, static_cast<int>(remaining)) <= 0)
+      return false;
+    const auto written =
+        send(client, response.data() + offset, response.size() - offset,
+             MSG_NOSIGNAL | MSG_DONTWAIT);
     if (written > 0) {
       offset += static_cast<std::size_t>(written);
       continue;
@@ -677,7 +689,7 @@ ManagementSnapshot management_snapshot(ManagementState &state) {
   return state.snapshot;
 }
 
-void run_bluetooth_scan(ManagementState &state) {
+void run_bluetooth_scan(ManagementState &state, const std::stop_token stop) {
   const auto set_phase = [&state](const int phase_id,
                                   const std::string &phase) {
     std::lock_guard lock(state.mutex);
@@ -689,11 +701,14 @@ void run_bluetooth_scan(ManagementState &state) {
         << "Management Bluetooth: " << message << '\n';
   };
   set_phase(2, "LE discovery in progress");
-  aa2acp::bridge::discover_bluez_devices("le", 30, log);
+  const auto stop_requested = [stop] { return stop.stop_requested(); };
+  aa2acp::bridge::discover_bluez_devices("le", 30, log, stop_requested);
   refresh_bluetooth_inventory(state);
-  set_phase(3, "classic discovery in progress");
-  aa2acp::bridge::discover_bluez_devices("bredr", 15, log);
-  refresh_bluetooth_inventory(state);
+  if (!stop.stop_requested()) {
+    set_phase(3, "classic discovery in progress");
+    aa2acp::bridge::discover_bluez_devices("bredr", 15, log, stop_requested);
+    refresh_bluetooth_inventory(state);
+  }
   {
     std::lock_guard lock(state.mutex);
     state.snapshot.bluetooth_scan_running = false;
@@ -736,6 +751,8 @@ std::string page(const aa2acp::bridge::Config &config,
       csrf_token +
       "';form.append(input);},true);</script>"
       "<h1>AA2ACP</h1><p>Configure the pinned CarPlay head unit.</p>";
+  const std::string csrf_input =
+      "<input type=hidden name=csrf value=\"" + csrf_token + "\">";
   if (management_hotspot_needs_setup(config)) {
     output += "<p class=\"status error\">Change the default management "
               "hotspot password before using AA2ACP.</p><p>Connect to Wi-Fi "
@@ -747,10 +764,14 @@ std::string page(const aa2acp::bridge::Config &config,
           "device from the hotspot. Its new name will be <b>" +
           html_escape(snapshot.pending_management_hotspot_ssid) +
           "</b>.</p><form method=post "
-          "action=\"/management-hotspot/apply\"><button type=submit>Apply "
+          "action=\"/management-hotspot/apply\">" +
+          csrf_input +
+          "<button type=submit>Apply "
           "new password</button></form>";
     } else {
-      output += "<form method=post action=\"/management-hotspot\"><label>New "
+      output += "<form method=post action=\"/management-hotspot\">" +
+                csrf_input +
+                "<label>New "
                 "management hotspot password<input required minlength=8 "
                 "type=password name=\"management_hotspot_passphrase\"></label>"
                 "<label>Confirm new password<input required minlength=8 "
@@ -788,7 +809,9 @@ std::string page(const aa2acp::bridge::Config &config,
               "spacing:.15em\"><b>" +
               html_escape(code) +
               "</b></p><form "
-              "method=post action=\"/bluetooth-confirm\"><input type=hidden "
+              "method=post action=\"/bluetooth-confirm\">" +
+              csrf_input +
+              "<input type=hidden "
               "name=\"id\" value=\"" +
               std::to_string(snapshot.pairing_confirmation->id) +
               "\"><button name=\"decision\" value=\"confirm\" type=submit>"
@@ -799,9 +822,10 @@ std::string page(const aa2acp::bridge::Config &config,
     output += "<p class=hint>Bluetooth refresh failed: " +
               html_escape(snapshot.bluetooth_error) + "</p>";
   output +=
-      "<form id=\"scan-form\" method=post action=\"/scan\"></form>"
-      "<form id=\"display-form\" method=post action=\"/display\"></form>"
-      "<form method=post action=\"/config\"><div id=\"bluetooth-picker\">";
+      "<form id=\"scan-form\" method=post action=\"/scan\">" + csrf_input +
+      "</form><form id=\"display-form\" method=post action=\"/display\">" +
+      csrf_input + "</form><form method=post action=\"/config\">" + csrf_input +
+      "<div id=\"bluetooth-picker\">";
   if (snapshot.bluetooth_scan_running) {
     output += "<input type=hidden name=\"head_unit_mac\" value=\"\"><p "
               "class=status>Bluetooth " +
@@ -859,18 +883,19 @@ std::string page(const aa2acp::bridge::Config &config,
             "type=submit>Save configuration</button></form>";
   output += "<p><a href=\"/logs\">View recent logs</a></p>";
   if (!config.head_unit_mac.empty() && !config.wifi_interface.empty())
-    output +=
-        "<form method=post action=\"/carplay-prepare\"><button type=submit " +
-        std::string(snapshot.carplay_preflight_running ||
-                            snapshot.bluetooth_scan_running
-                        ? "disabled"
-                        : "") +
-        ">Prepare/Test CarPlay</button></form>";
+    output += "<form method=post action=\"/carplay-prepare\">" + csrf_input +
+              "<button type=submit " +
+              std::string(snapshot.carplay_preflight_running ||
+                                  snapshot.bluetooth_scan_running
+                              ? "disabled"
+                              : "") +
+              ">Prepare/Test CarPlay</button></form>";
   if (!config.head_unit_mac.empty())
     output +=
         "<form method=post action=\"/bluetooth-forget\" onsubmit=\"return "
         "confirm('Forget the local Bluetooth bond? You may also need to "
-        "clear the pairing on the head unit.');\"><button type=submit " +
+        "clear the pairing on the head unit.');\">" +
+        csrf_input + "<button type=submit " +
         std::string(snapshot.carplay_preflight_running ? "disabled" : "") +
         ">Forget Bluetooth bond</button></form><p class=hint>This removes "
         "the bond from AA2ACP only. It keeps the configured head unit; clear "
@@ -1115,7 +1140,8 @@ private:
         has_keyframe = !keyframe_.empty();
       }
       if (!config.empty() && !send_frame(client, config)) {
-        close(client);
+        if (client_.exchange(-1) == client)
+          close(client);
         continue;
       }
       if (aa2acp::bridge::debug_logging_enabled())
@@ -2167,8 +2193,8 @@ int main(int argc, char **argv) {
         }
       }
       if (start_scan)
-        bluetooth_scan_worker = std::jthread([](const std::stop_token) {
-          run_bluetooth_scan(management_state);
+        bluetooth_scan_worker = std::jthread([](const std::stop_token stop) {
+          run_bluetooth_scan(management_state, stop);
         });
       respond(303, "text/plain", "", "Location: /\r\n");
     } else if (request.starts_with("POST /display ")) {
@@ -2315,6 +2341,7 @@ int main(int argc, char **argv) {
   carplay_preflight_worker.request_stop();
   if (carplay_preflight_worker.joinable())
     carplay_preflight_worker.join();
+  bluetooth_scan_worker.request_stop();
   if (bluetooth_scan_worker.joinable())
     bluetooth_scan_worker.join();
   android_auto_worker.request_stop();

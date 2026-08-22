@@ -273,9 +273,9 @@ bool forget_bluez_device(const std::string_view address, std::string *error) {
   return reply != nullptr;
 }
 
-bool discover_bluez_devices(
-    const std::string &transport, int seconds,
-    const std::function<void(const std::string &)> &log) {
+bool discover_bluez_devices(const std::string &transport, int seconds,
+                            const std::function<void(const std::string &)> &log,
+                            const std::function<bool()> &stop_requested) {
   Connection connection;
   if (connection.get() == nullptr) {
     log_message(log, "cannot connect to system D-Bus: " + connection.error());
@@ -297,7 +297,8 @@ bool discover_bluez_devices(
                        std::to_string(seconds) + " seconds");
   const auto deadline =
       std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
-  while (std::chrono::steady_clock::now() < deadline)
+  while (std::chrono::steady_clock::now() < deadline &&
+         (!stop_requested || !stop_requested()))
     dbus_connection_read_write_dispatch(connection.get(), 250);
   reply = call(connection.get(), kAdapterPath, kAdapterInterface,
                "StopDiscovery", 5000, &error);

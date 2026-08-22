@@ -28,8 +28,8 @@ bool forget_bluez_device(std::string_view address,
 // Populate BlueZ's cache with a bounded scan. BlueZ only permits one discovery
 // transport at a time, so the caller may invoke this once for LE and once for
 // BR/EDR. The function is intended to run on a background worker.
-bool discover_bluez_devices(
-    const std::string &transport, int seconds,
-    const std::function<void(const std::string &)> &log);
+bool discover_bluez_devices(const std::string &transport, int seconds,
+                            const std::function<void(const std::string &)> &log,
+                            const std::function<bool()> &stop_requested = {});
 
 } // namespace aa2acp::bridge

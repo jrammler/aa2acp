@@ -2,6 +2,7 @@
 #include "aa2acp/bridge/logging.hpp"
 
 #include <arpa/inet.h>
+#include <cerrno>
 #include <fcntl.h>
 #include <ifaddrs.h>
 #include <netinet/in.h>
@@ -109,6 +110,8 @@ bool run_nmcli(std::vector<std::string> arguments,
   for (;;) {
     drain_diagnostics();
     waited = waitpid(child, &status, WNOHANG);
+    if (waited < 0 && errno == EINTR)
+      continue;
     if (waited != 0)
       break;
     if (quiet) {

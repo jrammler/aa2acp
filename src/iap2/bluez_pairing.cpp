@@ -224,6 +224,22 @@ bool agent_handler(DBusConnection *connection, DBusMessage *message,
   if (dbus_message_is_method_call(message, kAgentInterface,
                                   "RequestConfirmation") &&
       mutable_context != nullptr &&
+      mutable_context->pending_confirmation != nullptr) {
+    DBusMessage *rejection = dbus_message_new_error(
+        message, "org.bluez.Error.Rejected",
+        "Another pairing confirmation is already pending");
+    if (rejection != nullptr) {
+      dbus_connection_send(connection, rejection, nullptr);
+      dbus_connection_flush(connection);
+      dbus_message_unref(rejection);
+    }
+    write_log(*mutable_context->log, aa2acp::bridge::LogLevel::warning,
+              "rejected concurrent pairing confirmation request");
+    return true;
+  }
+  if (dbus_message_is_method_call(message, kAgentInterface,
+                                  "RequestConfirmation") &&
+      mutable_context != nullptr &&
       mutable_context->pending_confirmation == nullptr) {
     DBusMessageIter arguments;
     dbus_message_iter_init(message, &arguments);
