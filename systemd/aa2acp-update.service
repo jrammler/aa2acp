@@ -1,0 +1,6 @@
+[Unit]
+Description=Restart AA2ACP after executable update
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl restart aa2acp.service

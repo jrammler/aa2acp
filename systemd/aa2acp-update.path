@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch for AA2ACP executable updates
+
+[Path]
+PathChanged=/home/pi/.local/bin/aa2acp
+Unit=aa2acp-update.service
+
+[Install]
+WantedBy=multi-user.target
