@@ -84,14 +84,32 @@ public:
         const auto count = recv(control[1], request.data(), request.size(), 0);
         if (count <= 0)
           _exit(0);
+        if (request[0] == '\2') {
+          aa2acp::iap2::request_bluetooth_worker_stop();
+          continue;
+        }
+        if (request[0] != '\1')
+          continue;
         std::vector<char *> argv;
-        for (char *argument = request.data(); argument < request.data() + count;
+        for (char *argument = request.data() + 1;
+             argument < request.data() + count;
              argument += std::strlen(argument) + 1)
           argv.push_back(argument);
         argv.push_back(nullptr);
-        const int result = aa2acp::iap2::run_bluetooth_worker(
-            static_cast<int>(argv.size() - 1), argv.data());
-        send(control[1], &result, sizeof(result), MSG_NOSIGNAL);
+        std::vector<std::string> arguments;
+        for (const char *argument : argv)
+          if (argument)
+            arguments.emplace_back(argument);
+        std::thread([control_fd = control[1],
+                     arguments = std::move(arguments)] {
+          std::vector<char *> worker_argv;
+          for (const auto &argument : arguments)
+            worker_argv.push_back(const_cast<char *>(argument.data()));
+          worker_argv.push_back(nullptr);
+          const int result = aa2acp::iap2::run_bluetooth_worker(
+              static_cast<int>(worker_argv.size() - 1), worker_argv.data());
+          send(control_fd, &result, sizeof(result), MSG_NOSIGNAL);
+        }).detach();
       }
     }
     close(control[1]);
@@ -123,6 +141,7 @@ public:
     if (pid_ <= 0 || control_fd_ < 0)
       return 1;
     std::string request;
+    request.push_back('\1');
     for (const auto &argument : arguments)
       request.append(argument).push_back('\0');
     if (request.size() > 8192 ||
@@ -153,7 +172,8 @@ public:
       }
       if (!stopping && (stop.stop_requested() || phone_disconnected.load())) {
         std::cout << "Bridge daemon: stopping active CarPlay session\n";
-        kill(pid_, SIGTERM);
+        const char stop_command = '\2';
+        send(control_fd_, &stop_command, sizeof(stop_command), MSG_NOSIGNAL);
         stopping = true;
       }
     }

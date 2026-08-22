@@ -494,3 +494,5 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
   return bootstrap ? (session.done() ? 0 : 1)
                    : (link.state() == aa2acp::iap2::State::Normal ? 0 : 1);
 }
+
+void aa2acp::iap2::request_bluetooth_worker_stop() { shutdown_requested = 1; }
