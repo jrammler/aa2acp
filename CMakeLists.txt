@@ -10,6 +10,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+option(AA2ACP_BUILD_DIAGNOSTICS "Build standalone diagnostic tools" OFF)
+
 find_package(OpenSSL REQUIRED)
 find_package(Boost 1.83 REQUIRED COMPONENTS system log_setup log unit_test_framework)
 find_package(absl CONFIG REQUIRED)
@@ -74,18 +76,22 @@ add_executable(aa2acp-airplay-pair-setup-probe src/airplay_pair_setup_probe_main
 target_link_libraries(aa2acp-airplay-pair-setup-probe PRIVATE airplay_session)
 target_compile_options(aa2acp-airplay-pair-setup-probe PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
-add_executable(aa2acp-iap2-tcp src/iap2_tcp_main.cpp)
-target_link_libraries(aa2acp-iap2-tcp PRIVATE iap2_link)
-target_compile_options(aa2acp-iap2-tcp PRIVATE -Wall -Wextra -Wpedantic -Werror)
+if(AA2ACP_BUILD_DIAGNOSTICS)
+  add_executable(aa2acp-iap2-tcp src/iap2_tcp_main.cpp)
+  target_link_libraries(aa2acp-iap2-tcp PRIVATE iap2_link)
+  target_compile_options(aa2acp-iap2-tcp PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
 
 add_library(iap2_bluetooth_worker src/iap2_bt_main.cpp src/iap2/bluez_pairing.cpp)
 target_include_directories(iap2_bluetooth_worker PUBLIC include)
 target_link_libraries(iap2_bluetooth_worker PUBLIC iap2_link airplay_session bluez_inventory ${BLUETOOTH_LIBRARY} PkgConfig::DBUS)
 target_compile_options(iap2_bluetooth_worker PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
-add_executable(aa2acp-iap2-bt src/iap2_bt_cli_main.cpp)
-target_link_libraries(aa2acp-iap2-bt PRIVATE iap2_bluetooth_worker)
-target_compile_options(aa2acp-iap2-bt PRIVATE -Wall -Wextra -Wpedantic -Werror)
+if(AA2ACP_BUILD_DIAGNOSTICS)
+  add_executable(aa2acp-iap2-bt src/iap2_bt_cli_main.cpp)
+  target_link_libraries(aa2acp-iap2-bt PRIVATE iap2_bluetooth_worker)
+  target_compile_options(aa2acp-iap2-bt PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
 
 add_executable(aa2acp-bridge-daemon src/bridge_daemon_main.cpp)
 target_link_libraries(aa2acp-bridge-daemon PRIVATE bridge_config bluez_inventory android_auto_usb h264_normalizer airplay_rtsp iap2_link iap2_bluetooth_worker)

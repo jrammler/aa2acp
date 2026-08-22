@@ -61,8 +61,6 @@
           installPhase = ''
             install -Dm755 aa2acp-bridge-daemon \
               $out/bin/aa2acp-bridge-daemon
-            install -Dm755 aa2acp-iap2-bt \
-              $out/bin/aa2acp-iap2-bt
           '';
           meta.mainProgram = "aa2acp-bridge-daemon";
         };
