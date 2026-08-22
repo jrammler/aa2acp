@@ -237,12 +237,18 @@ bool call_set_le_discovery_filter(DBusConnection *connection, std::string &name,
   return result;
 }
 
-void write_log(const PairingLogFunction &log, const std::string &message) {
+void write_log(const PairingLogFunction &log,
+               const aa2acp::bridge::LogLevel level,
+               const std::string &message) {
   if (log) {
-    log(message);
+    log(level, message);
   } else {
-    std::cout << "Bluetooth: " << message << '\n';
+    aa2acp::bridge::log(level) << "Bluetooth: " << message << '\n';
   }
+}
+
+void write_log(const PairingLogFunction &log, const std::string &message) {
+  write_log(log, aa2acp::bridge::LogLevel::info, message);
 }
 
 bool same_address(const std::string_view left, const std::string_view right) {
