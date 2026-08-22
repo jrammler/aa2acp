@@ -39,6 +39,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <random>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -531,6 +532,16 @@ std::string html_escape(const std::string &value) {
   return escaped;
 }
 
+std::string random_token() {
+  constexpr char digits[] = "0123456789abcdef";
+  std::random_device random;
+  std::string token;
+  token.reserve(48);
+  for (int index = 0; index < 48; ++index)
+    token.push_back(digits[random() & 0x0f]);
+  return token;
+}
+
 std::string url_decode(const std::string &value) {
   std::string decoded;
   for (std::size_t index = 0; index < value.size(); ++index) {
@@ -694,7 +705,7 @@ void run_bluetooth_scan(ManagementState &state) {
 
 std::string page(const aa2acp::bridge::Config &config,
                  const ManagementSnapshot &snapshot, const bool saved,
-                 const bool carplay_error) {
+                 const bool carplay_error, const std::string &csrf_token) {
   std::string output =
       "<!doctype html><html><head><meta name=\"viewport\" "
       "content=\"width=device-width,initial-scale=1\">"
@@ -713,6 +724,16 @@ std::string page(const aa2acp::bridge::Config &config,
       "\" data-preflight-running=\"" +
       std::string(snapshot.carplay_preflight_running ? "1" : "0") +
       "\">"
+      "<script>document.addEventListener('submit',event=>{const "
+      "form=event.target;"
+      "if(form.method.toLowerCase()!=='post'||form.querySelector('input[name="
+      "csrf]'))return;"
+      "const "
+      "input=document.createElement('input');input.type='hidden';input.name='"
+      "csrf';"
+      "input.value='" +
+      csrf_token +
+      "';form.append(input);},true);</script>"
       "<h1>AA2ACP</h1><p>Configure the pinned CarPlay head unit.</p>";
   if (management_hotspot_needs_setup(config)) {
     output += "<p class=\"status error\">Change the default management "
@@ -1846,6 +1867,7 @@ int main(int argc, char **argv) {
   }
   aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
       << "Bridge management UI listening on http://0.0.0.0:" << port << '\n';
+  const auto csrf_token = random_token();
   const auto handle_client = [&](const int client) {
     std::array<char, 4096> buffer{};
     std::string request;
@@ -1925,10 +1947,13 @@ int main(int argc, char **argv) {
         return config;
       }();
       respond(200, "text/html; charset=utf-8",
-              page(configuration, snapshot, saved, carplay_error));
+              page(configuration, snapshot, saved, carplay_error, csrf_token));
     } else if (request.starts_with("GET /logs")) {
       respond(200, "text/html; charset=utf-8", logs_page(recent_log),
               "Cache-Control: no-store\r\n");
+    } else if (request.starts_with("POST ") &&
+               form_field(body, "csrf") != csrf_token) {
+      respond(403, "text/plain", "Invalid CSRF token\n");
     } else if (request.starts_with("GET /scan-status")) {
       const auto snapshot = management_snapshot(management_state);
       const auto phase = query_field(request, "phase");
