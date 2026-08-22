@@ -150,8 +150,7 @@ bool agent_handler(DBusConnection *connection, DBusMessage *message,
   }
   const auto *context = static_cast<AgentContext *>(user_data);
   const char *member = dbus_message_get_member(message);
-  if (context != nullptr && context->log != nullptr &&
-      *context->log != nullptr) {
+  if (context != nullptr && context->log != nullptr) {
     write_log(*context->log, aa2acp::bridge::LogLevel::info,
               "pairing agent request " +
                   std::string(member == nullptr ? "unknown" : member) +
