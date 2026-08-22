@@ -2313,8 +2313,10 @@ int main(int argc, char **argv) {
   request_workers.clear();
   close(listener);
   carplay_preflight_worker.request_stop();
-  carplay_preflight_worker.join();
-  bluetooth_scan_worker.join();
+  if (carplay_preflight_worker.joinable())
+    carplay_preflight_worker.join();
+  if (bluetooth_scan_worker.joinable())
+    bluetooth_scan_worker.join();
   android_auto_worker.request_stop();
   android_auto_worker.join();
   close(signal_fd);
