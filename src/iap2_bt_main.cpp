@@ -110,8 +110,11 @@ bool receive_all(const int socket_fd, std::span<std::uint8_t> bytes) {
 
 class WifiCleanup final {
 public:
-  explicit WifiCleanup(std::string interface_name)
-      : interface_name_(std::move(interface_name)) {}
+  WifiCleanup(std::string interface_name, std::string management_ssid,
+              std::string management_passphrase)
+      : interface_name_(std::move(interface_name)),
+        management_ssid_(std::move(management_ssid)),
+        management_passphrase_(std::move(management_passphrase)) {}
 
   ~WifiCleanup() {
     if (!joined_)
@@ -119,12 +122,18 @@ public:
     std::cout << "Bridge: cleaning up accessory Wi-Fi\n";
     if (!aa2acp::iap2::leave_with_networkmanager(interface_name_))
       std::cerr << "Bridge: unable to disconnect accessory Wi-Fi\n";
+    if (!management_ssid_.empty() &&
+        !aa2acp::iap2::start_management_hotspot(
+            interface_name_, management_ssid_, management_passphrase_))
+      std::cerr << "Bridge: unable to restore management hotspot\n";
   }
 
   void mark_joined() { joined_ = true; }
 
 private:
   std::string interface_name_;
+  std::string management_ssid_;
+  std::string management_passphrase_;
   bool joined_{};
 };
 
@@ -230,6 +239,8 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
   std::string pairing_store;
   std::string head_unit_capabilities_store;
   std::string wifi_interface;
+  std::string management_hotspot_ssid;
+  std::string management_hotspot_passphrase;
   for (int index = 1; index < argc; ++index) {
     const std::string argument = argv[index];
     if (argument == "--mac" && index + 1 < argc) {
@@ -283,6 +294,11 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
       pairing_store = argv[++index];
     } else if (argument == "--wifi-interface" && index + 1 < argc) {
       wifi_interface = argv[++index];
+    } else if (argument == "--management-hotspot-ssid" && index + 1 < argc) {
+      management_hotspot_ssid = argv[++index];
+    } else if (argument == "--management-hotspot-passphrase" &&
+               index + 1 < argc) {
+      management_hotspot_passphrase = argv[++index];
     } else {
       std::cerr
           << "usage: aa2acp-iap2-bt [--mac MAC] [--channel N] [--timeout "
@@ -314,7 +330,8 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
     return 2;
   }
 
-  WifiCleanup wifi_cleanup(wifi_interface);
+  WifiCleanup wifi_cleanup(wifi_interface, management_hotspot_ssid,
+                           management_hotspot_passphrase);
 
   if (bridge) {
     install_shutdown_handlers();

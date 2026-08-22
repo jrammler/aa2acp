@@ -17,6 +17,8 @@ extern char **environ;
 namespace aa2acp::iap2 {
 namespace {
 
+constexpr char kManagementProfile[] = "aa2acp-management";
+
 bool run_nmcli(std::vector<std::string> arguments,
                const bool allow_inactive = false, const bool quiet = false) {
   const auto started = std::chrono::steady_clock::now();
@@ -182,6 +184,61 @@ bool leave_with_networkmanager(const std::string &interface_name) {
             << " while retaining its saved profile\n";
   return run_nmcli({"nmcli", "device", "disconnect", interface_name}, true,
                    true);
+}
+
+bool start_management_hotspot(const std::string &interface_name,
+                              const std::string &ssid,
+                              const std::string &passphrase) {
+  if (interface_name.empty() || ssid.empty() || passphrase.size() < 8) {
+    std::cerr << "Wi-Fi: invalid management hotspot configuration\n";
+    return false;
+  }
+  std::cout << "Wi-Fi: starting management hotspot '" << ssid << "' on "
+            << interface_name << '\n';
+  // Updating is idempotent. A failed modify means this is the first launch.
+  if (!run_nmcli({"nmcli",
+                  "connection",
+                  "modify",
+                  kManagementProfile,
+                  "connection.interface-name",
+                  interface_name,
+                  "connection.autoconnect",
+                  "yes",
+                  "connection.autoconnect-priority",
+                  "100",
+                  "802-11-wireless.mode",
+                  "ap",
+                  "802-11-wireless.ssid",
+                  ssid,
+                  "ipv4.method",
+                  "shared",
+                  "ipv6.method",
+                  "disabled",
+                  "802-11-wireless-security.key-mgmt",
+                  "wpa-psk",
+                  "802-11-wireless-security.psk",
+                  passphrase},
+                 false, true) &&
+      !run_nmcli({"nmcli",        "connection",   "add",
+                  "type",         "wifi",         "ifname",
+                  interface_name, "con-name",     kManagementProfile,
+                  "ssid",         ssid,           "802-11-wireless.mode",
+                  "ap",           "ipv4.method",  "shared",
+                  "ipv6.method",  "disabled",     "wifi-sec.key-mgmt",
+                  "wpa-psk",      "wifi-sec.psk", passphrase},
+                 false, true))
+    return false;
+  return run_nmcli({"nmcli", "--wait", "30", "connection", "up", "id",
+                    kManagementProfile, "ifname", interface_name},
+                   false, true);
+}
+
+bool stop_management_hotspot(const std::string &interface_name) {
+  std::cout << "Wi-Fi: stopping management hotspot on " << interface_name
+            << '\n';
+  return run_nmcli({"nmcli", "connection", "down", "id", kManagementProfile,
+                    "ifname", interface_name},
+                   true, true);
 }
 
 } // namespace aa2acp::iap2

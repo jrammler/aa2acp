@@ -12,6 +12,8 @@ constexpr char kMagic[] = "AA2ACP-1";
 
 bool valid_key(const std::string_view key) {
   return key == "head_unit_mac" || key == "wifi_interface" ||
+         key == "management_hotspot_ssid" ||
+         key == "management_hotspot_passphrase" ||
          key == "airplay_pairing_store";
 }
 
@@ -53,18 +55,29 @@ std::optional<Config> load_config(const std::filesystem::path &path) {
       config.head_unit_mac = value;
     else if (line.starts_with("wifi_interface="))
       config.wifi_interface = value;
+    else if (line.starts_with("management_hotspot_ssid="))
+      config.management_hotspot_ssid = value;
+    else if (line.starts_with("management_hotspot_passphrase="))
+      config.management_hotspot_passphrase = value;
     else
       config.airplay_pairing_store = value;
   }
-  if (config.head_unit_mac.empty() || config.wifi_interface.empty())
+  // Older configurations predate the management hotspot. The daemon migrates
+  // them by generating and persisting credentials on its next start.
+  if (config.wifi_interface.empty())
     return std::nullopt;
   return config;
 }
 
 bool save_config(const std::filesystem::path &path, const Config &config) {
-  if (config.head_unit_mac.empty() || config.wifi_interface.empty() ||
+  if (config.wifi_interface.empty() || config.management_hotspot_ssid.empty() ||
+      config.management_hotspot_passphrase.size() < 8 ||
       config.head_unit_mac.find_first_of("\r\n=") != std::string::npos ||
       config.wifi_interface.find_first_of("\r\n=") != std::string::npos ||
+      config.management_hotspot_ssid.find_first_of("\r\n=") !=
+          std::string::npos ||
+      config.management_hotspot_passphrase.find_first_of("\r\n=") !=
+          std::string::npos ||
       config.airplay_pairing_store.string().find_first_of("\r\n=") !=
           std::string::npos)
     return false;
@@ -79,7 +92,11 @@ bool save_config(const std::filesystem::path &path, const Config &config) {
       return false;
     stream << kMagic << '\n'
            << "head_unit_mac=" << config.head_unit_mac << '\n'
-           << "wifi_interface=" << config.wifi_interface << '\n';
+           << "wifi_interface=" << config.wifi_interface << '\n'
+           << "management_hotspot_ssid=" << config.management_hotspot_ssid
+           << '\n'
+           << "management_hotspot_passphrase="
+           << config.management_hotspot_passphrase << '\n';
     if (!config.airplay_pairing_store.empty())
       stream << "airplay_pairing_store="
              << config.airplay_pairing_store.string() << '\n';

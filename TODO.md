@@ -24,11 +24,11 @@
 
 ## Reliability and deployment
 
-- [ ] Add persisted management-hotspot settings: Wi-Fi adapter, SSID, and
+- [x] Add persisted management-hotspot settings: Wi-Fi adapter, SSID, and
   WPA2 password; expose them in the management UI.
-- [ ] Bootstrap the management hotspot on first start by selecting a
+- [x] Bootstrap the management hotspot on first start by selecting a
   deterministic usable Wi-Fi adapter and generating safe initial credentials.
-- [ ] Manage the hotspot lifecycle through NetworkManager shared mode (DHCP)
+- [x] Manage the hotspot lifecycle through NetworkManager shared mode (DHCP)
   and bind the management UI to its network.
 - [ ] Soak-test first pairing, existing pairing, unplug, replug, daemon
   shutdown, restart, and retained state.

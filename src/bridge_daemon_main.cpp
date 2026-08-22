@@ -188,6 +188,30 @@ private:
 
 std::unique_ptr<CarPlayWorker> carplay_worker;
 
+std::string random_hex(const std::size_t bytes) {
+  std::array<unsigned char, 32> random{};
+  if (bytes > random.size())
+    return {};
+  std::ifstream stream("/dev/urandom", std::ios::binary);
+  if (!stream || !stream.read(reinterpret_cast<char *>(random.data()), bytes))
+    return {};
+  constexpr char hex[] = "0123456789abcdef";
+  std::string text;
+  text.reserve(bytes * 2);
+  for (std::size_t index = 0; index < bytes; ++index) {
+    text.push_back(hex[random[index] >> 4]);
+    text.push_back(hex[random[index] & 0x0f]);
+  }
+  return text;
+}
+
+void ensure_management_hotspot_settings(aa2acp::bridge::Config &config) {
+  if (config.management_hotspot_ssid.empty())
+    config.management_hotspot_ssid = "AA2ACP-" + random_hex(3);
+  if (config.management_hotspot_passphrase.size() < 8)
+    config.management_hotspot_passphrase = random_hex(16);
+}
+
 std::string log_timestamp() {
   const auto now = std::chrono::system_clock::now();
   const auto milliseconds =
@@ -608,8 +632,13 @@ std::string page(const aa2acp::bridge::Config &config,
     output += "<option selected value=\"" + html_escape(config.wifi_interface) +
               "\">" + html_escape(config.wifi_interface) +
               " (configured)</option>";
-  output +=
-      "</select></label><button type=submit>Save configuration</button></form>";
+  output += "</select></label><label>Management hotspot SSID<input "
+            "name=\"management_hotspot_ssid\" value=\"" +
+            html_escape(config.management_hotspot_ssid) +
+            "\"></label><label>Management hotspot password<input "
+            "type=password name=\"management_hotspot_passphrase\" value=\"" +
+            html_escape(config.management_hotspot_passphrase) +
+            "\"></label><button type=submit>Save configuration</button></form>";
   if (!config.head_unit_mac.empty() && !config.wifi_interface.empty())
     output +=
         "<form method=post action=\"/carplay-prepare\"><button type=submit " +
@@ -1011,6 +1040,10 @@ int run_carplay_session(const aa2acp::bridge::Config &config,
       config.head_unit_mac,
       "--wifi-interface",
       config.wifi_interface,
+      "--management-hotspot-ssid",
+      config.management_hotspot_ssid,
+      "--management-hotspot-passphrase",
+      config.management_hotspot_passphrase,
       "--pairing-store",
       config.airplay_pairing_store.string(),
       "--head-unit-capabilities-store",
@@ -1370,10 +1403,15 @@ int main(int argc, char **argv) {
   auto config =
       aa2acp::bridge::load_config(config_path)
           .value_or(aa2acp::bridge::Config{
-              "", "", aa2acp::bridge::default_airplay_pairing_store()});
+              "", "", "", "", aa2acp::bridge::default_airplay_pairing_store()});
   if (config.airplay_pairing_store.empty())
     config.airplay_pairing_store =
         aa2acp::bridge::default_airplay_pairing_store();
+  ensure_management_hotspot_settings(config);
+  if (!config.wifi_interface.empty() &&
+      !aa2acp::bridge::save_config(config_path, config))
+    std::cerr << "Bridge daemon: unable to persist management hotspot "
+                 "settings\n";
   std::mutex config_mutex;
   carplay_worker = std::make_unique<CarPlayWorker>();
   if (!carplay_worker) {
@@ -1382,6 +1420,20 @@ int main(int argc, char **argv) {
   }
   refresh_bluetooth_inventory(management_state);
   refresh_wifi_inventory(management_state);
+  if (config.wifi_interface.empty()) {
+    const auto snapshot = management_snapshot(management_state);
+    if (!snapshot.wifi_interfaces.empty()) {
+      config.wifi_interface = snapshot.wifi_interfaces.front();
+      if (!aa2acp::bridge::save_config(config_path, config))
+        std::cerr << "Bridge daemon: unable to persist management hotspot "
+                     "settings\n";
+    }
+  }
+  if (!config.wifi_interface.empty() &&
+      !aa2acp::iap2::start_management_hotspot(
+          config.wifi_interface, config.management_hotspot_ssid,
+          config.management_hotspot_passphrase))
+    std::cerr << "Bridge daemon: unable to start management hotspot\n";
   std::jthread wifi_refresh_worker([](std::stop_token stop_token) {
     while (!stop_token.stop_requested()) {
       refresh_wifi_inventory(management_state);
@@ -1570,6 +1622,9 @@ int main(int argc, char **argv) {
       const auto manual = form_field(body, "manual_mac");
       const auto selected = form_field(body, "head_unit_mac");
       const auto wifi = form_field(body, "wifi_interface");
+      const auto hotspot_ssid = form_field(body, "management_hotspot_ssid");
+      const auto hotspot_passphrase =
+          form_field(body, "management_hotspot_passphrase");
       const auto previous = [&] {
         std::lock_guard lock(config_mutex);
         return config;
@@ -1577,9 +1632,10 @@ int main(int argc, char **argv) {
       const auto mac = selected && !selected->empty() ? *selected
                        : manual && !manual->empty()   ? *manual
                                                       : previous.head_unit_mac;
-      if (wifi && !mac.empty() &&
+      if (wifi && hotspot_ssid && hotspot_passphrase &&
           aa2acp::bridge::save_config(
-              config_path, {mac, *wifi, previous.airplay_pairing_store})) {
+              config_path, {mac, *wifi, *hotspot_ssid, *hotspot_passphrase,
+                            previous.airplay_pairing_store})) {
         if (mac != previous.head_unit_mac) {
           std::error_code error;
           const auto capabilities_store =
@@ -1596,7 +1652,8 @@ int main(int argc, char **argv) {
         }
         {
           std::lock_guard lock(config_mutex);
-          config = {mac, *wifi, previous.airplay_pairing_store};
+          config = {mac, *wifi, *hotspot_ssid, *hotspot_passphrase,
+                    previous.airplay_pairing_store};
         }
         std::cout << "Management: saved head unit " << mac << " on " << *wifi
                   << '\n';

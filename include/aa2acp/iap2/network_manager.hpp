@@ -19,4 +19,11 @@ bool join_with_networkmanager(const AccessoryWifiConfiguration &configuration,
                               const std::string &interface_name);
 bool leave_with_networkmanager(const std::string &interface_name);
 
+// Keep the local management UI reachable while CarPlay is idle. The AP profile
+// is deterministic so it can be recreated safely after an interrupted session.
+bool start_management_hotspot(const std::string &interface_name,
+                              const std::string &ssid,
+                              const std::string &passphrase);
+bool stop_management_hotspot(const std::string &interface_name);
+
 } // namespace aa2acp::iap2
