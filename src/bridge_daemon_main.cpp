@@ -1312,10 +1312,9 @@ int run_wired_android_auto_receiver(
         case aa2acp::aa::WiredReceiverEventType::disconnected:
           std::cout << "Bridge daemon: Android Auto USB disconnected\n";
           phone_disconnected = true;
-          if (const auto child = active_carplay_child.load(); child > 0) {
+          if (active_carplay_child.load() > 0) {
             std::cout << "Bridge daemon: stopping CarPlay after Android Auto "
                          "disconnect\n";
-            kill(-child, SIGTERM);
           }
           break;
         case aa2acp::aa::WiredReceiverEventType::error:
