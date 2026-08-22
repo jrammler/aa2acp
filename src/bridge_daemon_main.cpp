@@ -3,6 +3,7 @@
 #include "aa2acp/bridge/bluez_inventory.hpp"
 #include "aa2acp/bridge/config.hpp"
 #include "aa2acp/bridge/h264_normalizer.hpp"
+#include "aa2acp/iap2/bluetooth_worker.hpp"
 #include "aa2acp/iap2/network_manager.hpp"
 
 #include <arpa/inet.h>
@@ -10,7 +11,6 @@
 #include <netinet/in.h>
 #include <poll.h>
 #include <signal.h>
-#include <spawn.h>
 #include <sys/signalfd.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -26,6 +26,7 @@
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <deque>
 #include <filesystem>
@@ -40,8 +41,6 @@
 #include <string_view>
 #include <thread>
 #include <vector>
-
-extern char **environ;
 
 namespace {
 
@@ -63,6 +62,111 @@ struct ManagementState {
 };
 
 ManagementState management_state;
+
+class CarPlayWorker final {
+public:
+  CarPlayWorker() {
+    int control[2];
+    int output[2];
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, control) != 0 ||
+        pipe2(output, O_CLOEXEC) != 0)
+      return;
+    pid_ = fork();
+    if (pid_ == 0) {
+      setpgid(0, 0);
+      close(control[0]);
+      close(output[0]);
+      dup2(output[1], STDOUT_FILENO);
+      dup2(output[1], STDERR_FILENO);
+      close(output[1]);
+      std::array<char, 8192> request{};
+      for (;;) {
+        const auto count = recv(control[1], request.data(), request.size(), 0);
+        if (count <= 0)
+          _exit(0);
+        std::vector<char *> argv;
+        for (char *argument = request.data(); argument < request.data() + count;
+             argument += std::strlen(argument) + 1)
+          argv.push_back(argument);
+        argv.push_back(nullptr);
+        const int result = aa2acp::iap2::run_bluetooth_worker(
+            static_cast<int>(argv.size() - 1), argv.data());
+        send(control[1], &result, sizeof(result), MSG_NOSIGNAL);
+      }
+    }
+    close(control[1]);
+    close(output[1]);
+    if (pid_ > 0) {
+      control_fd_ = control[0];
+      output_fd_ = output[0];
+    } else {
+      close(control[0]);
+      close(output[0]);
+    }
+  }
+
+  ~CarPlayWorker() {
+    if (pid_ > 0) {
+      kill(pid_, SIGTERM);
+      waitpid(pid_, nullptr, 0);
+    }
+    if (control_fd_ >= 0)
+      close(control_fd_);
+    if (output_fd_ >= 0)
+      close(output_fd_);
+  }
+
+  int run(std::vector<std::string> arguments, const std::stop_token stop,
+          const std::atomic_bool &phone_disconnected,
+          std::atomic<pid_t> &active_child) {
+    std::lock_guard lock(mutex_);
+    if (pid_ <= 0 || control_fd_ < 0)
+      return 1;
+    std::string request;
+    for (const auto &argument : arguments)
+      request.append(argument).push_back('\0');
+    if (request.size() > 8192 ||
+        send(control_fd_, request.data(), request.size(), MSG_NOSIGNAL) < 0)
+      return 1;
+    active_child = pid_;
+    bool stopping = false;
+    for (;;) {
+      pollfd descriptors[]{{output_fd_, POLLIN, 0}, {control_fd_, POLLIN, 0}};
+      if (poll(descriptors, 2, 100) > 0) {
+        if ((descriptors[0].revents & POLLIN) != 0) {
+          std::array<char, 4096> output{};
+          const auto count = read(output_fd_, output.data(), output.size());
+          if (count > 0) {
+            std::cout.write(output.data(), count);
+            std::cout.flush();
+          }
+        }
+        if ((descriptors[1].revents & POLLIN) != 0) {
+          int result{};
+          if (recv(control_fd_, &result, sizeof(result), 0) == sizeof(result)) {
+            active_child = -1;
+            return result;
+          }
+          active_child = -1;
+          return 1;
+        }
+      }
+      if (!stopping && (stop.stop_requested() || phone_disconnected.load())) {
+        std::cout << "Bridge daemon: stopping active CarPlay session\n";
+        kill(pid_, SIGTERM);
+        stopping = true;
+      }
+    }
+  }
+
+private:
+  pid_t pid_{-1};
+  int control_fd_{-1};
+  int output_fd_{-1};
+  std::mutex mutex_;
+};
+
+std::unique_ptr<CarPlayWorker> carplay_worker;
 
 std::string log_timestamp() {
   const auto now = std::chrono::system_clock::now();
@@ -867,21 +971,21 @@ bool stop_carplay_process_group(const pid_t child, int *status) {
   return true;
 }
 
-int run_carplay_session(
-    const char *program_path, const aa2acp::bridge::Config &config,
-    const std::stop_token stop, const std::atomic_bool &phone_disconnected,
-    std::atomic<pid_t> &active_child, const std::string &video_socket = {},
-    const std::string &media_audio_socket = {},
-    const std::string &guidance_audio_socket = {},
-    const std::string &system_audio_socket = {}, const bool preflight = false) {
+int run_carplay_session(const aa2acp::bridge::Config &config,
+                        const std::stop_token stop,
+                        const std::atomic_bool &phone_disconnected,
+                        std::atomic<pid_t> &active_child,
+                        const std::string &video_socket = {},
+                        const std::string &media_audio_socket = {},
+                        const std::string &guidance_audio_socket = {},
+                        const std::string &system_audio_socket = {},
+                        const bool preflight = false) {
   if (config.head_unit_mac.empty()) {
     std::cerr << "Bridge daemon: configure a head-unit MAC first\n";
     return 2;
   }
-  const auto executable =
-      std::filesystem::path(program_path).parent_path() / "aa2acp-iap2-bt";
   std::vector<std::string> arguments{
-      executable.string(),
+      "aa2acp-iap2-bt",
       "--bridge",
       "--mac",
       config.head_unit_mac,
@@ -911,6 +1015,13 @@ int run_carplay_session(
     arguments.push_back("--system-audio-socket");
     arguments.push_back(system_audio_socket);
   }
+  if (!carplay_worker) {
+    std::cerr << "Bridge daemon: CarPlay worker is unavailable\n";
+    return 1;
+  }
+  return carplay_worker->run(std::move(arguments), stop, phone_disconnected,
+                             active_child);
+
   std::vector<char *> argv;
   for (auto &argument : arguments)
     argv.push_back(argument.data());
@@ -920,26 +1031,18 @@ int run_carplay_session(
     std::cerr << "Bridge daemon: unable to capture CarPlay session output\n";
     return 1;
   }
-  posix_spawn_file_actions_t file_actions;
-  posix_spawn_file_actions_init(&file_actions);
-  posix_spawn_file_actions_adddup2(&file_actions, output_pipe[1],
-                                   STDOUT_FILENO);
-  posix_spawn_file_actions_adddup2(&file_actions, output_pipe[1],
-                                   STDERR_FILENO);
-  posix_spawn_file_actions_addclose(&file_actions, output_pipe[0]);
-  posix_spawn_file_actions_addclose(&file_actions, output_pipe[1]);
-  posix_spawnattr_t attributes;
-  posix_spawnattr_init(&attributes);
-  short flags = POSIX_SPAWN_SETPGROUP;
-  posix_spawnattr_setflags(&attributes, flags);
-  posix_spawnattr_setpgroup(&attributes, 0);
-  pid_t child{};
-  const auto spawn_result = posix_spawn(&child, argv.front(), &file_actions,
-                                        &attributes, argv.data(), environ);
-  posix_spawnattr_destroy(&attributes);
-  posix_spawn_file_actions_destroy(&file_actions);
+  const pid_t child = fork();
+  if (child == 0) {
+    setpgid(0, 0);
+    dup2(output_pipe[1], STDOUT_FILENO);
+    dup2(output_pipe[1], STDERR_FILENO);
+    close(output_pipe[0]);
+    close(output_pipe[1]);
+    _exit(aa2acp::iap2::run_bluetooth_worker(static_cast<int>(argv.size() - 1),
+                                             argv.data()));
+  }
   close(output_pipe[1]);
-  if (spawn_result != 0) {
+  if (child < 0) {
     close(output_pipe[0]);
     std::cerr << "Bridge daemon: unable to start CarPlay session\n";
     return 1;
@@ -996,8 +1099,7 @@ int run_carplay_session(
   }
 }
 
-void run_carplay_preflight(const char *program_path,
-                           const aa2acp::bridge::Config config,
+void run_carplay_preflight(const aa2acp::bridge::Config config,
                            ManagementState &management,
                            const std::stop_token stop) {
   {
@@ -1009,9 +1111,8 @@ void run_carplay_preflight(const char *program_path,
   std::atomic_bool phone_disconnected{false};
   std::cout << "Management: starting CarPlay preflight for "
             << config.head_unit_mac << '\n';
-  const auto result =
-      run_carplay_session(program_path, config, stop, phone_disconnected,
-                          active_child, {}, {}, {}, {}, true);
+  const auto result = run_carplay_session(config, stop, phone_disconnected,
+                                          active_child, {}, {}, {}, {}, true);
   {
     std::lock_guard lock(management.mutex);
     management.snapshot.carplay_preflight_running = false;
@@ -1024,7 +1125,6 @@ void run_carplay_preflight(const char *program_path,
 }
 
 int run_wired_android_auto_receiver(
-    const char *program_path,
     const std::function<aa2acp::bridge::Config()> &config_provider,
     const std::stop_token stop) {
   bool configuration_warning_logged = false;
@@ -1189,9 +1289,8 @@ int run_wired_android_auto_receiver(
       continue;
     }
     const auto result = run_carplay_session(
-        program_path, config, stop, phone_disconnected, active_carplay_child,
-        video_socket, media_audio_socket, guidance_audio_socket,
-        system_audio_socket);
+        config, stop, phone_disconnected, active_carplay_child, video_socket,
+        media_audio_socket, guidance_audio_socket, system_audio_socket);
     if (stop.stop_requested())
       break;
     if (phone_disconnected.load()) {
@@ -1256,6 +1355,11 @@ int main(int argc, char **argv) {
     config.airplay_pairing_store =
         aa2acp::bridge::default_airplay_pairing_store();
   std::mutex config_mutex;
+  carplay_worker = std::make_unique<CarPlayWorker>();
+  if (!carplay_worker) {
+    std::cerr << "Unable to start CarPlay worker\n";
+    return 1;
+  }
   refresh_bluetooth_inventory(management_state);
   refresh_wifi_inventory(management_state);
   std::jthread wifi_refresh_worker([](std::stop_token stop_token) {
@@ -1278,16 +1382,15 @@ int main(int argc, char **argv) {
     std::cerr << "Unable to create shutdown signal descriptor\n";
     return 1;
   }
-  std::jthread android_auto_worker([program_path = argv[0], &config,
-                                    &config_mutex](const std::stop_token stop) {
-    run_wired_android_auto_receiver(
-        program_path,
-        [&config, &config_mutex] {
-          std::lock_guard lock(config_mutex);
-          return config;
-        },
-        stop);
-  });
+  std::jthread android_auto_worker(
+      [&config, &config_mutex](const std::stop_token stop) {
+        run_wired_android_auto_receiver(
+            [&config, &config_mutex] {
+              std::lock_guard lock(config_mutex);
+              return config;
+            },
+            stop);
+      });
   std::jthread carplay_preflight_worker;
   const int listener = socket(AF_INET, SOCK_STREAM, 0);
   int enabled = 1;
@@ -1402,10 +1505,8 @@ int main(int argc, char **argv) {
       if (start_preflight && !selected_config.head_unit_mac.empty() &&
           !selected_config.wifi_interface.empty()) {
         carplay_preflight_worker =
-            std::jthread([program_path = argv[0],
-                          selected_config](const std::stop_token stop) {
-              run_carplay_preflight(program_path, selected_config,
-                                    management_state, stop);
+            std::jthread([selected_config](const std::stop_token stop) {
+              run_carplay_preflight(selected_config, management_state, stop);
             });
         respond(303, "text/plain", "", "Location: /\r\n");
       } else {

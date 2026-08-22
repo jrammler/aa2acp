@@ -1,4 +1,5 @@
 #include "aa2acp/airplay/session.hpp"
+#include "aa2acp/iap2/bluetooth_worker.hpp"
 #include "aa2acp/iap2/bluez_pairing.hpp"
 #include "aa2acp/iap2/bootstrap.hpp"
 #include "aa2acp/iap2/carplay_probe.hpp"
@@ -206,7 +207,8 @@ private:
 
 } // namespace
 
-int main(int argc, char **argv) {
+int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
+  shutdown_requested = 0;
   // bridge-daemon captures this process through a pipe. Keep protocol progress
   // visible in the daemon log instead of waiting for process exit to flush it.
   std::cout.setf(std::ios::unitbuf);

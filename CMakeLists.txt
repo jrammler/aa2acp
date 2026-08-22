@@ -78,13 +78,17 @@ add_executable(aa2acp-iap2-tcp src/iap2_tcp_main.cpp)
 target_link_libraries(aa2acp-iap2-tcp PRIVATE iap2_link)
 target_compile_options(aa2acp-iap2-tcp PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
-add_executable(aa2acp-iap2-bt src/iap2_bt_main.cpp)
-target_sources(aa2acp-iap2-bt PRIVATE src/iap2/bluez_pairing.cpp)
-target_link_libraries(aa2acp-iap2-bt PRIVATE iap2_link airplay_session bluez_inventory ${BLUETOOTH_LIBRARY} PkgConfig::DBUS)
+add_library(iap2_bluetooth_worker src/iap2_bt_main.cpp src/iap2/bluez_pairing.cpp)
+target_include_directories(iap2_bluetooth_worker PUBLIC include)
+target_link_libraries(iap2_bluetooth_worker PUBLIC iap2_link airplay_session bluez_inventory ${BLUETOOTH_LIBRARY} PkgConfig::DBUS)
+target_compile_options(iap2_bluetooth_worker PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+add_executable(aa2acp-iap2-bt src/iap2_bt_cli_main.cpp)
+target_link_libraries(aa2acp-iap2-bt PRIVATE iap2_bluetooth_worker)
 target_compile_options(aa2acp-iap2-bt PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 add_executable(aa2acp-bridge-daemon src/bridge_daemon_main.cpp)
-target_link_libraries(aa2acp-bridge-daemon PRIVATE bridge_config bluez_inventory android_auto_usb h264_normalizer airplay_rtsp iap2_link)
+target_link_libraries(aa2acp-bridge-daemon PRIVATE bridge_config bluez_inventory android_auto_usb h264_normalizer airplay_rtsp iap2_link iap2_bluetooth_worker)
 target_compile_options(aa2acp-bridge-daemon PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 add_executable(aa2acp-android-auto-usb src/android_auto_usb_main.cpp)
