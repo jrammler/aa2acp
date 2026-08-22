@@ -9,7 +9,7 @@ User=pi
 Group=pi
 SupplementaryGroups=aa2acp
 Environment=XDG_STATE_HOME=/home/pi/.local/state
-ExecStart=/home/pi/.local/bin/aa2acp
+ExecStart=/home/pi/.local/bin/aa2acp --no-file-log
 Restart=on-failure
 RestartSec=3
 

@@ -1439,7 +1439,11 @@ int run_wired_android_auto_receiver(
 } // namespace
 
 int main(int argc, char **argv) {
-  auto daemon_log = start_daemon_log();
+  bool file_logging = true;
+  for (int index = 1; index < argc; ++index)
+    if (std::string_view(argv[index]) == "--no-file-log")
+      file_logging = false;
+  auto daemon_log = file_logging ? start_daemon_log() : nullptr;
   if (daemon_log)
     std::cout << "Bridge daemon: logging to " << daemon_log->path() << '\n';
   std::filesystem::path config_path = aa2acp::bridge::default_config_path();
@@ -1450,9 +1454,12 @@ int main(int argc, char **argv) {
       config_path = argv[++index];
     else if (argument == "--port" && index + 1 < argc)
       port = std::stoi(argv[++index]);
+    else if (argument == "--no-file-log")
+      continue;
     else {
       std::cerr
-          << "usage: aa2acp-bridge-daemon [--config PATH] [--port PORT]\n";
+          << "usage: aa2acp-bridge-daemon [--config PATH] [--port PORT] "
+             "[--no-file-log]\n";
       return 2;
     }
   }
