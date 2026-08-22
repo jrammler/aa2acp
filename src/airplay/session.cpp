@@ -278,12 +278,25 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   const std::string &video_path = options.video_path;
   const std::string &pairing_store = options.pairing_store;
   const int timeout_seconds = options.timeout_seconds;
-  const auto socket_fd = connect_tcp(host, port);
+  int socket_fd = connect_tcp(host, port);
   if (socket_fd < 0) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
         << "Unable to connect to AirPlay " << host << ':' << port << '\n';
     return 1;
   }
+  struct SocketGuard {
+    int &fd;
+    ~SocketGuard() {
+      if (fd >= 0)
+        ::close(fd);
+    }
+  } socket_guard{socket_fd};
+  const auto close = [&socket_fd](const int fd) {
+    const auto result = ::close(fd);
+    if (fd == socket_fd)
+      socket_fd = -1;
+    return result;
+  };
   aa2acp::airplay::PairingRecord pairing;
   std::vector<std::uint8_t> response_bytes;
   std::array<std::uint8_t, 4096> buffer{};
