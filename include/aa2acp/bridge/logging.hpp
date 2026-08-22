@@ -24,29 +24,31 @@ inline std::string_view log_level_name(const LogLevel level) {
   return "unknown";
 }
 
-inline bool debug_logging_enabled() {
+inline std::optional<LogLevel> parse_log_level(const std::string_view value) {
+  if (value == "debug")
+    return LogLevel::debug;
+  if (value == "info")
+    return LogLevel::info;
+  if (value == "warning")
+    return LogLevel::warning;
+  if (value == "error")
+    return LogLevel::error;
+  return std::nullopt;
+}
+
+inline LogLevel configured_log_level() {
   const auto *level = std::getenv("AA2ACP_LOG_LEVEL");
-  return level != nullptr && std::string_view(level) == "debug";
+  return level == nullptr ? LogLevel::info
+                          : parse_log_level(level).value_or(LogLevel::info);
 }
 
 inline bool log_level_enabled(const LogLevel level) {
-  return level != LogLevel::debug || debug_logging_enabled();
+  return static_cast<int>(level) >= static_cast<int>(configured_log_level());
 }
 
-inline thread_local std::optional<LogLevel> active_log_level;
-
-class ScopedLogLevel final {
-public:
-  explicit ScopedLogLevel(const LogLevel level) : previous_(active_log_level) {
-    active_log_level = level;
-  }
-  ~ScopedLogLevel() { active_log_level = previous_; }
-
-private:
-  std::optional<LogLevel> previous_;
-};
-
-inline std::optional<LogLevel> current_log_level() { return active_log_level; }
+inline bool debug_logging_enabled() {
+  return log_level_enabled(LogLevel::debug);
+}
 
 class LogLine final {
 public:
