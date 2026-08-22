@@ -1,2 +1,6 @@
+# cmake
 /build/
 /.cache/
+
+# nix
+/result
