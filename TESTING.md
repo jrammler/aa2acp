@@ -36,15 +36,14 @@ implemented. The active work is in
 
 ## Runbook
 
-Build and start the daemon:
+Build and start the checked package:
 
 ```bash
-nix develop --command bash -c '
-  cmake -S . -B build
-  cmake --build build -j2
-  ./build/aa2acp-bridge-daemon
-'
+nix run .#aa2acp
 ```
+
+For faster Pi iterations that skip the Nix check phase, use
+`nix run .#aa2acp-unchecked`.
 
 Open `http://127.0.0.1:8080`, scan if necessary, select the CarPlay head
 unit's Bluetooth address, select the Wi-Fi interface that should join its
@@ -69,6 +68,10 @@ The daemon keeps configuration, the AirPlay pairing identity, and up to 30
 launch-rotated logs in `$XDG_STATE_HOME/aa2acp` (normally
 `~/.local/state/aa2acp`). Inspect `logs/` first when a failed session is no
 longer visible in the terminal.
+
+CarPlay runs in a persistent worker process created before the daemon starts
+its threads. The daemon sends start and stop commands over a local control
+socket; Android Auto media continues to use its dedicated Unix sockets.
 
 If the first AirPlay connection after Wi-Fi handover fails, the bridge waits
 one second and retries the AirPlay phase once without repeating Bluetooth

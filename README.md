@@ -46,8 +46,13 @@ nix develop --command bash -c '
 Run the integrated daemon with:
 
 ```bash
-nix develop --command ./build/aa2acp-bridge-daemon
+nix run .#aa2acp
 ```
+
+`aa2acp` runs the Nix check phase before its first build. For quicker Pi
+iterations, use `nix run .#aa2acp-unchecked`. CMake tests are enabled by
+default and can be skipped with `-DBUILD_TESTING=OFF`; standalone iAP2
+diagnostic tools are opt-in with `-DAA2ACP_BUILD_DIAGNOSTICS=ON`.
 
 The management UI listens on all IPv4 interfaces at port 8080. From a device
 connected to its management hotspot, open `http://10.42.0.1:8080` (or the

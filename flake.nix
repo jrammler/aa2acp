@@ -39,12 +39,12 @@
           '';
           cmakeFlags = [ "-DAASDK_TEST=OFF" "-DSKIP_BUILD_PROTOBUF=ON" "-DSKIP_BUILD_ABSL=ON" ];
         };
-      mkBridgePackage = system:
+      mkPackage = system: checks:
         let
           pkgs = nixpkgs.legacyPackages.${system};
           aasdkPkgs = nixpkgs-aasdk.legacyPackages.${system};
         in pkgs.stdenv.mkDerivation {
-          pname = "aa2acp-bridge";
+          pname = "aa2acp";
           version = "0.1.0";
           src = self;
           nativeBuildInputs = with pkgs; [ cmake pkg-config ];
@@ -54,21 +54,21 @@
             (mkAasdkPackage system)
           ];
           cmakeBuildType = "Debug";
-          cmakeFlags = [ "-DBUILD_TESTING=ON" ];
-          doCheck = true;
+          cmakeFlags = [ "-DBUILD_TESTING=${if checks then "ON" else "OFF"}" ];
+          doCheck = checks;
           checkPhase = ''
             ctest --output-on-failure
           '';
           installPhase = ''
-            install -Dm755 aa2acp-bridge-daemon \
-              $out/bin/aa2acp-bridge-daemon
+            install -Dm755 aa2acp $out/bin/aa2acp
           '';
-          meta.mainProgram = "aa2acp-bridge-daemon";
+          meta.mainProgram = "aa2acp";
         };
     in {
       packages = forAllSystems (system: {
         aasdk = mkAasdkPackage system;
-        aa2acp-bridge = mkBridgePackage system;
+        aa2acp = mkPackage system true;
+        aa2acp-unchecked = mkPackage system false;
       });
       devShells = forAllSystems (system:
         let

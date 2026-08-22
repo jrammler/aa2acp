@@ -93,9 +93,9 @@ if(AA2ACP_BUILD_DIAGNOSTICS)
   target_compile_options(aa2acp-iap2-bt PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
-add_executable(aa2acp-bridge-daemon src/bridge_daemon_main.cpp)
-target_link_libraries(aa2acp-bridge-daemon PRIVATE bridge_config bluez_inventory android_auto_usb h264_normalizer airplay_rtsp iap2_link iap2_bluetooth_worker)
-target_compile_options(aa2acp-bridge-daemon PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_executable(aa2acp src/bridge_daemon_main.cpp)
+target_link_libraries(aa2acp PRIVATE bridge_config bluez_inventory android_auto_usb h264_normalizer airplay_rtsp iap2_link iap2_bluetooth_worker)
+target_compile_options(aa2acp PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 add_executable(aa2acp-android-auto-usb src/android_auto_usb_main.cpp)
 target_link_libraries(aa2acp-android-auto-usb PRIVATE android_auto_usb)
