@@ -151,12 +151,27 @@ public:
   }
 
   ~CarPlayWorker() {
-    if (pid_ > 0) {
-      kill(pid_, SIGTERM);
-      waitpid(pid_, nullptr, 0);
-    }
-    if (control_fd_ >= 0)
+    if (control_fd_ >= 0) {
+      shutdown(control_fd_, SHUT_RDWR);
       close(control_fd_);
+      control_fd_ = -1;
+    }
+    if (pid_ > 0) {
+      int status{};
+      const auto deadline =
+          std::chrono::steady_clock::now() + std::chrono::seconds(2);
+      pid_t waited{};
+      do {
+        waited = waitpid(pid_, &status, WNOHANG);
+        if (waited == 0)
+          std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      } while (waited == 0 && std::chrono::steady_clock::now() < deadline);
+      if (waited == 0) {
+        kill(pid_, SIGKILL);
+        while (waitpid(pid_, &status, 0) < 0 && errno == EINTR) {
+        }
+      }
+    }
     if (output_fd_ >= 0)
       close(output_fd_);
   }

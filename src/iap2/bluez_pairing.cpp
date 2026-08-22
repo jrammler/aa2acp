@@ -555,7 +555,7 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
   }
   write_log(log, aa2acp::bridge::LogLevel::info,
             "pairing " + std::string(mac) +
-                " using DisplayYesNo (automatic numeric confirmation)");
+                " using DisplayYesNo (management confirmation required)");
   const int pair_timeout = timeout_seconds > 0 ? timeout_seconds * 1000 : 60000;
   // Device1 objects can disappear and be recreated while discovery updates a
   // freshly removed bond. Retry the method on the stable address-derived path

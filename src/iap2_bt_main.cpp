@@ -581,7 +581,6 @@ void aa2acp::iap2::request_bluetooth_worker_stop() {
 }
 
 void aa2acp::iap2::reset_bluetooth_worker_stop() {
-  signal_shutdown_requested = 0;
   worker_stop_requested.store(false);
 }
 
