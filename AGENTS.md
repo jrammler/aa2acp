@@ -1,5 +1,12 @@
 # Project conventions
 
+## Local development environment
+
+Keep machine-specific development details—such as hostnames, credentials,
+signing keys, copied-closure paths, and cloud-init state—only in local agent
+memory. Do not add them to tracked source, documentation, configuration, or
+commits.
+
 This repository contains only the Raspberry Pi C++ bridge. Run project tools
 through Nix:
 
