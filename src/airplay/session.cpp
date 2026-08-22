@@ -6,6 +6,7 @@
 #include "aa2acp/airplay/pairing_store.hpp"
 #include "aa2acp/airplay/rtsp.hpp"
 #include "aa2acp/airplay/srp.hpp"
+#include "aa2acp/bridge/logging.hpp"
 
 #include <netdb.h>
 #include <openssl/rand.h>
@@ -289,7 +290,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     const auto stored = aa2acp::airplay::load_pairing_record(pairing_store);
     if (stored) {
       pairing = *stored;
-      std::cout << "AirPlay: loaded persistent pairing identity\n";
+      if (aa2acp::bridge::debug_logging_enabled())
+        std::cout << "AirPlay: loaded persistent pairing identity\n";
     }
   }
   if (pairing.controller.private_key.empty()) {
@@ -330,8 +332,10 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
           << "Pair-Setup M2 is missing state=2, salt, or SRP public key\n";
       return 1;
     }
-    std::cout << "AirPlay: Pair-Setup M2 received (salt=" << salt->second.size()
-              << "B, SRP public key=" << public_key->second.size() << "B)\n";
+    if (aa2acp::bridge::debug_logging_enabled())
+      std::cout << "AirPlay: Pair-Setup M2 received (salt="
+                << salt->second.size()
+                << "B, SRP public key=" << public_key->second.size() << "B)\n";
     aa2acp::airplay::SrpClient srp;
     if (!srp.process_challenge(salt->second, public_key->second)) {
       std::cerr << "Unable to process Pair-Setup SRP challenge\n";
@@ -377,7 +381,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
       std::cerr << "Pair-Setup M4 server proof validation failed\n";
       return 1;
     }
-    std::cout << "AirPlay: Pair-Setup M4 server proof validated\n";
+    if (aa2acp::bridge::debug_logging_enabled())
+      std::cout << "AirPlay: Pair-Setup M4 server proof validated\n";
 
     const auto encryption_key = aa2acp::airplay::hkdf_sha512(
         srp.session_key(), "Pair-Setup-Encrypt-Salt", "Pair-Setup-Encrypt-Info",
@@ -486,7 +491,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
       close(socket_fd);
       return 1;
     }
-    std::cout << "AirPlay: Pair-Setup M6 accessory identity validated\n";
+    if (aa2acp::bridge::debug_logging_enabled())
+      std::cout << "AirPlay: Pair-Setup M6 accessory identity validated\n";
     pairing = {*controller_id, *controller, accessory_key->second};
     if (!pairing_store.empty() &&
         !aa2acp::airplay::save_pairing_record(pairing_store, pairing)) {
@@ -650,8 +656,9 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     std::cerr << "Unable to derive control channel keys\n";
     return 1;
   }
-  std::cout
-      << "AirPlay: Pair-Verify M4 validated; encrypted control keys derived\n";
+  if (aa2acp::bridge::debug_logging_enabled())
+    std::cout << "AirPlay: Pair-Verify M4 validated; encrypted control keys "
+                 "derived\n";
 
   aa2acp::airplay::ControlCipher control(control_read, control_write);
   aa2acp::airplay::Bytes encrypted_read_buffer;
@@ -683,7 +690,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     close(socket_fd);
     return 1;
   }
-  std::cout << "AirPlay: encrypted /info capabilities received\n";
+  if (aa2acp::bridge::debug_logging_enabled())
+    std::cout << "AirPlay: encrypted /info capabilities received\n";
   const auto *info = dictionary_of(info_plist);
   const auto carplay_capabilities =
       info ? aa2acp::airplay::head_unit_capabilities(*info,
@@ -699,10 +707,11 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
                    *carplay_capabilities)) {
       std::cerr << "AirPlay: unable to cache head-unit capabilities\n";
     } else {
-      std::cout << "AirPlay: cached head-unit capabilities: display "
-                << carplay_capabilities->width_pixels << 'x'
-                << carplay_capabilities->height_pixels << " at up to "
-                << carplay_capabilities->max_fps << " FPS\n";
+      if (aa2acp::bridge::debug_logging_enabled())
+        std::cout << "AirPlay: cached head-unit capabilities: display "
+                  << carplay_capabilities->width_pixels << 'x'
+                  << carplay_capabilities->height_pixels << " at up to "
+                  << carplay_capabilities->max_fps << " FPS\n";
     }
   }
 
@@ -730,7 +739,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     close(socket_fd);
     return 1;
   }
-  std::cout << "AirPlay: session SETUP received timing/event ports\n";
+  if (aa2acp::bridge::debug_logging_enabled())
+    std::cout << "AirPlay: session SETUP received timing/event ports\n";
 
   constexpr std::string_view main_audio_stream_id =
       "8B4C4DF6-AE7F-48F5-A36B-546EEAAEF4B5";
@@ -788,8 +798,9 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
       close(socket_fd);
       return 1;
     }
-    std::cout << "AirPlay: media-audio SETUP received data port " << *audio_port
-              << '\n';
+    if (aa2acp::bridge::debug_logging_enabled())
+      std::cout << "AirPlay: media-audio SETUP received data port "
+                << *audio_port << '\n';
   }
 
   struct AuxiliaryAudioStream {
@@ -842,8 +853,9 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
       std::cerr << "Encrypted " << name << "-audio SETUP failed\n";
       return std::nullopt;
     }
-    std::cout << "AirPlay: " << name << "-audio SETUP received data port "
-              << *port << '\n';
+    if (aa2acp::bridge::debug_logging_enabled())
+      std::cout << "AirPlay: " << name << "-audio SETUP received data port "
+                << *port << '\n';
     return AuxiliaryAudioStream{*port, key};
   };
   const auto guidance_audio = setup_auxiliary_audio(
@@ -912,8 +924,9 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     close(socket_fd);
     return 1;
   }
-  std::cout << "AirPlay: screen SETUP received data port " << *screen_port
-            << '\n';
+  if (aa2acp::bridge::debug_logging_enabled())
+    std::cout << "AirPlay: screen SETUP received data port " << *screen_port
+              << '\n';
 
   const auto record_response = send_encrypted(
       socket_fd, control, encrypted_read_buffer,
@@ -925,7 +938,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     close(socket_fd);
     return 1;
   }
-  std::cout << "AirPlay: encrypted RECORD accepted\n";
+  if (aa2acp::bridge::debug_logging_enabled())
+    std::cout << "AirPlay: encrypted RECORD accepted\n";
   std::jthread audio_sender;
   if (options.next_media_audio && audio_port) {
     audio_sender = std::jthread([&] {
@@ -979,14 +993,15 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
         timestamp += static_cast<std::uint32_t>(payload.size() / 4);
         ++nonce_counter;
         ++sent_packets;
-        if (sent_packets == 1) {
+        if (sent_packets == 1 && aa2acp::bridge::debug_logging_enabled()) {
           std::cout << "AirPlay: forwarding Android Auto media audio "
                     << "(48 kHz stereo PCM)\n";
         }
       }
       close(media_socket);
-      std::cout << "AirPlay: encrypted Android Auto media audio sent "
-                << sent_packets << " packets\n";
+      if (aa2acp::bridge::debug_logging_enabled())
+        std::cout << "AirPlay: encrypted Android Auto media audio sent "
+                  << sent_packets << " packets\n";
     });
   }
   const auto launch_auxiliary_audio =
@@ -1040,8 +1055,9 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
         ++counter;
       }
       close(fd);
-      std::cout << "AirPlay: encrypted Android Auto " << name
-                << " audio ended\n";
+      if (aa2acp::bridge::debug_logging_enabled())
+        std::cout << "AirPlay: encrypted Android Auto " << name
+                  << " audio ended\n";
     });
   };
   auto guidance_sender = launch_auxiliary_audio(
@@ -1177,7 +1193,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   }
   close(data_socket);
   close(socket_fd);
-  std::cout << "AirPlay: encrypted H.264 stream sent " << sent_frames
-            << " frames\n";
+  if (aa2acp::bridge::debug_logging_enabled())
+    std::cout << "AirPlay: encrypted H.264 stream sent " << sent_frames
+              << " frames\n";
   return 0;
 }

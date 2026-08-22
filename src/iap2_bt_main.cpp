@@ -1,4 +1,5 @@
 #include "aa2acp/airplay/session.hpp"
+#include "aa2acp/bridge/logging.hpp"
 #include "aa2acp/iap2/bluetooth_worker.hpp"
 #include "aa2acp/iap2/bluez_pairing.hpp"
 #include "aa2acp/iap2/bootstrap.hpp"
@@ -364,15 +365,19 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
                  "advertising iAP2\n";
     return 1;
   }
-  std::cout << "RFCOMM connected to " << address << ':'
-            << static_cast<int>(channel) << '\n';
+  if (aa2acp::bridge::debug_logging_enabled())
+    std::cout << "RFCOMM connected to " << address << ':'
+              << static_cast<int>(channel) << '\n';
   aa2acp::iap2::BootstrapSession session;
   aa2acp::iap2::CarPlayProbe carplay_probe(address);
   aa2acp::iap2::PhoneLink link(
       [socket_fd](const std::span<const std::uint8_t> bytes) {
         return send_all(socket_fd, bytes);
       },
-      [](const char *message) { std::cout << message << '\n'; },
+      [](const char *message) {
+        if (aa2acp::bridge::debug_logging_enabled())
+          std::cout << message << '\n';
+      },
       [&session, &carplay_probe,
        &carplay](const std::span<const std::uint8_t> bytes) {
         if (carplay && session.done()) {

@@ -1,4 +1,5 @@
 #include "aa2acp/iap2/carplay_probe.hpp"
+#include "aa2acp/bridge/logging.hpp"
 
 #include "aa2acp/iap2/link_layer.hpp"
 
@@ -102,8 +103,10 @@ void CarPlayProbe::begin() {
     return;
   }
   started_ = true;
-  std::cout << "CSM: sent CarPlayAvailability (wired";
-  std::cout << (bluetooth_identifier_.empty() ? ")\n" : " + wireless)\n");
+  if (aa2acp::bridge::debug_logging_enabled()) {
+    std::cout << "CSM: sent CarPlayAvailability (wired";
+    std::cout << (bluetooth_identifier_.empty() ? ")\n" : " + wireless)\n");
+  }
 }
 
 void CarPlayProbe::receive(const std::span<const std::uint8_t> bytes) {
@@ -125,13 +128,16 @@ void CarPlayProbe::fail(const char *message) {
 }
 
 void CarPlayProbe::handle(const csm::Message &message) {
-  std::cout << "CSM: received 0x" << std::hex << message.id << std::dec << '\n';
+  if (aa2acp::bridge::debug_logging_enabled())
+    std::cout << "CSM: received 0x" << std::hex << message.id << std::dec
+              << '\n';
   if (message.id == kCarPlayStartSession) {
     const auto port = u32_parameter(message, 2);
     const auto device = string_parameter(message, 3);
     const auto version = string_parameter(message, 5);
-    std::cout << "CarPlayStartSession: port=" << port << " device=" << device
-              << " source_version=" << version << '\n';
+    if (aa2acp::bridge::debug_logging_enabled())
+      std::cout << "CarPlayStartSession: port=" << port << " device=" << device
+                << " source_version=" << version << '\n';
     airplay_port_ = port;
     airplay_host_ = device;
     if (!request_wifi_) {
@@ -144,7 +150,8 @@ void CarPlayProbe::handle(const csm::Message &message) {
       return;
     }
     awaiting_wifi_configuration_ = true;
-    std::cout << "CSM: requested accessory Wi-Fi configuration\n";
+    if (aa2acp::bridge::debug_logging_enabled())
+      std::cout << "CSM: requested accessory Wi-Fi configuration\n";
     return;
   }
   if (message.id == kAccessoryWifiConfiguration &&
@@ -156,10 +163,11 @@ void CarPlayProbe::handle(const csm::Message &message) {
       fail("accessory Wi-Fi configuration has no SSID");
       return;
     }
-    std::cout << "Wi-Fi: received SSID '" << configuration.ssid
-              << "' (security " << static_cast<int>(configuration.security_type)
-              << ", channel " << static_cast<int>(configuration.channel)
-              << ")\n";
+    if (aa2acp::bridge::debug_logging_enabled())
+      std::cout << "Wi-Fi: received SSID '" << configuration.ssid
+                << "' (security "
+                << static_cast<int>(configuration.security_type) << ", channel "
+                << static_cast<int>(configuration.channel) << ")\n";
     if (wifi_join_handler_ && !wifi_join_handler_(configuration)) {
       fail("failed to join accessory Wi-Fi");
       return;
@@ -171,7 +179,8 @@ void CarPlayProbe::handle(const csm::Message &message) {
         fail("unable to send WirelessCarPlayUpdate");
         return;
       }
-      std::cout << "CSM: sent WirelessCarPlayUpdate(status=1)\n";
+      if (aa2acp::bridge::debug_logging_enabled())
+        std::cout << "CSM: sent WirelessCarPlayUpdate(status=1)\n";
     }
     done_ = true;
   }

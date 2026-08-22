@@ -1,4 +1,5 @@
 #include "aa2acp/iap2/bootstrap.hpp"
+#include "aa2acp/bridge/logging.hpp"
 
 #include "aa2acp/iap2/link_layer.hpp"
 
@@ -12,7 +13,8 @@ void BootstrapSession::attach(PhoneLink &link) { link_ = &link; }
 void BootstrapSession::begin() {
   stage_ = Stage::AwaitIdentification;
   send_empty(csm::kStartIdentification);
-  std::cout << "CSM: sent StartIdentification\n";
+  if (aa2acp::bridge::debug_logging_enabled())
+    std::cout << "CSM: sent StartIdentification\n";
 }
 
 void BootstrapSession::receive(const std::span<const std::uint8_t> bytes) {
@@ -38,7 +40,9 @@ void BootstrapSession::fail(const char *message) {
 }
 
 void BootstrapSession::handle(const csm::Message &message) {
-  std::cout << "CSM: received 0x" << std::hex << message.id << std::dec << '\n';
+  if (aa2acp::bridge::debug_logging_enabled())
+    std::cout << "CSM: received 0x" << std::hex << message.id << std::dec
+              << '\n';
   if (stage_ == Stage::AwaitIdentification) {
     if (message.id == csm::kIdentificationRejected) {
       fail("identification rejected");
@@ -69,7 +73,8 @@ void BootstrapSession::handle(const csm::Message &message) {
       fail("unable to send authentication challenge");
       return;
     }
-    std::cout << "CSM: sent authentication challenge\n";
+    if (aa2acp::bridge::debug_logging_enabled())
+      std::cout << "CSM: sent authentication challenge\n";
     stage_ = Stage::AwaitResponse;
     return;
   }
