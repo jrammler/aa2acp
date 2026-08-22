@@ -71,6 +71,14 @@ struct PendingManagementHotspotUpdate {
 };
 std::optional<PendingManagementHotspotUpdate> pending_management_hotspot_update;
 
+bool debug_logging() {
+  static const bool enabled = [] {
+    const auto *level = std::getenv("AA2ACP_LOG_LEVEL");
+    return level != nullptr && std::string_view(level) == "debug";
+  }();
+  return enabled;
+}
+
 class CarPlayWorker final {
 public:
   CarPlayWorker() {
@@ -793,7 +801,8 @@ public:
         dump_.write(reinterpret_cast<const char *>(frame.data()),
                     static_cast<std::streamsize>(frame.size()));
       }
-      if (received_video_count_ <= 5 || received_video_count_ % 60 == 0) {
+      if (debug_logging() &&
+          (received_video_count_ <= 5 || received_video_count_ % 60 == 0)) {
         std::cout << "Bridge daemon: Android Auto H.264 access unit #"
                   << received_video_count_ << " (" << frame.size()
                   << " bytes; NAL type:size=" << nalu_summary << ")\n";
@@ -980,7 +989,8 @@ public:
       return;
     std::lock_guard lock(mutex_);
     ++received_packets_;
-    if (received_packets_ <= 3 || received_packets_ % 500 == 0) {
+    if (debug_logging() &&
+        (received_packets_ <= 3 || received_packets_ % 500 == 0)) {
       std::cout << "Bridge daemon: Android Auto " << name_ << " audio packet #"
                 << received_packets_ << " (" << pcm.size() << " bytes)\n";
     }
