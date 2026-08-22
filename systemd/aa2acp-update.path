@@ -2,7 +2,7 @@
 Description=Watch for AA2ACP executable updates
 
 [Path]
-PathChanged=/home/pi/.local/bin/aa2acp
+PathModified=/home/pi/.local/bin
 Unit=aa2acp-update.service
 
 [Install]
