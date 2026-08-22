@@ -119,4 +119,7 @@ if(BUILD_TESTING)
   target_link_libraries(h264-normalizer-tests PRIVATE h264_normalizer)
   target_compile_options(h264-normalizer-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
   add_test(NAME h264-normalizer-tests COMMAND h264-normalizer-tests)
+  add_test(NAME no-direct-stream-logs
+           COMMAND ${CMAKE_COMMAND} -DPROJECT_SOURCE_DIR=${PROJECT_SOURCE_DIR}
+                   -P ${PROJECT_SOURCE_DIR}/tests/no_direct_stream_logs.cmake)
 endif()

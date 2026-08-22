@@ -4,6 +4,7 @@
 #include <iostream>
 #include <optional>
 #include <sstream>
+#include <string>
 #include <string_view>
 
 namespace aa2acp::bridge {
@@ -22,6 +23,13 @@ inline std::string_view log_level_name(const LogLevel level) {
     return "error";
   }
   return "unknown";
+}
+
+inline std::string log_prefix(const LogLevel level, const char marker) {
+  constexpr std::size_t kLevelWidth = 7;
+  const auto name = log_level_name(level);
+  return "[" + std::string(name) + std::string(kLevelWidth - name.size(), ' ') +
+         "] " + marker + " ";
 }
 
 inline std::optional<LogLevel> parse_log_level(const std::string_view value) {
@@ -79,8 +87,7 @@ public:
     auto &output = level_ == LogLevel::warning || level_ == LogLevel::error
                        ? std::cerr
                        : std::cout;
-    const std::string text =
-        "[" + std::string(log_level_name(level_)) + "] > " + message_.str();
+    const std::string text = log_prefix(level_, '>') + message_.str();
     output.write(text.data(), static_cast<std::streamsize>(text.size()));
   }
 

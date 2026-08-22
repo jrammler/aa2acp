@@ -293,9 +293,8 @@ private:
     for (const auto level :
          {aa2acp::bridge::LogLevel::debug, aa2acp::bridge::LogLevel::info,
           aa2acp::bridge::LogLevel::warning, aa2acp::bridge::LogLevel::error}) {
-      const std::string prefix =
-          "[" + std::string(aa2acp::bridge::log_level_name(level)) + "] ";
-      if (text.starts_with(prefix))
+      const auto name = aa2acp::bridge::log_level_name(level);
+      if (text.starts_with("[" + std::string(name)))
         return true;
     }
     return false;
@@ -327,28 +326,20 @@ private:
   bool write_locked(const std::string_view text) {
     for (std::size_t offset = 0; offset < text.size();) {
       if (at_line_start_) {
-        const auto timestamp = log_timestamp();
         const bool explicit_level = has_log_level_prefix(text.substr(offset));
         const auto level =
             aa2acp::bridge::current_log_level().value_or(default_level_);
         const char marker = offset == 0 ? '>' : '|';
         const std::string prefix =
-            explicit_level
-                ? ""
-                : "[" + std::string(aa2acp::bridge::log_level_name(level)) +
-                      "] " + marker + " ";
-        if (console_->sputn(timestamp.data(), timestamp.size()) !=
-                static_cast<std::streamsize>(timestamp.size()) ||
-            (!prefix.empty() &&
-             console_->sputn(prefix.data(), prefix.size()) !=
-                 static_cast<std::streamsize>(prefix.size())))
+            explicit_level ? "" : aa2acp::bridge::log_prefix(level, marker);
+        if (!prefix.empty() && console_->sputn(prefix.data(), prefix.size()) !=
+                                   static_cast<std::streamsize>(prefix.size()))
           return false;
+        const auto retained_prefix = log_timestamp() + prefix;
         if (file_ != nullptr &&
-            (!file_->write(timestamp.data(), timestamp.size()) ||
-             !file_->write(prefix.data(), prefix.size())))
+            !file_->write(retained_prefix.data(), retained_prefix.size()))
           return false;
-        recent_.append(timestamp);
-        recent_.append(prefix);
+        recent_.append(retained_prefix);
         at_line_start_ = false;
       }
       const auto line_end = text.find('\n', offset);
@@ -784,16 +775,46 @@ std::string page(const aa2acp::bridge::Config &config,
 }
 
 std::string logs_page(const RecentLog &recent) {
+  const auto css_class = [](const std::string_view line) {
+    for (const auto level :
+         {aa2acp::bridge::LogLevel::debug, aa2acp::bridge::LogLevel::info,
+          aa2acp::bridge::LogLevel::warning, aa2acp::bridge::LogLevel::error}) {
+      const auto prefix =
+          "[" + std::string(aa2acp::bridge::log_level_name(level));
+      if (line.find(prefix) != std::string_view::npos)
+        return std::string("log-") +
+               std::string(aa2acp::bridge::log_level_name(level));
+    }
+    return std::string{};
+  };
+  std::string rendered_logs;
+  const auto logs = recent.snapshot();
+  for (std::size_t offset = 0; offset < logs.size();) {
+    const auto line_end = logs.find('\n', offset);
+    const auto line = logs.substr(offset, line_end - offset);
+    const auto css = css_class(line);
+    if (!css.empty())
+      rendered_logs += "<span class=\"" + css + "\">";
+    rendered_logs += html_escape(line);
+    if (!css.empty())
+      rendered_logs += "</span>";
+    rendered_logs += '\n';
+    if (line_end == std::string::npos)
+      break;
+    offset = line_end + 1;
+  }
   return "<!doctype html><html><head><meta name=\"viewport\" "
          "content=\"width=device-width,initial-scale=1\"><title>AA2ACP "
          "logs</title><style>body{font:16px sans-serif;max-width:60rem;"
          "margin:3rem auto;padding:0 1rem}pre{white-space:pre-wrap;"
-         "word-break:break-word;background:#f5f5f5;padding:1rem}</style></head>"
+         "word-break:break-word;background:#f5f5f5;padding:1rem}.log-debug"
+         "{color:#666}.log-info{color:#174ea6}.log-warning{color:#8a5a00;"
+         "background:#fff5cf}.log-error{color:#a61b1b;background:#ffe2e2}"
+         "</style></head>"
          "<body><p><a href=\"/\">Back to management</a></p><h1>Recent "
          "logs</h1><p>Current service run; newest " +
          std::to_string(RecentLog::kMaximumBytes / 1024) +
-         " KiB retained.</p><pre>" + html_escape(recent.snapshot()) +
-         "</pre></body></html>";
+         " KiB retained.</p><pre>" + rendered_logs + "</pre></body></html>";
 }
 
 class VideoSocketForwarder {
