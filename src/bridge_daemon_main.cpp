@@ -1827,6 +1827,7 @@ int main(int argc, char **argv) {
             stop);
       });
   std::jthread carplay_preflight_worker;
+  std::jthread bluetooth_scan_worker;
   const int listener = socket(AF_INET, SOCK_STREAM, 0);
   int enabled = 1;
   setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &enabled, sizeof(enabled));
@@ -2132,7 +2133,9 @@ int main(int argc, char **argv) {
         }
       }
       if (start_scan)
-        std::thread(run_bluetooth_scan, std::ref(management_state)).detach();
+        bluetooth_scan_worker = std::jthread([](const std::stop_token) {
+          run_bluetooth_scan(management_state);
+        });
       respond(303, "text/plain", "", "Location: /\r\n");
     } else if (request.starts_with("POST /display ")) {
       const bool show_unnamed = form_field(body, "show_unnamed").has_value();
@@ -2277,6 +2280,7 @@ int main(int argc, char **argv) {
   close(listener);
   carplay_preflight_worker.request_stop();
   carplay_preflight_worker.join();
+  bluetooth_scan_worker.join();
   android_auto_worker.request_stop();
   android_auto_worker.join();
   close(signal_fd);

@@ -73,13 +73,18 @@ bool save_config(const std::filesystem::path &path, const Config &config) {
   if (config.wifi_interface.empty() || config.management_hotspot_ssid.empty() ||
       config.management_hotspot_passphrase.size() < 8 ||
       config.head_unit_mac.find_first_of("\r\n=") != std::string::npos ||
+      config.head_unit_mac.find('\0') != std::string::npos ||
       config.wifi_interface.find_first_of("\r\n=") != std::string::npos ||
+      config.wifi_interface.find('\0') != std::string::npos ||
       config.management_hotspot_ssid.find_first_of("\r\n=") !=
           std::string::npos ||
+      config.management_hotspot_ssid.find('\0') != std::string::npos ||
       config.management_hotspot_passphrase.find_first_of("\r\n=") !=
           std::string::npos ||
+      config.management_hotspot_passphrase.find('\0') != std::string::npos ||
       config.airplay_pairing_store.string().find_first_of("\r\n=") !=
-          std::string::npos)
+          std::string::npos ||
+      config.airplay_pairing_store.string().find('\0') != std::string::npos)
     return false;
   std::error_code error;
   std::filesystem::create_directories(path.parent_path(), error);
