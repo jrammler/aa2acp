@@ -18,6 +18,7 @@
 
 #include <array>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cstring>
 #include <iostream>
@@ -72,19 +73,30 @@ bool send_all(const int socket_fd, const std::span<const std::uint8_t> bytes) {
   return true;
 }
 
-int connect_rfcomm(const std::string &address, const std::uint8_t channel) {
+int connect_rfcomm(const std::string &address, const std::uint8_t channel,
+                   int *error) {
   sockaddr_rc remote{};
   remote.rc_family = AF_BLUETOOTH;
   remote.rc_channel = channel;
   if (str2ba(address.c_str(), &remote.rc_bdaddr) != 0) {
+    if (error != nullptr)
+      *error = EINVAL;
     return -1;
   }
   const auto socket_fd = socket(AF_BLUETOOTH, SOCK_STREAM, BTPROTO_RFCOMM);
-  if (socket_fd < 0 || connect(socket_fd, reinterpret_cast<sockaddr *>(&remote),
-                               sizeof(remote)) != 0) {
+  if (socket_fd < 0) {
+    if (error != nullptr)
+      *error = errno;
+    return -1;
+  }
+  if (connect(socket_fd, reinterpret_cast<sockaddr *>(&remote),
+              sizeof(remote)) != 0) {
+    const int connect_error = errno;
     if (socket_fd >= 0) {
       close(socket_fd);
     }
+    if (error != nullptr)
+      *error = connect_error;
     return -1;
   }
   return socket_fd;
@@ -376,25 +388,27 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
   }
 
   int socket_fd = -1;
+  int rfcomm_error{};
   constexpr int kRfcommAttempts = 6;
   for (int attempt = 1; attempt <= kRfcommAttempts; ++attempt) {
-    socket_fd = connect_rfcomm(address, channel);
+    socket_fd = connect_rfcomm(address, channel, &rfcomm_error);
     if (socket_fd >= 0)
       break;
     if (attempt < kRfcommAttempts) {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
-          << "Bluetooth: RFCOMM channel " << static_cast<int>(channel)
-          << " unavailable (attempt " << attempt << "/" << kRfcommAttempts
-          << "); retrying in 500 ms\n";
+          << "Bluetooth: unable to connect RFCOMM channel "
+          << static_cast<int>(channel) << " (" << std::strerror(rfcomm_error)
+          << ", errno " << rfcomm_error << "; attempt " << attempt << "/"
+          << kRfcommAttempts << "); retrying in 500 ms\n";
       std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
   }
   if (socket_fd < 0) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
-        << "Unable to open RFCOMM channel " << static_cast<int>(channel)
-        << " to " << address
-        << "; ensure the device is paired and the head unit is advertising "
-           "iAP2\n";
+        << "Unable to connect RFCOMM channel " << static_cast<int>(channel)
+        << " to " << address << ": " << std::strerror(rfcomm_error)
+        << " (errno " << rfcomm_error
+        << "); ensure the device is in range, paired, and advertising iAP2\n";
     return 1;
   }
   if (aa2acp::bridge::debug_logging_enabled())
