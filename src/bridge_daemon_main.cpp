@@ -643,7 +643,7 @@ std::string page(const aa2acp::bridge::Config &config,
                 "a new hotspot name (recommended)</label><button type=submit>"
                 "Continue</button></form>";
     }
-    output += "</body></html>";
+    output += "<p><a href=\"/logs\">View recent logs</a></p></body></html>";
     return output;
   }
   if (saved || carplay_error) {
