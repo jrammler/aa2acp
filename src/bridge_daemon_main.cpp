@@ -1019,9 +1019,11 @@ public:
 
   ~VideoSocketForwarder() {
     worker_.request_stop();
-    close_listener();
     shutdown_client();
     frames_ready_.notify_all();
+    if (worker_.joinable())
+      worker_.join();
+    close_listener();
     if (!path_.empty())
       unlink(path_.c_str());
   }
@@ -1143,7 +1145,16 @@ private:
       const auto client = accept4(listener_, nullptr, nullptr, SOCK_CLOEXEC);
       if (client < 0)
         continue;
-      client_.store(client);
+      bool stopping = false;
+      {
+        std::lock_guard lock(client_mutex_);
+        client_.store(client);
+        stopping = stop.stop_requested();
+        if (stopping && client_.exchange(-1) == client)
+          close(client);
+      }
+      if (stopping)
+        continue;
       Bytes config;
       bool has_keyframe = false;
       {
@@ -1157,6 +1168,7 @@ private:
         has_keyframe = !keyframe_.empty();
       }
       if (!config.empty() && !send_frame(client, config)) {
+        std::lock_guard lock(client_mutex_);
         if (client_.exchange(-1) == client)
           close(client);
         continue;
@@ -1182,8 +1194,11 @@ private:
         if (!send_frame(client, frame))
           break;
       }
-      if (client_.exchange(-1) == client)
-        close(client);
+      {
+        std::lock_guard lock(client_mutex_);
+        if (client_.exchange(-1) == client)
+          close(client);
+      }
     }
   }
 
@@ -1195,6 +1210,7 @@ private:
   }
 
   void shutdown_client() {
+    std::lock_guard lock(client_mutex_);
     const auto client = client_.load();
     if (client >= 0)
       shutdown(client, SHUT_RDWR);
@@ -1203,6 +1219,7 @@ private:
   std::filesystem::path path_;
   int listener_{-1};
   std::atomic<int> client_{-1};
+  std::mutex client_mutex_;
   std::jthread worker_;
   std::mutex mutex_;
   std::condition_variable frames_ready_;
@@ -1245,9 +1262,11 @@ public:
 
   ~AudioSocketForwarder() {
     worker_.request_stop();
-    close_listener();
     shutdown_client();
     frames_ready_.notify_all();
+    if (worker_.joinable())
+      worker_.join();
+    close_listener();
     if (!path_.empty())
       unlink(path_.c_str());
   }
@@ -1303,7 +1322,16 @@ private:
       const auto client = accept4(listener_, nullptr, nullptr, SOCK_CLOEXEC);
       if (client < 0)
         continue;
-      client_.store(client);
+      bool stopping = false;
+      {
+        std::lock_guard lock(client_mutex_);
+        client_.store(client);
+        stopping = stop.stop_requested();
+        if (stopping && client_.exchange(-1) == client)
+          close(client);
+      }
+      if (stopping)
+        continue;
       if (aa2acp::bridge::debug_logging_enabled())
         aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
             << "Bridge daemon: connected to Android Auto " << name_
@@ -1323,8 +1351,11 @@ private:
         if (!send_frame(client, frame))
           break;
       }
-      if (client_.exchange(-1) == client)
-        close(client);
+      {
+        std::lock_guard lock(client_mutex_);
+        if (client_.exchange(-1) == client)
+          close(client);
+      }
     }
   }
 
@@ -1336,6 +1367,7 @@ private:
   }
 
   void shutdown_client() {
+    std::lock_guard lock(client_mutex_);
     const auto client = client_.load();
     if (client >= 0)
       shutdown(client, SHUT_RDWR);
@@ -1345,6 +1377,7 @@ private:
   std::string name_;
   int listener_{-1};
   std::atomic<int> client_{-1};
+  std::mutex client_mutex_;
   std::jthread worker_;
   std::mutex mutex_;
   std::condition_variable frames_ready_;
