@@ -8,11 +8,13 @@ automatically and reaches the UI at the hotspot gateway address (normally
 `10.42.0.1`). The daemon configures this at runtime; systemd is only an
 optional boot/restart wrapper.
 
-On first start, AA2ACP selects the first usable Wi-Fi adapter, starts the
-hotspot, generates initial credentials, and persists the selected adapter,
-SSID, and password. The management UI lets the owner change all three. On a
-single-radio installation, the bridge stops the hotspot only while joining the
-car's CarPlay network and recreates it when that session ends.
+On first start, AA2ACP selects the first usable Wi-Fi adapter and starts a
+hotspot named `AA2ACP-` followed by that adapter's MAC suffix. Its initial
+WPA2 password is `changeme`; the management UI permits no other action until
+the owner replaces it. The selected adapter, SSID, and password are persisted,
+and the UI lets the owner change all three later. On a single-radio
+installation, the bridge stops the hotspot only while joining the car's
+CarPlay network and recreates it when that session ends.
 
 With wired Android Auto and one Wi-Fi adapter, that adapter hosts the hotspot
 while idle and leaves it to join the car's wireless-CarPlay network during an

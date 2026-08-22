@@ -188,28 +188,33 @@ private:
 
 std::unique_ptr<CarPlayWorker> carplay_worker;
 
-std::string random_hex(const std::size_t bytes) {
-  std::array<unsigned char, 32> random{};
-  if (bytes > random.size())
-    return {};
-  std::ifstream stream("/dev/urandom", std::ios::binary);
-  if (!stream || !stream.read(reinterpret_cast<char *>(random.data()), bytes))
-    return {};
-  constexpr char hex[] = "0123456789abcdef";
-  std::string text;
-  text.reserve(bytes * 2);
-  for (std::size_t index = 0; index < bytes; ++index) {
-    text.push_back(hex[random[index] >> 4]);
-    text.push_back(hex[random[index] & 0x0f]);
-  }
-  return text;
+constexpr char kDefaultManagementHotspotPassphrase[] = "changeme";
+
+std::string management_hotspot_ssid(const std::string &interface_name) {
+  std::ifstream stream("/sys/class/net/" + interface_name + "/address");
+  std::string address;
+  std::getline(stream, address);
+  std::string suffix;
+  for (const char character : address)
+    if (std::isxdigit(static_cast<unsigned char>(character)))
+      suffix.push_back(static_cast<char>(
+          std::toupper(static_cast<unsigned char>(character))));
+  if (suffix.size() < 6)
+    return "AA2ACP-SETUP";
+  return "AA2ACP-" + suffix.substr(suffix.size() - 6);
 }
 
 void ensure_management_hotspot_settings(aa2acp::bridge::Config &config) {
-  if (config.management_hotspot_ssid.empty())
-    config.management_hotspot_ssid = "AA2ACP-" + random_hex(3);
+  if (config.management_hotspot_ssid.empty() && !config.wifi_interface.empty())
+    config.management_hotspot_ssid =
+        management_hotspot_ssid(config.wifi_interface);
   if (config.management_hotspot_passphrase.size() < 8)
-    config.management_hotspot_passphrase = random_hex(16);
+    config.management_hotspot_passphrase = kDefaultManagementHotspotPassphrase;
+}
+
+bool management_hotspot_needs_setup(const aa2acp::bridge::Config &config) {
+  return config.management_hotspot_passphrase ==
+         kDefaultManagementHotspotPassphrase;
 }
 
 std::string log_timestamp() {
@@ -562,6 +567,18 @@ std::string page(const aa2acp::bridge::Config &config,
       std::string(snapshot.carplay_preflight_running ? "1" : "0") +
       "\">"
       "<h1>AA2ACP</h1><p>Configure the pinned CarPlay head unit.</p>";
+  if (management_hotspot_needs_setup(config)) {
+    output +=
+        "<p class=\"status error\">Change the default management hotspot "
+        "password before using AA2ACP.</p><p>Connect to Wi-Fi network <b>" +
+        html_escape(config.management_hotspot_ssid) +
+        "</b>, then choose a new WPA2 password.</p><form method=post "
+        "action=\"/management-hotspot\"><label>New management hotspot "
+        "password<input required minlength=8 type=password "
+        "name=\"management_hotspot_passphrase\"></label><button "
+        "type=submit>Save password</button></form></body></html>";
+    return output;
+  }
   if (saved || carplay_error) {
     if (saved)
       output += "<p class=status>Configuration saved.</p>";
@@ -1407,11 +1424,6 @@ int main(int argc, char **argv) {
   if (config.airplay_pairing_store.empty())
     config.airplay_pairing_store =
         aa2acp::bridge::default_airplay_pairing_store();
-  ensure_management_hotspot_settings(config);
-  if (!config.wifi_interface.empty() &&
-      !aa2acp::bridge::save_config(config_path, config))
-    std::cerr << "Bridge daemon: unable to persist management hotspot "
-                 "settings\n";
   std::mutex config_mutex;
   carplay_worker = std::make_unique<CarPlayWorker>();
   if (!carplay_worker) {
@@ -1424,11 +1436,13 @@ int main(int argc, char **argv) {
     const auto snapshot = management_snapshot(management_state);
     if (!snapshot.wifi_interfaces.empty()) {
       config.wifi_interface = snapshot.wifi_interfaces.front();
-      if (!aa2acp::bridge::save_config(config_path, config))
-        std::cerr << "Bridge daemon: unable to persist management hotspot "
-                     "settings\n";
     }
   }
+  ensure_management_hotspot_settings(config);
+  if (!config.wifi_interface.empty() &&
+      !aa2acp::bridge::save_config(config_path, config))
+    std::cerr << "Bridge daemon: unable to persist management hotspot "
+                 "settings\n";
   if (!config.wifi_interface.empty() &&
       !aa2acp::iap2::start_management_hotspot(
           config.wifi_interface, config.management_hotspot_ssid,
@@ -1560,6 +1574,36 @@ int main(int argc, char **argv) {
       const auto snapshot = management_snapshot(management_state);
       respond(snapshot.carplay_preflight_running ? 204 : 205, "text/plain",
               snapshot.carplay_preflight_status);
+    } else if (request.starts_with("POST /management-hotspot ")) {
+      const auto passphrase = form_field(body, "management_hotspot_passphrase");
+      const auto previous = [&] {
+        std::lock_guard lock(config_mutex);
+        return config;
+      }();
+      auto updated = previous;
+      if (!passphrase || *passphrase == kDefaultManagementHotspotPassphrase) {
+        respond(400, "text/plain", "Choose a different password\n");
+      } else {
+        updated.management_hotspot_passphrase = *passphrase;
+        if (!aa2acp::bridge::save_config(config_path, updated)) {
+          respond(400, "text/plain", "Invalid hotspot password\n");
+        } else {
+          {
+            std::lock_guard lock(config_mutex);
+            config = updated;
+          }
+          aa2acp::iap2::start_management_hotspot(
+              updated.wifi_interface, updated.management_hotspot_ssid,
+              updated.management_hotspot_passphrase);
+          respond(303, "text/plain", "", "Location: /?saved=1\r\n");
+        }
+      }
+    } else if ([&] {
+                 std::lock_guard lock(config_mutex);
+                 return management_hotspot_needs_setup(config);
+               }()) {
+      respond(403, "text/plain",
+              "Change the default management hotspot password first\n");
     } else if (request.starts_with("POST /carplay-prepare ")) {
       const auto selected_config = [&] {
         std::lock_guard lock(config_mutex);
