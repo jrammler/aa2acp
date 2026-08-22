@@ -54,6 +54,7 @@
             (mkAasdkPackage system)
           ];
           cmakeBuildType = "Debug";
+          cmakeFlags = [ "-DBUILD_TESTING=ON" ];
           doCheck = true;
           checkPhase = ''
             ctest --output-on-failure
