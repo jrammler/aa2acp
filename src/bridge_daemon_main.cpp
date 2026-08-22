@@ -2,6 +2,7 @@
 #include "aa2acp/airplay/head_unit_capabilities.hpp"
 #include "aa2acp/bridge/bluez_inventory.hpp"
 #include "aa2acp/bridge/config.hpp"
+#include "aa2acp/bridge/daemon_log.hpp"
 #include "aa2acp/bridge/h264_normalizer.hpp"
 #include "aa2acp/bridge/logging.hpp"
 #include "aa2acp/iap2/bluetooth_worker.hpp"
@@ -46,6 +47,10 @@
 #include <vector>
 
 namespace {
+
+using aa2acp::bridge::DaemonLog;
+using aa2acp::bridge::RecentLog;
+using aa2acp::bridge::next_daemon_log_path;
 
 struct ManagementSnapshot {
   std::vector<aa2acp::bridge::BluetoothDevice> bluetooth_devices;
@@ -321,188 +326,6 @@ void ensure_management_hotspot_settings(aa2acp::bridge::Config &config) {
 bool management_hotspot_needs_setup(const aa2acp::bridge::Config &config) {
   return config.management_hotspot_passphrase ==
          kDefaultManagementHotspotPassphrase;
-}
-
-std::string log_timestamp() {
-  const auto now = std::chrono::system_clock::now();
-  const auto milliseconds =
-      std::chrono::duration_cast<std::chrono::milliseconds>(
-          now.time_since_epoch())
-          .count() %
-      1000;
-  const auto time = std::chrono::system_clock::to_time_t(now);
-  std::tm local_time{};
-  localtime_r(&time, &local_time);
-  std::array<char, 40> text{};
-  std::strftime(text.data(), text.size(), "%Y-%m-%d %H:%M:%S", &local_time);
-  std::snprintf(text.data() + 19, text.size() - 19, ".%03lld ",
-                static_cast<long long>(milliseconds));
-  return text.data();
-}
-
-class RecentLog final {
-public:
-  static constexpr std::size_t kMaximumBytes = 200 * 1024;
-
-  void append(const std::string_view text) {
-    std::lock_guard lock(mutex_);
-    contents_ += text;
-    if (contents_.size() > kMaximumBytes)
-      contents_.erase(0, contents_.size() - kMaximumBytes);
-  }
-
-  std::string snapshot() const {
-    std::lock_guard lock(mutex_);
-    return contents_;
-  }
-
-private:
-  mutable std::mutex mutex_;
-  std::string contents_;
-};
-
-class TeeBuffer final : public std::streambuf {
-public:
-  TeeBuffer(std::streambuf *console, std::ofstream *file, RecentLog &recent,
-            std::mutex &mutex, const aa2acp::bridge::LogLevel default_level)
-      : console_(console), file_(file), recent_(recent), mutex_(mutex),
-        default_level_(default_level) {}
-
-private:
-  static bool has_log_level_prefix(const std::string_view text) {
-    for (const auto level :
-         {aa2acp::bridge::LogLevel::debug, aa2acp::bridge::LogLevel::info,
-          aa2acp::bridge::LogLevel::warning, aa2acp::bridge::LogLevel::error}) {
-      const auto name = aa2acp::bridge::log_level_name(level);
-      if (text.starts_with("[" + std::string(name)))
-        return true;
-    }
-    return false;
-  }
-
-  int_type overflow(const int_type character) override {
-    if (traits_type::eq_int_type(character, traits_type::eof()))
-      return traits_type::not_eof(character);
-    std::lock_guard lock(mutex_);
-    const auto text = traits_type::to_char_type(character);
-    return write_locked(std::string_view(&text, 1)) ? character
-                                                    : traits_type::eof();
-  }
-
-  std::streamsize xsputn(const char *text,
-                         const std::streamsize size) override {
-    std::lock_guard lock(mutex_);
-    return write_locked(std::string_view(text, size)) ? size : 0;
-  }
-
-  int sync() override {
-    std::lock_guard lock(mutex_);
-    const auto console_result = console_->pubsync();
-    if (file_ != nullptr)
-      file_->flush();
-    return console_result == 0 && (file_ == nullptr || *file_) ? 0 : -1;
-  }
-
-  bool write_locked(const std::string_view text) {
-    for (std::size_t offset = 0; offset < text.size();) {
-      if (at_line_start_) {
-        const bool explicit_level = has_log_level_prefix(text.substr(offset));
-        const auto level =
-            aa2acp::bridge::current_log_level().value_or(default_level_);
-        const char marker = offset == 0 ? '>' : '|';
-        const std::string prefix =
-            explicit_level ? "" : aa2acp::bridge::log_prefix(level, marker);
-        if (!prefix.empty() && console_->sputn(prefix.data(), prefix.size()) !=
-                                   static_cast<std::streamsize>(prefix.size()))
-          return false;
-        const auto retained_prefix = log_timestamp() + prefix;
-        if (file_ != nullptr &&
-            !file_->write(retained_prefix.data(), retained_prefix.size()))
-          return false;
-        recent_.append(retained_prefix);
-        at_line_start_ = false;
-      }
-      const auto line_end = text.find('\n', offset);
-      const auto count = line_end == std::string_view::npos
-                             ? text.size() - offset
-                             : line_end - offset + 1;
-      if (console_->sputn(text.data() + offset, count) !=
-          static_cast<std::streamsize>(count))
-        return false;
-      if (file_ != nullptr && !file_->write(text.data() + offset, count))
-        return false;
-      recent_.append(text.substr(offset, count));
-      at_line_start_ = text[offset + count - 1] == '\n';
-      offset += count;
-    }
-    return true;
-  }
-
-  std::streambuf *console_;
-  std::ofstream *file_;
-  RecentLog &recent_;
-  std::mutex &mutex_;
-  aa2acp::bridge::LogLevel default_level_;
-  bool at_line_start_{true};
-};
-
-class DaemonLog final {
-public:
-  DaemonLog(RecentLog &recent, const std::optional<std::filesystem::path> &path)
-      : path_(path),
-        file_(path_ ? *path_ : std::filesystem::path{}, std::ios::app),
-        cout_buffer_(std::cout.rdbuf(), file_ ? &file_ : nullptr, recent,
-                     mutex_, aa2acp::bridge::LogLevel::info),
-        cerr_buffer_(std::cerr.rdbuf(), file_ ? &file_ : nullptr, recent,
-                     mutex_, aa2acp::bridge::LogLevel::error) {
-    old_cout_ = std::cout.rdbuf(&cout_buffer_);
-    old_cerr_ = std::cerr.rdbuf(&cerr_buffer_);
-  }
-
-  ~DaemonLog() {
-    if (old_cout_ != nullptr)
-      std::cout.rdbuf(old_cout_);
-    if (old_cerr_ != nullptr)
-      std::cerr.rdbuf(old_cerr_);
-  }
-
-  const std::optional<std::filesystem::path> &path() const { return path_; }
-
-private:
-  std::optional<std::filesystem::path> path_;
-  std::ofstream file_;
-  std::mutex mutex_;
-  TeeBuffer cout_buffer_;
-  TeeBuffer cerr_buffer_;
-  std::streambuf *old_cout_{};
-  std::streambuf *old_cerr_{};
-};
-
-std::optional<std::filesystem::path> next_daemon_log_path() {
-  const auto directory = aa2acp::bridge::default_state_directory() / "logs";
-  std::error_code error;
-  std::filesystem::create_directories(directory, error);
-  if (error)
-    return std::nullopt;
-  std::vector<std::filesystem::directory_entry> logs;
-  for (const auto &entry :
-       std::filesystem::directory_iterator(directory, error)) {
-    if (entry.is_regular_file() && entry.path().extension() == ".log" &&
-        entry.path().filename().string().starts_with("aa2acp-bridge-daemon-"))
-      logs.push_back(entry);
-  }
-  std::sort(logs.begin(), logs.end(), [](const auto &left, const auto &right) {
-    return left.last_write_time() > right.last_write_time();
-  });
-  for (std::size_t index = 29; index < logs.size(); ++index)
-    std::filesystem::remove(logs[index], error);
-  const auto stamp = std::chrono::duration_cast<std::chrono::milliseconds>(
-                         std::chrono::system_clock::now().time_since_epoch())
-                         .count();
-  const auto path =
-      directory / ("aa2acp-bridge-daemon-" + std::to_string(stamp) + "-" +
-                   std::to_string(getpid()) + ".log");
-  return path;
 }
 
 std::string normalized_bluetooth_address(const std::string &value) {
