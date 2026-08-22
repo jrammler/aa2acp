@@ -45,7 +45,7 @@
           aasdkPkgs = nixpkgs-aasdk.legacyPackages.${system};
         in pkgs.stdenv.mkDerivation {
           pname = "aa2acp";
-          version = "0.1.2";
+          version = "0.1.3";
           src = self;
           nativeBuildInputs = with pkgs; [ cmake pkg-config ];
           buildInputs = with pkgs; [

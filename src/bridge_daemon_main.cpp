@@ -1439,6 +1439,8 @@ int run_wired_android_auto_receiver(
 } // namespace
 
 int main(int argc, char **argv) {
+  std::cout.setf(std::ios::unitbuf);
+  std::cerr.setf(std::ios::unitbuf);
   bool file_logging = true;
   for (int index = 1; index < argc; ++index)
     if (std::string_view(argv[index]) == "--no-file-log")
