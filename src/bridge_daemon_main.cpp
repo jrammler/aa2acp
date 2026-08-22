@@ -1385,24 +1385,6 @@ private:
   std::size_t received_packets_{};
 };
 
-bool stop_carplay_process_group(const pid_t child, int *status) {
-  kill(-child, SIGTERM);
-  const auto graceful_deadline =
-      std::chrono::steady_clock::now() + std::chrono::seconds(8);
-  while (std::chrono::steady_clock::now() < graceful_deadline) {
-    if (waitpid(child, status, WNOHANG) == child)
-      return false;
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-  }
-  aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
-      << "Bridge daemon: CarPlay worker did not stop after SIGTERM; sending "
-         "SIGKILL\n";
-  kill(-child, SIGKILL);
-  while (waitpid(child, status, 0) < 0 && errno == EINTR) {
-  }
-  return true;
-}
-
 int run_carplay_session(const aa2acp::bridge::Config &config,
                         const std::stop_token stop,
                         const std::atomic_bool &phone_disconnected,
@@ -1459,91 +1441,6 @@ int run_carplay_session(const aa2acp::bridge::Config &config,
   }
   return carplay_worker->run(std::move(arguments), stop, phone_disconnected,
                              active_child);
-
-  std::vector<char *> argv;
-  for (auto &argument : arguments)
-    argv.push_back(argument.data());
-  argv.push_back(nullptr);
-  int output_pipe[2];
-  if (pipe2(output_pipe, O_CLOEXEC) != 0) {
-    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
-        << "Bridge daemon: unable to capture CarPlay session output\n";
-    return 1;
-  }
-  const pid_t child = fork();
-  if (child == 0) {
-    setpgid(0, 0);
-    dup2(output_pipe[1], STDOUT_FILENO);
-    dup2(output_pipe[1], STDERR_FILENO);
-    close(output_pipe[0]);
-    close(output_pipe[1]);
-    _exit(aa2acp::iap2::run_bluetooth_worker(static_cast<int>(argv.size() - 1),
-                                             argv.data()));
-  }
-  close(output_pipe[1]);
-  if (child < 0) {
-    close(output_pipe[0]);
-    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
-        << "Bridge daemon: unable to start CarPlay session\n";
-    return 1;
-  }
-  auto forward_output = [&](const int timeout) {
-    pollfd descriptor{output_pipe[0], POLLIN, 0};
-    while (output_pipe[0] >= 0 && poll(&descriptor, 1, timeout) > 0) {
-      std::array<char, 4096> output{};
-      const auto count = read(output_pipe[0], output.data(), output.size());
-      if (count > 0) {
-        // Child output is already level-prefixed; preserve it verbatim.
-        std::cout.write(output.data(), count);
-        std::cout.flush();
-        descriptor.revents = 0;
-        continue;
-      }
-      close(output_pipe[0]);
-      output_pipe[0] = -1;
-    }
-  };
-  active_child = child;
-  aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
-      << "Bridge daemon: CarPlay session started\n";
-  for (;;) {
-    forward_output(0);
-    int status{};
-    if (waitpid(child, &status, WNOHANG) == child) {
-      while (output_pipe[0] >= 0)
-        forward_output(100);
-      active_child = -1;
-      if (!WIFEXITED(status)) {
-        aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
-            << "Bridge daemon: cleaning up CarPlay Wi-Fi after worker "
-               "failure\n";
-        if (!aa2acp::iap2::leave_with_networkmanager(config.wifi_interface))
-          aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
-              << "Bridge daemon: unable to disconnect CarPlay Wi-Fi\n";
-      }
-      return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
-    }
-    if (stop.stop_requested() || phone_disconnected.load()) {
-      aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
-          << "Bridge daemon: stopping active CarPlay session\n";
-      const auto forced = stop_carplay_process_group(child, &status);
-      while (output_pipe[0] >= 0)
-        forward_output(100);
-      if (forced || !WIFEXITED(status)) {
-        aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
-            << "Bridge daemon: cleaning up CarPlay Wi-Fi after "
-            << (forced ? "forced worker termination"
-                       : "abnormal worker termination")
-            << '\n';
-        if (!aa2acp::iap2::leave_with_networkmanager(config.wifi_interface))
-          aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
-              << "Bridge daemon: unable to disconnect CarPlay Wi-Fi\n";
-      }
-      active_child = -1;
-      return 128 + SIGTERM;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-  }
 }
 
 void run_carplay_preflight(const aa2acp::bridge::Config config,
