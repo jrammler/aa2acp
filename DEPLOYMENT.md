@@ -23,3 +23,17 @@ while idle and leaves it to join the car's wireless-CarPlay network during an
 active projection session. The UI is unavailable for that interval. Wireless
 Android Auto requires a second radio so its Wi-Fi path stays independent of
 the CarPlay Wi-Fi client connection.
+
+## Raspberry Pi service
+
+On the Raspberry Pi image, cloud-init installs and enables
+`aa2acp.service`. It runs as `pi`, retains its state in
+`/home/pi/.local/state/aa2acp`, and restarts after an unexpected exit. The
+service starts the deployed executable at `/home/pi/.local/bin/aa2acp`; a
+deployment updates that symlink to the copied Nix-store closure and restarts
+the service.
+
+The `aa2acp` group has USB-device access through the checked-in udev rule.
+The service account is its only intended member. This broad access is needed
+because Android phones have manufacturer-specific USB IDs before the bridge
+probes and switches them to AOAP mode.

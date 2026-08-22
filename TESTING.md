@@ -28,7 +28,7 @@ implemented. The active work is in
   that can join the head unit's CarPlay Wi-Fi network.
 - The Android phone must be connected to a data-capable USB port. The daemon
   needs persistent USB access; install `udev/70-aa2acp-android-auto.rules` and
-  run it as a user in `plugdev` as described in the README.
+  run it as a user in `aa2acp` as described in the README.
 - A LIVI development setup, or another CarPlay-capable head unit that accepts
   this development implementation. LIVI's development-only authentication
   configuration is external to this repository and is not a production

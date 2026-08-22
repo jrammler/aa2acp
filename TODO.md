@@ -27,9 +27,12 @@
 - [x] Add persisted management-hotspot settings: Wi-Fi adapter, SSID, and
   WPA2 password; expose them in the management UI.
 - [x] Bootstrap the management hotspot on first start by selecting a
-  deterministic usable Wi-Fi adapter and generating safe initial credentials.
+  deterministic usable Wi-Fi adapter and requiring replacement of its default
+  password before other configuration is available.
 - [x] Manage the hotspot lifecycle through NetworkManager shared mode (DHCP)
   and bind the management UI to its network.
+- [x] Run the bridge as a restartable systemd service on the Raspberry Pi
+  image, with declarative USB permissions for arbitrary Android phones.
 - [ ] Soak-test first pairing, existing pairing, unplug, replug, daemon
   shutdown, restart, and retained state.
 - [ ] Add wireless Android Auto with a dedicated second Wi-Fi radio.

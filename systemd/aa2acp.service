@@ -1,0 +1,17 @@
+[Unit]
+Description=AA2ACP bridge
+Wants=NetworkManager.service bluetooth.service
+After=NetworkManager.service bluetooth.service
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+SupplementaryGroups=aa2acp
+Environment=XDG_STATE_HOME=/home/pi/.local/state
+ExecStart=/home/pi/.local/bin/aa2acp
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

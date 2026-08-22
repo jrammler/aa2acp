@@ -61,14 +61,22 @@ AirPlay pairing identity, and 30 launch-rotated timestamped log files live in
 `$XDG_STATE_HOME/aa2acp` (normally `~/.local/state/aa2acp`).
 
 For wired Android Auto, install the checked-in udev rule once and ensure the
-running user belongs to `plugdev`:
+running user belongs to the dedicated `aa2acp` group:
 
 ```bash
+sudo groupadd --system aa2acp
+sudo usermod -aG aa2acp "$USER"
 sudo install -Dm644 udev/70-aa2acp-android-auto.rules \
   /etc/udev/rules.d/70-aa2acp-android-auto.rules
 sudo udevadm control --reload
-sudo udevadm trigger --subsystem-match=usb --attr-match=idVendor=18d1
+sudo udevadm trigger --subsystem-match=usb
 ```
+
+Android phones use manufacturer-specific USB IDs before AA2ACP switches them
+to Android Open Accessory Protocol mode, so the rule grants the trusted
+`aa2acp` group access to USB devices rather than maintaining a phone-ID
+allowlist. Use a dedicated service account with that group in a production
+image.
 
 ## License
 
