@@ -5,11 +5,12 @@ After=NetworkManager.service bluetooth.service
 
 [Service]
 Type=simple
+# TODO(appliance-image): run as a dedicated system account once the image
+# defines one; the state directory follows the user's XDG_STATE_HOME.
 User=pi
 Group=pi
 SupplementaryGroups=aa2acp
-Environment=XDG_STATE_HOME=/home/pi/.local/state
-ExecStart=/home/pi/.local/bin/aa2acp --no-file-log
+ExecStart=/usr/bin/aa2acp --no-file-log
 Restart=on-failure
 RestartSec=3
 

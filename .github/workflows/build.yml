@@ -4,6 +4,11 @@ name: build
 # release.yml (which then downloads the aa2acp-artifacts artifact).
 on:
   workflow_call:
+    inputs:
+      build_type:
+        description: CMAKE_BUILD_TYPE for the build job
+        type: string
+        default: RelWithDebInfo
   workflow_dispatch:
   push:
     branches: [main]
@@ -36,7 +41,7 @@ jobs:
         run: ./scripts/build-deps.sh
 
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$PWD/.deps/install"
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ inputs.build_type || 'RelWithDebInfo' }} -DCMAKE_PREFIX_PATH="$PWD/.deps/install"
 
       - name: Build
         run: cmake --build build -j"$(nproc)"

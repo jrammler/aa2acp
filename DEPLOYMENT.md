@@ -27,8 +27,9 @@ the CarPlay Wi-Fi client connection.
 ## Raspberry Pi service
 
 The released `aa2acp.deb` installs the executable, systemd units, and udev
-rule; its postinst creates the `aa2acp` group and enables `aa2acp.service`
-and `aa2acp-update.path`. The service restarts after an unexpected exit.
+rule; its postinst creates the `aa2acp` group, enables `aa2acp.service`,
+and restarts the service on package upgrades. It also restarts after an
+unexpected exit.
 A future appliance image will package this deb directly instead of relying on
 manual installation.
 

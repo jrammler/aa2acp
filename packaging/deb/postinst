@@ -13,12 +13,16 @@ configure)
 
     if [ -d /run/systemd/system ] && command -v systemctl >/dev/null; then
         # Running system: enable units, reload managers.
-        systemctl enable aa2acp.service aa2acp-update.path >/dev/null || true
+        systemctl enable aa2acp.service >/dev/null || true
         systemctl daemon-reload >/dev/null || true
+        if [ -n "$2" ]; then
+            # Upgrade (old version in $2): restart into the new binary.
+            systemctl try-restart aa2acp.service >/dev/null || true
+        fi
         [ -d /run/udev ] && udevadm control --reload >/dev/null || true
     elif command -v deb-systemd-helper >/dev/null; then
         # Offline install (image build): stage enablement without a PID 1.
-        deb-systemd-helper enable aa2acp.service aa2acp-update.path >/dev/null || true
+        deb-systemd-helper enable aa2acp.service >/dev/null || true
         deb-systemd-helper update-state aa2acp.service >/dev/null || true
     fi
     ;;

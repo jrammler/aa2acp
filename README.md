@@ -47,8 +47,9 @@ Install the package:
 sudo apt install ./aa2acp.deb
 ```
 
-The package's post-install script creates the `aa2acp` system group and enables
-the `aa2acp.service` and `aa2acp-update.path` systemd units automatically.
+The package's post-install script creates the `aa2acp` system group, enables
+the `aa2acp.service` systemd unit automatically, and restarts the service on
+package upgrades.
 
 For wired Android Auto, the running user must belong to the `aa2acp` group,
 because USB device access is granted through it (see the udev rule section

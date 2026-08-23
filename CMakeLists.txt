@@ -175,8 +175,6 @@ option(AA2ACP_INSTALL_SYSTEMD "Install systemd units with the package" ON)
 install(TARGETS aa2acp RUNTIME DESTINATION bin)
 if(AA2ACP_INSTALL_SYSTEMD)
     install(FILES systemd/aa2acp.service
-                  systemd/aa2acp-update.path
-                  systemd/aa2acp-update.service
             DESTINATION lib/systemd/system)
 endif()
 install(FILES udev/70-aa2acp-android-auto.rules DESTINATION lib/udev/rules.d)
