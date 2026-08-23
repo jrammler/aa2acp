@@ -21,6 +21,7 @@
 #include <aasdk/USB/USBWrapper.hpp>
 
 #include <boost/asio/io_service.hpp>
+#include <boost/asio/post.hpp>
 
 #include <libusb.h>
 
@@ -450,6 +451,23 @@ public:
   void onServiceDiscoveryRequest(
       const aap_protobuf::service::control::message::ServiceDiscoveryRequest &)
       override {
+    // Compute capabilities off the strand: the provider can block up to five
+    // seconds waiting for CarPlay capability discovery, which would stall
+    // every channel sharing this strand past the phone's ping timeout.
+    std::weak_ptr<ControlSession> weak = shared_from_this();
+    auto provider = head_unit_capabilities_provider_;
+    std::thread([weak, provider = std::move(provider)]() mutable {
+      auto profile = provider ? provider() : std::nullopt;
+      if (auto self = weak.lock()) {
+        boost::asio::post(self->strand_, [self, profile]() mutable {
+          self->send_service_discovery_response(profile);
+        });
+      }
+    }).detach();
+  }
+
+  void send_service_discovery_response(
+      const std::optional<aa2acp::aa::HeadUnitCapabilities> &profile) {
     aap_protobuf::service::control::message::ServiceDiscoveryResponse response;
     response.mutable_channels()->Reserve(8);
     response.set_driver_position(
@@ -479,9 +497,6 @@ public:
     media_sink->set_available_type(aap_protobuf::service::media::shared::
                                        message::MEDIA_CODEC_VIDEO_H264_BP);
     media_sink->set_available_while_in_call(true);
-    const auto profile = head_unit_capabilities_provider_
-                             ? head_unit_capabilities_provider_()
-                             : std::nullopt;
     // Copy through value_or: reading members of an engaged optional via
     // short-circuit guards trips GCC's maybe-uninitialized analysis.
     const auto caps = profile.value_or(aa2acp::aa::HeadUnitCapabilities{});

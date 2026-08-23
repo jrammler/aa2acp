@@ -869,6 +869,11 @@ int main(int argc, char **argv) {
       }
       if (start_preflight && !selected_config.head_unit_mac.empty() &&
           !selected_config.wifi_interface.empty()) {
+        // The running flag is cleared by the worker itself before the thread
+        // object becomes non-joinable; join first or move-assigning over a
+        // joinable jthread calls std::terminate.
+        if (carplay_preflight_worker.joinable())
+          carplay_preflight_worker.join();
         carplay_preflight_worker =
             std::jthread([selected_config](const std::stop_token stop) {
               run_carplay_preflight(selected_config, management_state, stop);
@@ -967,10 +972,14 @@ int main(int argc, char **argv) {
           start_scan = true;
         }
       }
-      if (start_scan)
+      if (start_scan) {
+        // Same join-before-assign rationale as carplay_preflight_worker.
+        if (bluetooth_scan_worker.joinable())
+          bluetooth_scan_worker.join();
         bluetooth_scan_worker = std::jthread([](const std::stop_token stop) {
           run_bluetooth_scan(management_state, stop);
         });
+      }
       respond(303, "text/plain", "", "Location: /\r\n");
     } else if (request.starts_with("POST /display ")) {
       const bool show_unnamed = form_field(body, "show_unnamed").has_value();
