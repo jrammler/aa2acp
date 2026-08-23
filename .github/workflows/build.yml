@@ -28,7 +28,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            cmake g++ pkg-config git dpkg-dev \
+            cmake g++ pkg-config git dpkg-dev ca-certificates \
             libssl-dev libboost1.83-dev libabsl-dev protobuf-compiler libprotobuf-dev \
             libusb-1.0-0-dev libdbus-1-dev libbluetooth-dev \
             libavcodec-dev libavutil-dev
