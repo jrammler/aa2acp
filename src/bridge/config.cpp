@@ -123,9 +123,13 @@ bool save_config(const std::filesystem::path &path, const Config &config) {
     std::size_t written = 0;
     while (written < data.size()) {
       const auto n = ::write(fd, data.data() + written, data.size() - written);
-      if (n <= 0) {
+      if (n < 0) {
+        if (errno == EINTR)
+          continue;
         return false;
       }
+      if (n == 0)
+        return false;
       written += static_cast<std::size_t>(n);
     }
     return true;
@@ -134,8 +138,13 @@ bool save_config(const std::filesystem::path &path, const Config &config) {
   ::close(fd);
 
   ok = ok && ::rename(temporary.c_str(), path.c_str()) == 0;
+  if (!ok) {
+    // Never leave a credential-bearing temp file behind on failure.
+    ::unlink(temporary.c_str());
+    return false;
+  }
   // Persist the directory entry itself (nothing to do for a bare filename).
-  if (ok && !path.parent_path().empty()) {
+  if (!path.parent_path().empty()) {
     if (const int dir_fd =
             ::open(path.parent_path().c_str(), O_RDONLY | O_DIRECTORY);
         dir_fd >= 0) {
@@ -143,7 +152,7 @@ bool save_config(const std::filesystem::path &path, const Config &config) {
       ::close(dir_fd);
     }
   }
-  return ok;
+  return true;
 }
 
 } // namespace aa2acp::bridge

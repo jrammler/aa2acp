@@ -91,9 +91,13 @@ bool save_pairing_record(const std::filesystem::path &path,
     std::size_t written = 0;
     while (written < size) {
       const auto n = ::write(fd, bytes + written, size - written);
-      if (n <= 0) {
+      if (n < 0) {
+        if (errno == EINTR)
+          continue;
         return false;
       }
+      if (n == 0)
+        return false;
       written += static_cast<std::size_t>(n);
     }
     return true;

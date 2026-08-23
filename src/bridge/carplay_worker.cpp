@@ -145,12 +145,17 @@ int CarPlayWorker::run(std::vector<std::string> arguments,
           << "Bridge daemon: CarPlay worker did not exit after stop; "
              "killing child\n";
       ::kill(pid_, SIGKILL);
+      stop_deadline.reset(); // SIGKILL is terminal; no further escalation
     }
     pollfd descriptors[]{{output_fd_, POLLIN, 0}, {control_fd_, POLLIN, 0}};
     if (poll(descriptors, 2, 100) > 0) {
       if ((descriptors[0].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0 ||
           (descriptors[1].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
         hooks.on_connection_lost();
+        // Reap so a SIGKILLed child does not linger as a zombie.
+        int child_status{};
+        while (waitpid(pid_, &child_status, 0) < 0 && errno == EINTR) {
+        }
         active_child = -1;
         return 1;
       }

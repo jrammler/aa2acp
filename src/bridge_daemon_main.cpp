@@ -580,8 +580,15 @@ int main(int argc, char **argv) {
     const std::string argument = argv[index];
     if (argument == "--config" && index + 1 < argc)
       config_path = argv[++index];
-    else if (argument == "--port" && index + 1 < argc)
-      port = std::stoi(argv[++index]);
+    else if (argument == "--port" && index + 1 < argc) {
+      try {
+        port = static_cast<int>(std::stoul(argv[++index]));
+        if (port <= 0 || port > 65535)
+          port = 8080;
+      } catch (const std::exception &) {
+        port = 8080;
+      }
+    }
     else if (argument == "--no-file-log")
       continue;
     else {
