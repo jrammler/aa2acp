@@ -77,8 +77,8 @@ bool save_pairing_record(const std::filesystem::path &path,
   // owner-only permissions so it is never briefly world-readable.
   const auto temporary = path.string() + ".tmp";
   const int fd =
-      ::open(temporary.c_str(),
-             O_WRONLY | O_CREAT | O_EXCL | O_TRUNC, S_IRUSR | S_IWUSR);
+      ::open(temporary.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_TRUNC,
+             S_IRUSR | S_IWUSR);
   if (fd < 0) {
     return false;
   }
@@ -98,14 +98,13 @@ bool save_pairing_record(const std::filesystem::path &path,
     }
     return true;
   };
-  bool ok = write_all(kMagic.data(), kMagic.size()) &&
-            write_u16(fd, static_cast<std::uint16_t>(
-                              record.controller_id.size())) &&
-            write_all(record.controller_id.data(),
-                      record.controller_id.size()) &&
-            write_all(record.controller.private_key.data(), 32) &&
-            write_all(record.controller.public_key.data(), 32) &&
-            write_all(record.accessory_public_key.data(), 32) && ::fsync(fd) == 0;
+  bool ok =
+      write_all(kMagic.data(), kMagic.size()) &&
+      write_u16(fd, static_cast<std::uint16_t>(record.controller_id.size())) &&
+      write_all(record.controller_id.data(), record.controller_id.size()) &&
+      write_all(record.controller.private_key.data(), 32) &&
+      write_all(record.controller.public_key.data(), 32) &&
+      write_all(record.accessory_public_key.data(), 32) && ::fsync(fd) == 0;
   ::close(fd);
   if (!ok) {
     close_and_remove();

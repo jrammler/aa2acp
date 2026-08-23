@@ -140,9 +140,8 @@ send_encrypted(const int socket_fd, aa2acp::airplay::ControlCipher &cipher,
             header->second != std::to_string(*expected_cseq)) {
           aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
               << "AirPlay: discarding response with "
-              << (header == parsed->headers.end()
-                      ? std::string("no CSeq")
-                      : "CSeq " + header->second)
+              << (header == parsed->headers.end() ? std::string("no CSeq")
+                                                  : "CSeq " + header->second)
               << " while waiting for " << *expected_cseq << '\n';
           response_plaintext.erase(response_plaintext.begin(),
                                    response_plaintext.begin() +
