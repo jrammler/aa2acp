@@ -34,9 +34,8 @@ end with [LIVI](https://github.com/f-io/LIVI):
 Media and guidance audio forwarding are verified with LIVI; system-audio
 forwarding is implemented but not yet exercised with a phone-side trigger.
 Call audio and physical-control forwarding are not implemented yet. See
-[TODO.md](TODO.md) for the active task list,
-[TESTING.md](TESTING.md) for the verified end-to-end runbook, and
-[DEPLOYMENT.md](DEPLOYMENT.md) for the management-network behavior.
+[TODO.md](TODO.md) for the active task list and
+[TESTING.md](TESTING.md) for the end-to-end runbook and diagnostics.
 
 ## Installation
 
@@ -61,16 +60,34 @@ with its state in `/var/lib/aa2acp`.
 
 ## Usage
 
-The management UI listens on all IPv4 interfaces at port 8080. From a device
-connected to its management hotspot, open `http://10.42.0.1:8080` (or the
-hotspot gateway address if it was configured differently). Its configuration,
-AirPlay pairing identity, and 30 launch-rotated timestamped log files live in
-`$XDG_STATE_HOME/aa2acp` (normally `~/.local/state/aa2acp`).
+AA2ACP serves its management UI on a WPA2-protected Wi-Fi hotspot that the
+daemon itself configures through NetworkManager shared mode (DHCP included).
+Connect a phone or laptop to the hotspot and open `http://10.42.0.1:8080`
+(or the hotspot gateway address if it was configured differently).
+
+- **First start:** the bridge picks the first usable Wi-Fi adapter and starts
+  a hotspot named `AA2ACP-<MAC suffix>-1` with the default password
+  `changeme`. The UI permits no other action until you replace that password.
+- **Changing the password:** the UI asks for confirmation and, by default,
+  increments the SSID's final counter (e.g. `-1` → `-2`) so devices reconnect
+  to the new network without forgetting the old one. Adapter, SSID, and
+  password are persisted and can all be changed later in the UI.
+
+Configuration, the AirPlay pairing identity, and 30 launch-rotated timestamped
+log files live in `$XDG_STATE_HOME/aa2acp`: `/var/lib/aa2acp` for the deb
+install, `~/.local/state/aa2acp` when running as your own user from a source
+build.
 
 Open the UI, scan if necessary, select the CarPlay head unit's Bluetooth
 address, select the Wi-Fi interface that should join its CarPlay network, save,
 then plug in the Android phone. See [TESTING.md](TESTING.md) for the full
 runbook and expected log output.
+
+With wired Android Auto and one Wi-Fi adapter, the adapter hosts the hotspot
+while idle; during an active projection session the bridge joins the car's
+wireless-CarPlay network instead, so the UI is unavailable for that interval.
+Wireless Android Auto (planned) requires a second radio so its Wi-Fi path
+stays independent of the CarPlay Wi-Fi client connection.
 
 ### Wired Android Auto USB access
 
