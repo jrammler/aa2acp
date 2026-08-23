@@ -74,9 +74,20 @@ public:
   [[nodiscard]] const Lsp &lsp() const { return lsp_; }
 
 private:
+  struct PendingMessage {
+    std::uint8_t sequence;
+    std::vector<std::uint8_t> frame;
+    std::chrono::steady_clock::time_point deadline;
+    unsigned retries;
+  };
+
   void send_marker();
   void send_syn(std::chrono::steady_clock::time_point now);
   void send_ack();
+  std::vector<std::uint8_t> encode_packet(std::span<const std::uint8_t> payload,
+                                          std::uint8_t sequence,
+                                          std::uint8_t control,
+                                          std::uint8_t session_id = 0);
   void write_packet(std::span<const std::uint8_t> payload,
                     std::uint8_t sequence, std::uint8_t control,
                     std::uint8_t session_id = 0);
@@ -97,6 +108,10 @@ private:
   std::vector<std::uint8_t> receive_buffer_;
   std::chrono::steady_clock::time_point next_marker_{};
   std::chrono::steady_clock::time_point next_syn_{};
+  // Unacknowledged control messages awaiting cumulative acknowledgement.
+  std::vector<PendingMessage> pending_;
+  std::uint8_t syn_sequence_{};
+  bool syn_outstanding_{false};
 };
 
 } // namespace aa2acp::iap2

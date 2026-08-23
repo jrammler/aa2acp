@@ -1,4 +1,5 @@
 #include "aa2acp/airplay/crypto.hpp"
+#include <algorithm>
 
 #include <openssl/evp.h>
 #include <openssl/kdf.h>
@@ -220,6 +221,13 @@ x25519_shared(const std::span<const std::uint8_t> private_key,
       EVP_PKEY_derive(context.get(), shared.data(), &length) != 1)
     return std::nullopt;
   shared.resize(length);
+  // RFC 7748 §6.1: reject an all-zero shared secret, which indicates a
+  // low-order peer point and a failed contribution to the key.
+  const auto all_zero =
+      std::all_of(shared.begin(), shared.end(),
+                  [](const std::uint8_t byte) { return byte == 0; });
+  if (all_zero)
+    return std::nullopt;
   return shared;
 }
 

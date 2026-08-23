@@ -118,6 +118,15 @@ void PhoneLink::start(const std::chrono::steady_clock::time_point now) {
 void PhoneLink::receive(const std::span<const std::uint8_t> bytes,
                         const std::chrono::steady_clock::time_point now) {
   receive_buffer_.insert(receive_buffer_.end(), bytes.begin(), bytes.end());
+  // A peer sending valid headers with huge lengths (or flooding frames faster
+  // than they are consumed) must not grow the buffer without bound.
+  constexpr std::size_t kMaxReceiveBuffer = 128 * 1024;
+  if (receive_buffer_.size() > kMaxReceiveBuffer) {
+    state_ = State::Dead;
+    receive_buffer_.clear();
+    log("iAP2: receive buffer overflow; link is dead");
+    return;
+  }
 
   if (state_ == State::Detect) {
     const auto marker =
@@ -167,14 +176,43 @@ void PhoneLink::tick(const std::chrono::steady_clock::time_point now) {
   if (state_ == State::Negotiate && now >= next_syn_) {
     send_syn(now);
   }
+  // Retransmit control messages whose deadline expired, up to the negotiated
+  // retry limit; a message exceeding it is lost and logged.
+  for (auto &message : pending_) {
+    if (now < message.deadline)
+      continue;
+    if (message.retries >= lsp_.max_retransmissions) {
+      log("iAP2: control message exhausted retransmissions");
+      message.deadline =
+          now + std::chrono::milliseconds(lsp_.retransmission_timeout);
+      continue;
+    }
+    ++message.retries;
+    message.deadline =
+        now + std::chrono::milliseconds(lsp_.retransmission_timeout);
+    (void)send_(message.frame);
+  }
 }
 
 bool PhoneLink::send_control(const std::span<const std::uint8_t> payload) {
   if (state_ != State::Normal || payload.empty()) {
     return false;
   }
+  // Respect the negotiated window of unacknowledged messages.
+  if (pending_.size() >= lsp_.max_outgoing) {
+    log("iAP2: send window full; dropping control message");
+    return false;
+  }
   ++sent_sequence_;
-  write_packet(payload, sent_sequence_, kControlAck, kControlSessionId);
+  PendingMessage message;
+  message.sequence = sent_sequence_;
+  message.frame =
+      encode_packet(payload, sent_sequence_, kControlAck, kControlSessionId);
+  message.deadline = std::chrono::steady_clock::now() +
+                     std::chrono::milliseconds(lsp_.retransmission_timeout);
+  message.retries = 0;
+  (void)send_(message.frame);
+  pending_.push_back(std::move(message));
   return true;
 }
 
@@ -185,17 +223,21 @@ void PhoneLink::send_syn(const std::chrono::steady_clock::time_point now) {
     return;
   }
   const auto payload = encode_lsp(lsp_);
-  ++sent_sequence_;
-  write_packet(payload, sent_sequence_, kControlSyn);
+  if (!syn_outstanding_) {
+    ++sent_sequence_;
+    syn_sequence_ = sent_sequence_;
+    syn_outstanding_ = true;
+  }
+  // Retransmissions repeat the identical SYN frame per the iAP2 spec.
+  write_packet(payload, syn_sequence_, kControlSyn);
   next_syn_ = now + std::chrono::milliseconds(500);
 }
 
 void PhoneLink::send_ack() { write_packet({}, sent_sequence_, kControlAck); }
 
-void PhoneLink::write_packet(const std::span<const std::uint8_t> payload,
-                             const std::uint8_t sequence,
-                             const std::uint8_t control,
-                             const std::uint8_t session_id) {
+std::vector<std::uint8_t> PhoneLink::encode_packet(
+    const std::span<const std::uint8_t> payload, const std::uint8_t sequence,
+    const std::uint8_t control, const std::uint8_t session_id) {
   const auto header = encode_header(
       {static_cast<std::uint16_t>(payload.empty() ? 9 : payload.size() + 10),
        control, sequence, last_received_sequence_, session_id});
@@ -204,7 +246,21 @@ void PhoneLink::write_packet(const std::span<const std::uint8_t> payload,
     packet.insert(packet.end(), payload.begin(), payload.end());
     packet.push_back(checksum(payload));
   }
-  (void)send_(packet);
+  return packet;
+}
+
+void PhoneLink::write_packet(const std::span<const std::uint8_t> payload,
+                             const std::uint8_t sequence,
+                             const std::uint8_t control,
+                             const std::uint8_t session_id) {
+  (void)send_(encode_packet(payload, sequence, control, session_id));
+}
+
+// Cumulative acknowledgement over wrapping uint8 sequence numbers: returns
+// true when `sequence` has been acknowledged by `acknowledgement`.
+static bool acknowledged_by(const std::uint8_t sequence,
+                            const std::uint8_t acknowledgement) {
+  return static_cast<std::int8_t>(acknowledgement - sequence) >= 0;
 }
 
 void PhoneLink::process_packets(
@@ -264,24 +320,61 @@ void PhoneLink::handle_packet(const Header &header,
     log("iAP2: accessory sent reset");
     return;
   }
+
+  // Cumulative acknowledgement of our outstanding messages.
+  if ((header.control & kControlAck) != 0 && !pending_.empty()) {
+    std::erase_if(pending_, [&header](const PendingMessage &message) {
+      return acknowledged_by(message.sequence, header.acknowledgement);
+    });
+  }
+
   if ((header.control & kControlSyn) != 0) {
+    if (state_ == State::Normal) {
+      // Renegotiation mid-session would invalidate the established flow.
+      log("iAP2: ignoring SYN while link is established");
+      return;
+    }
     if (const auto received_lsp = decode_lsp(payload)) {
       lsp_ = *received_lsp;
       last_received_sequence_ = header.sequence;
+      syn_outstanding_ = false;
       send_ack();
+      if (state_ == State::Negotiate) {
+        // The accessory's SYN completes negotiation even if its ACK for our
+        // own SYN has not arrived yet.
+        state_ = State::Normal;
+        log("iAP2: link established (NORMAL)");
+      }
+      return;
     }
+    log("iAP2: received undecodable LSP payload");
+    return;
   }
+
   if ((header.control & kControlAck) != 0 && state_ == State::Negotiate) {
-    state_ = State::Normal;
-    log("iAP2: link established (NORMAL)");
+    // Accept the link as established only when the ACK acknowledges our own
+    // outstanding SYN; anything else cannot advance the handshake.
+    if (syn_outstanding_ &&
+        acknowledged_by(syn_sequence_, header.acknowledgement)) {
+      syn_outstanding_ = false;
+      state_ = State::Normal;
+      log("iAP2: link established (NORMAL)");
+    } else {
+      log("iAP2: received ACK that does not acknowledge our SYN");
+    }
+    return;
   }
+
   if ((header.control & ~kControlAck) == 0 && !payload.empty()) {
+    if (header.sequence == last_received_sequence_) {
+      // Duplicate/replayed frame: re-acknowledge but do not deliver twice.
+      send_ack();
+      return;
+    }
     last_received_sequence_ = header.sequence;
     if (header.session_id == kControlSessionId && control_data_) {
       control_data_(payload);
     }
-    // The production sender will implement cumulative ACK handling. ACKing
-    // each control packet is conservative and keeps this bootstrap reliable.
     send_ack();
   }
   (void)now;
