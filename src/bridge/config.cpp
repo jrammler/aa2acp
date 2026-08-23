@@ -90,10 +90,12 @@ bool save_config(const std::filesystem::path &path, const Config &config) {
           std::string::npos ||
       config.airplay_pairing_store.string().find('\0') != std::string::npos)
     return false;
-  std::error_code error;
-  std::filesystem::create_directories(path.parent_path(), error);
-  if (error)
-    return false;
+  if (!path.parent_path().empty()) {
+    std::error_code error;
+    std::filesystem::create_directories(path.parent_path(), error);
+    if (error)
+      return false;
+  }
   // A temp name unique to this call: two request threads saving
   // concurrently must not interleave into the same file.
   static std::atomic<unsigned> save_counter{};
