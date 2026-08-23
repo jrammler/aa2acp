@@ -124,6 +124,14 @@ send_encrypted(const int socket_fd, aa2acp::airplay::ControlCipher &cipher,
         break;
       response_plaintext.insert(response_plaintext.end(), frame->begin(),
                                 frame->end());
+      // Bound memory against ciphertext that never forms a complete header.
+      constexpr std::size_t kMaxResponseBytes = 1024 * 1024;
+      if (response_plaintext.size() > kMaxResponseBytes) {
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+            << "AirPlay: encrypted response exceeded 1 MiB without "
+               "completing\n";
+        return std::nullopt;
+      }
       const auto complete =
           aa2acp::airplay::complete_response_size(response_plaintext);
       if (!complete)

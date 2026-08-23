@@ -183,6 +183,9 @@ private:
   // decode.
   static constexpr std::size_t kMaxDepth = 64;
   static constexpr std::size_t kMaxMaterializedNodes = 65536;
+  // Bounds total data bytes copied out of the file: shared references can
+  // multiply one large node into many value copies.
+  static constexpr std::size_t kMaxMaterializedBytes = 8 * 1024 * 1024;
 
   std::optional<std::pair<std::size_t, std::size_t>>
   count(const std::size_t offset, const std::uint8_t nibble) const {
@@ -233,6 +236,11 @@ private:
     const auto [items, data_offset] = *parsed_count;
     if ((type == 4 || type == 5) && data_offset <= bytes_.size() &&
         items <= bytes_.size() - data_offset) {
+      // Shared references can re-materialize the same node many times;
+      // bound the total copied bytes, not just the node count.
+      materialized_bytes_ += items;
+      if (materialized_bytes_ > kMaxMaterializedBytes)
+        return std::nullopt;
       if (type == 4)
         return PlistValue(Bytes(bytes_.begin() + data_offset,
                                 bytes_.begin() + data_offset + items));
@@ -241,6 +249,9 @@ private:
     }
     if (type == 6 && data_offset <= bytes_.size() &&
         items <= (bytes_.size() - data_offset) / 2) {
+      materialized_bytes_ += items * 3;
+      if (materialized_bytes_ > kMaxMaterializedBytes)
+        return std::nullopt;
       std::string text;
       for (std::size_t item = 0; item < items; ++item) {
         const auto code =
@@ -302,6 +313,7 @@ private:
   std::size_t ref_size_{};
   std::vector<std::size_t> offsets_;
   mutable std::size_t materialized_nodes_{0};
+  mutable std::size_t materialized_bytes_{0};
 };
 
 } // namespace

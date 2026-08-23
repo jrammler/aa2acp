@@ -345,7 +345,12 @@ void PhoneLink::handle_packet(const Header &header,
           std::max(negotiated.retransmission_timeout, std::uint16_t{100});
       negotiated.max_outgoing =
           std::min(negotiated.max_outgoing, std::uint8_t{128});
+      negotiated.max_retransmissions =
+          std::max(negotiated.max_retransmissions, std::uint8_t{1});
+      negotiated.ack_timeout =
+          std::max(negotiated.ack_timeout, std::uint16_t{50});
       lsp_ = negotiated;
+      last_sequence_valid_ = true;
       last_received_sequence_ = header.sequence;
       syn_outstanding_ = false;
       send_ack();
@@ -381,11 +386,20 @@ void PhoneLink::handle_packet(const Header &header,
       log("iAP2: ignoring data frame while link is not established");
       return;
     }
-    if (header.sequence == last_received_sequence_) {
+    if (last_sequence_valid_ &&
+        static_cast<std::uint8_t>(header.sequence - last_received_sequence_) >
+            1) {
+      // Ordered transport should never skip ahead; accept but make the gap
+      // visible in debug logs.
+      log("iAP2: sequence gap detected; accepting frame");
+    }
+    if (last_sequence_valid_ && header.sequence == last_received_sequence_) {
       // Duplicate/replayed frame: re-acknowledge but do not deliver twice.
+      log("iAP2: duplicate sequence dropped");
       send_ack();
       return;
     }
+    last_sequence_valid_ = true;
     last_received_sequence_ = header.sequence;
     if (header.session_id == kControlSessionId && control_data_) {
       control_data_(payload);
