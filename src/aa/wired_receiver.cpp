@@ -489,12 +489,10 @@ public:
         aap_protobuf::service::media::sink::message::VideoCodecResolutionType;
     auto resolution = Resolution::VIDEO_1280x720;
     std::string resolution_detail = "1280x720 fallback";
-    if (caps.width_pixels == 800 &&
-        caps.height_pixels == 480) {
+    if (caps.width_pixels == 800 && caps.height_pixels == 480) {
       resolution = Resolution::VIDEO_800x480;
       resolution_detail = "800x480 cached profile";
-    } else if (caps.width_pixels == 1920 &&
-               caps.height_pixels == 1080) {
+    } else if (caps.width_pixels == 1920 && caps.height_pixels == 1080) {
       resolution = Resolution::VIDEO_1920x1080;
       resolution_detail = "1920x1080 cached profile";
     }

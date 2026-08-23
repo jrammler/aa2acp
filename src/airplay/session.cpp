@@ -992,7 +992,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   }
   if (aa2acp::bridge::debug_logging_enabled())
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
-        << "AirPlay: screen SETUP received data port " << screen_port_value << '\n';
+        << "AirPlay: screen SETUP received data port " << screen_port_value
+        << '\n';
 
   const auto record_response =
       send_encrypted(socket_fd, control, encrypted_read_buffer,
