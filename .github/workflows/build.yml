@@ -28,7 +28,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            cmake g++ pkg-config git dpkg-dev ca-certificates \
+            cmake g++ pkg-config git dpkg-dev file ca-certificates \
             libssl-dev \
             libboost1.83-dev libboost-system1.83-dev libboost-log1.83-dev libboost-test1.83-dev \
             libabsl-dev protobuf-compiler libprotobuf-dev \
