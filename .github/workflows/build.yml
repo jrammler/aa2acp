@@ -36,10 +36,7 @@ jobs:
         run: |
           set -o pipefail
           if ! cmake -S . -B build -DCMAKE_PREFIX_PATH="$PWD/.deps/install" 2>&1 | tee cmake-config.log; then
-            { echo "### Configure log tail"; echo '```'; tail -60 cmake-config.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-            tail -5 cmake-config.log | while IFS= read -r line; do
-              echo "::error::$line"
-            done
+            echo "::error::configure failed$(tail -60 cmake-config.log | sed ':a;N;$!ba;s/\n/%0A/g')"
             exit 1
           fi
 
