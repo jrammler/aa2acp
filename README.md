@@ -38,8 +38,9 @@ Releases are published on [GitHub Releases](../../releases). Each release
 provides two artifacts:
 
 - `aa2acp.deb` — an arm64 Debian package with the binary, systemd units, udev
-  rule, and maintainer scripts;
-- `aa2acp` — the raw arm64 binary.
+  rule, and maintainer scripts. This is what most users want.
+- `aa2acp` — the raw arm64 binary, mainly useful for developers running it
+  from a source tree (see Development).
 
 Install the package:
 
@@ -47,22 +48,10 @@ Install the package:
 sudo apt install ./aa2acp.deb
 ```
 
-The package's post-install script creates the `aa2acp` system group, enables
-the `aa2acp.service` systemd unit automatically, and restarts the service on
-package upgrades.
-
-For wired Android Auto, the running user must belong to the `aa2acp` group,
-because USB device access is granted through it (see the udev rule section
-below):
-
-```bash
-sudo usermod -aG aa2acp "$USER"
-```
-
-Log out and back in so the group membership takes effect.
-
-The raw `aa2acp` binary can be run without sudo for configuration or AirPlay
-testing, but wired Android Auto will fail without the group setup above.
+The package's post-install script creates the `aa2acp` system user and group,
+enables the `aa2acp.service` systemd unit automatically, and restarts the
+service on package upgrades. The service runs as the `aa2acp` system account
+with its state in `/var/lib/aa2acp`.
 
 ## Usage
 
@@ -80,25 +69,16 @@ runbook and expected log output.
 ### Wired Android Auto USB access
 
 Android phones use manufacturer-specific USB IDs before AA2ACP switches them
-to Android Open Accessory Protocol mode, so the rule grants the trusted
+to Android Open Accessory Protocol mode, so the deb's udev rule grants the
 `aa2acp` group access to USB devices rather than maintaining a phone-ID
-allowlist. The deb package installs
-`/lib/udev/rules.d/70-aa2acp-android-auto.rules` and creates the group; only
-the user membership above is left to do manually. For source builds, install
-the checked-in rule once:
+allowlist; the service runs under a dedicated `aa2acp` system account that is
+the group's only member.
 
-```bash
-sudo groupadd --system aa2acp
-sudo usermod -aG aa2acp "$USER"
-sudo install -Dm644 udev/70-aa2acp-android-auto.rules \
-  /etc/udev/rules.d/70-aa2acp-android-auto.rules
-sudo udevadm control --reload
-sudo udevadm trigger --subsystem-match=usb
-```
-
-The deb package runs the service under a dedicated `aa2acp` system account
-(state in `/var/lib/aa2acp`), which is the group's only intended member in a
-production setup.
+When building from source, you run the binary as your own user and need the
+same access yourself: install the checked-in udev rule and add your user to
+the `aa2acp` group (you know the drill: `groupadd --system`, `usermod -aG`,
+re-login), then copy `udev/70-aa2acp-android-auto.rules` into
+`/etc/udev/rules.d/` and reload udev.
 
 ## Development
 
