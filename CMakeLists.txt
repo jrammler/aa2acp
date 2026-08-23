@@ -141,8 +141,15 @@ if(AA2ACP_BUILD_DIAGNOSTICS)
   target_compile_options(aa2acp-iap2-bt PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
+# Bundle the pinned aasdk/aap_protobuf shared libraries (from
+# CMAKE_PREFIX_PATH) into a private directory with an RPATH; all other
+# dependencies resolve against the distro via dpkg-shlibdeps Depends.
+find_library(AASDK_SHARED_LIBRARY NAMES aasdk REQUIRED)
+find_library(AAP_PROTOBUF_SHARED_LIBRARY NAMES aap_protobuf REQUIRED)
+
 add_executable(aa2acp src/bridge_daemon_main.cpp)
 target_link_libraries(aa2acp PRIVATE bridge_config bridge_daemon_log bridge_media_forwarders bridge_management_ui bridge_carplay_worker bluez_inventory android_auto_usb h264_normalizer airplay_rtsp iap2_link iap2_bluetooth_worker)
+set_property(TARGET aa2acp PROPERTY INSTALL_RPATH "$ORIGIN/../lib/aa2acp")
 target_compile_options(aa2acp PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 add_executable(aa2acp-android-auto-usb src/android_auto_usb_main.cpp)
@@ -178,6 +185,8 @@ endif()
 option(AA2ACP_INSTALL_SYSTEMD "Install systemd units with the package" ON)
 
 install(TARGETS aa2acp RUNTIME DESTINATION bin)
+install(FILES "${AASDK_SHARED_LIBRARY}" "${AAP_PROTOBUF_SHARED_LIBRARY}"
+        DESTINATION lib/aa2acp)
 if(AA2ACP_INSTALL_SYSTEMD)
     install(FILES systemd/aa2acp.service
             DESTINATION lib/systemd/system)
