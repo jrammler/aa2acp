@@ -57,6 +57,12 @@ jobs:
 
       - name: Package
         run: |
+          # Let dpkg-shlibdeps resolve the bundled aasdk libs (they are
+          # shipped inside the deb, so no distro dependency is generated
+          # for them; everything else gets a proper Depends entry).
+          for f in .deps/install/lib/libaasdk.so* .deps/install/lib/libaap_protobuf.so*; do
+            ln -sf "$PWD/$f" /usr/lib/aarch64-linux-gnu/
+          done
           cpack --config build/CPackConfig.cmake
           mv *.deb aa2acp.deb
           cp build/aa2acp aa2acp
