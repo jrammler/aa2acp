@@ -1,7 +1,9 @@
 #include "aa2acp/bridge/config.hpp"
 
+#include <fcntl.h>
 #include <fstream>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include <cstdlib>
 
@@ -90,7 +92,10 @@ bool save_config(const std::filesystem::path &path, const Config &config) {
   std::filesystem::create_directories(path.parent_path(), error);
   if (error)
     return false;
-  const auto temporary = path.string() + ".tmp";
+  // A unique temp name per writer: two request threads saving concurrently
+  // must not interleave into the same file.
+  const auto temporary =
+      path.string() + ".tmp." + std::to_string(static_cast<long>(::getpid()));
   {
     std::ofstream stream(temporary, std::ios::trunc);
     if (!stream)
@@ -108,8 +113,24 @@ bool save_config(const std::filesystem::path &path, const Config &config) {
     if (!stream)
       return false;
   }
-  return chmod(temporary.c_str(), S_IRUSR | S_IWUSR) == 0 &&
-         std::rename(temporary.c_str(), path.c_str()) == 0;
+  // Flush data to storage before renaming: without fsync, a power loss can
+  // commit the rename while the content blocks are still in page cache,
+  // leaving an empty or truncated config behind.
+  if (const int fd = ::open(temporary.c_str(), O_RDONLY); fd >= 0) {
+    ::fsync(fd);
+    ::close(fd);
+  }
+  if (::chmod(temporary.c_str(), S_IRUSR | S_IWUSR) != 0 ||
+      ::rename(temporary.c_str(), path.c_str()) != 0)
+    return false;
+  // Persist the directory entry itself.
+  if (const int dir_fd =
+          ::open(path.parent_path().c_str(), O_RDONLY | O_DIRECTORY);
+      dir_fd >= 0) {
+    ::fsync(dir_fd);
+    ::close(dir_fd);
+  }
+  return true;
 }
 
 } // namespace aa2acp::bridge

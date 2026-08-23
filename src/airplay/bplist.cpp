@@ -177,6 +177,10 @@ public:
   }
 
 private:
+  // Containers reference other nodes; a crafted file may reference itself.
+  // Bound recursion so hostile input cannot exhaust the stack.
+  static constexpr std::size_t kMaxDepth = 64;
+
   std::optional<std::pair<std::size_t, std::size_t>>
   count(const std::size_t offset, const std::uint8_t nibble) const {
     if (nibble != 15)
@@ -190,8 +194,9 @@ private:
     return std::pair{static_cast<std::size_t>(*value), offset + 2 + size};
   }
 
-  std::optional<PlistValue> object(const std::size_t index) const {
-    if (index >= offsets_.size())
+  std::optional<PlistValue> object(const std::size_t index,
+                                   const std::size_t depth = 0) const {
+    if (index >= offsets_.size() || depth > kMaxDepth)
       return std::nullopt;
     const auto offset = offsets_[index];
     const auto marker = bytes_[offset];
@@ -265,7 +270,7 @@ private:
       if (type == 0xa) {
         PlistValue::Array result;
         for (const auto ref : refs) {
-          const auto value = object(ref);
+          const auto value = object(ref, depth + 1);
           if (!value)
             return std::nullopt;
           result.push_back(*value);
@@ -274,8 +279,8 @@ private:
       }
       PlistValue::Dictionary result;
       for (std::size_t item = 0; item < items; ++item) {
-        const auto key = object(refs[item]);
-        const auto value = object(refs[items + item]);
+        const auto key = object(refs[item], depth + 1);
+        const auto value = object(refs[items + item], depth + 1);
         const auto key_string =
             key ? std::get_if<std::string>(&key->data) : nullptr;
         if (!key_string || !value)

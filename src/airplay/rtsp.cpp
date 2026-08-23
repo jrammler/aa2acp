@@ -72,8 +72,17 @@ complete_response_size(const std::span<const std::uint8_t> bytes) {
     }
     cursor = line_end + 2;
   }
-  const auto size = header_end + 4 + content_length;
-  return bytes.size() >= size ? std::optional<std::size_t>(size) : std::nullopt;
+  // Reject absurd lengths (memory exhaustion) and compute completion
+  // without wrap-around on near-SIZE_MAX values.
+  constexpr std::size_t kMaxContentLength = 1024 * 1024;
+  if (content_length > kMaxContentLength) {
+    return std::nullopt;
+  }
+  const auto body_start = header_end + 4;
+  if (bytes.size() - body_start < content_length) {
+    return std::nullopt;
+  }
+  return body_start + content_length;
 }
 
 std::optional<Response>
