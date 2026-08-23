@@ -201,7 +201,9 @@ set(CPACK_PACKAGE_CONTACT "Johannes Rammler <johannes.rammler@gmail.com>")
 set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE arm64)
 # Built in a debian:trixie container matching Raspberry Pi OS, so
 # dpkg-shlibdeps can compute real Depends for the runtime libraries.
+# PRIVATE_DIRS lets shlibdeps scan the bundled private lib dir too.
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS_PRIVATE_DIRS ON)
 # Maintainer script: creates the aa2acp group and enables systemd units.
 # Safe in chroots/offline installs (see the script header).
 set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA "${CMAKE_SOURCE_DIR}/packaging/deb/postinst")
