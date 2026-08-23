@@ -17,6 +17,9 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/aa2acp
+# The media forwarders create their Unix sockets in /tmp; PrivateTmp gives
+# the service a private writable instance (shared with its forked workers).
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target
