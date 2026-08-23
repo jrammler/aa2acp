@@ -182,7 +182,7 @@ set(CPACK_PACKAGE_NAME aa2acp)
 set(CPACK_PACKAGE_VERSION 0.1.0)
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Android Auto to CarPlay Raspberry Pi bridge")
 set(CPACK_PACKAGE_VENDOR aa2acp)
-set(CPACK_PACKAGE_CONTACT "jrammler <jrammler@users.noreply.github.com>")
+set(CPACK_PACKAGE_CONTACT "Johannes Rammler <johannes.rammler@gmail.com>")
 set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE arm64)
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS OFF)
 # Maintainer script: creates the aa2acp group and enables systemd units.
