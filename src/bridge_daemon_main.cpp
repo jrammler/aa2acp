@@ -588,8 +588,7 @@ int main(int argc, char **argv) {
       } catch (const std::exception &) {
         port = 8080;
       }
-    }
-    else if (argument == "--no-file-log")
+    } else if (argument == "--no-file-log")
       continue;
     else {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
