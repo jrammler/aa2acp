@@ -32,7 +32,15 @@ jobs:
         run: ./scripts/build-deps.sh
 
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_PREFIX_PATH="$PWD/.deps/install"
+        id: configure
+        run: |
+          set -o pipefail
+          if ! cmake -S . -B build -DCMAKE_PREFIX_PATH="$PWD/.deps/install" 2>&1 | tee cmake-config.log; then
+            tail -30 cmake-config.log | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+            exit 1
+          fi
 
       - name: Build
         run: cmake --build build -j"$(nproc)"
@@ -55,6 +63,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check formatting
         run: |
-          sudo apt-get update && sudo apt-get install -y clang-format
+          # Match the version used by the Nix dev shell (clang-tools).
+          pip install --break-system-packages 'clang-format==21.*'
           find include src tests -type f \( -name '*.cpp' -o -name '*.hpp' \) \
             -print0 | xargs -0 clang-format --dry-run --Werror
