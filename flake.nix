@@ -49,11 +49,13 @@
         };
 
       # Shared dependency set for the package and dev shells. Pass
+# Canonical formatter: clang-format 21 (see .github/workflows/build.yml,
+# which pins the same major via pip).
       # aasdk = null to omit it (see the no-aasdk shell).
       commonBuildInputs = { pkgs, aasdk ? null }:
         builtins.filter (v: v != null) (with pkgs; [
           bluez bluez.dev dbus systemd.dev glib openssl.dev boost183 libusb1
-          ffmpeg-full ffmpeg-full.dev protobuf
+          ffmpeg-full ffmpeg-full.dev protobuf abseil-cpp
           aasdk
         ]);
 
@@ -95,7 +97,7 @@
               inherit pkgs;
               aasdk = mkAasdkPackage system;
             } ++ (with pkgs; [
-              cmake clang-tools ninja gcc gnumake pkg-config git openssh rsync
+              cmake llvmPackages_21.clang-tools ninja gcc gnumake pkg-config git openssh rsync
             ]);
             shellHook = ''
               echo 'aa2acp development shell'
@@ -109,7 +111,7 @@
               inherit pkgs;
               aasdk = null;
             } ++ (with pkgs; [
-              cmake clang-tools ninja gcc gnumake pkg-config git
+              cmake llvmPackages_21.clang-tools ninja gcc gnumake pkg-config git
             ]);
             shellHook = ''
               echo 'aa2acp development shell (no prebuilt aasdk; run scripts/build-deps.sh)'
