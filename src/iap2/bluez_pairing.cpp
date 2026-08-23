@@ -82,8 +82,6 @@ std::optional<std::uint8_t> discover_spp_channel(const std::string_view mac) {
   }
   sdp_list_free(attr_ids, nullptr);
   sdp_list_free(search_list, nullptr);
-  sdp_list_free(search_list, nullptr);
-  sdp_list_free(attr_ids, free);
   sdp_close(session);
   return channel;
 }

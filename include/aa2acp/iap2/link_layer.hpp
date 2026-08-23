@@ -90,6 +90,7 @@ private:
   LogFunction log_;
   ControlDataFunction control_data_;
   State state_{State::Detect};
+  bool detect_dump_logged_{false};
   Lsp lsp_{};
   std::uint8_t sent_sequence_{99};
   std::uint8_t last_received_sequence_{};

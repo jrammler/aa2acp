@@ -368,7 +368,13 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
     if (argument == "--mac" && index + 1 < argc) {
       address = argv[++index];
     } else if (argument == "--channel" && index + 1 < argc) {
-      channel = static_cast<std::uint8_t>(std::stoi(argv[++index]));
+      try {
+        const auto parsed = std::stoi(argv[++index]);
+        if (parsed >= 1 && parsed <= 30) {
+          channel = static_cast<std::uint8_t>(parsed);
+        }
+      } catch (const std::exception &) {
+      }
     } else if (argument == "--timeout" && index + 1 < argc) {
       timeout_seconds = std::stoi(argv[++index]);
     } else if (argument == "--bootstrap") {
@@ -498,6 +504,10 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
 
   int socket_fd = -1;
   int last_rfcomm_error{};
+  std::optional<std::uint8_t> selected_channel;
+  aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+      << "Bluetooth: probing " << channel_candidates.size()
+      << " candidate RFCOMM channel(s) for iAP2\n";
   for (const auto candidate : channel_candidates) {
     if (shutdown_requested()) {
       return 128 + SIGTERM;
@@ -532,6 +542,7 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
           << "Bluetooth: iAP2 marker exchange succeeded on RFCOMM channel "
           << static_cast<int>(candidate) << '\n';
+      selected_channel = candidate;
       break;
     }
     close(socket_fd);
@@ -540,14 +551,17 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
   if (socket_fd < 0) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
         << "Unable to establish an iAP2 RFCOMM connection to " << address
-        << " (last error: " << std::strerror(last_rfcomm_error)
-        << "); ensure the device is in range, paired, and advertising iAP2\n";
+        << (last_rfcomm_error != 0
+                ? " (last connect error: " +
+                      std::string(std::strerror(last_rfcomm_error)) + ")"
+                : " (channels were reachable but no iAP2 response)")
+        << "; ensure the device is in range, paired, and advertising iAP2\n";
     return 1;
   }
   if (aa2acp::bridge::debug_logging_enabled())
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
-        << "RFCOMM connected to " << address << ':' << static_cast<int>(channel)
-        << '\n';
+        << "RFCOMM connected to " << address << ':'
+        << static_cast<int>(selected_channel.value_or(channel)) << '\n';
   aa2acp::iap2::BootstrapSession session;
   aa2acp::iap2::CarPlayProbe carplay_probe(address);
   aa2acp::iap2::PhoneLink link(
