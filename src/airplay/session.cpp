@@ -904,8 +904,9 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     const auto key = aa2acp::airplay::hkdf_sha512(
         *shared, std::string("DataStream-Salt") + std::string(stream_id),
         "DataStream-Output-Encryption-Key", 32);
-    if (!response || response->status != 200 || !port || *port == 0 ||
-        *port > UINT16_MAX || key.size() != 32) {
+    const auto port_value = port.value_or(0);
+    if (!response || response->status != 200 || port_value == 0 ||
+        port_value > UINT16_MAX || key.size() != 32) {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
           << "Encrypted " << name << "-audio SETUP failed\n";
       return std::nullopt;
@@ -958,8 +959,9 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
           : nullptr;
   const auto screen_port =
       first_stream ? integer_at(*first_stream, "dataPort") : std::nullopt;
-  if (!screen_response || screen_response->status != 200 || !screen_port ||
-      *screen_port == 0 || *screen_port > UINT16_MAX) {
+  const auto screen_port_value = screen_port.value_or(0);
+  if (!screen_response || screen_response->status != 200 ||
+      screen_port_value == 0 || screen_port_value > UINT16_MAX) {
     if (screen_response) {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
           << "Encrypted screen SETUP response status="
@@ -990,7 +992,7 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   }
   if (aa2acp::bridge::debug_logging_enabled())
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
-        << "AirPlay: screen SETUP received data port " << *screen_port << '\n';
+        << "AirPlay: screen SETUP received data port " << screen_port_value << '\n';
 
   const auto record_response =
       send_encrypted(socket_fd, control, encrypted_read_buffer,
@@ -1189,7 +1191,7 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   const auto stream_key = aa2acp::airplay::hkdf_sha512(
       *shared, std::string("DataStream-Salt") + std::string(screen_stream_id),
       "DataStream-Output-Encryption-Key", 32);
-  const auto data_socket = connect_tcp(host, std::to_string(*screen_port));
+  const auto data_socket = connect_tcp(host, std::to_string(screen_port_value));
   if (stream_key.size() != 32 || data_socket < 0) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
         << "Unable to establish encrypted screen data stream\n";

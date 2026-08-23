@@ -482,16 +482,19 @@ public:
     const auto profile = head_unit_capabilities_provider_
                              ? head_unit_capabilities_provider_()
                              : std::nullopt;
+    // Copy through value_or: reading members of an engaged optional via
+    // short-circuit guards trips GCC's maybe-uninitialized analysis.
+    const auto caps = profile.value_or(aa2acp::aa::HeadUnitCapabilities{});
     using Resolution =
         aap_protobuf::service::media::sink::message::VideoCodecResolutionType;
     auto resolution = Resolution::VIDEO_1280x720;
     std::string resolution_detail = "1280x720 fallback";
-    if (profile && profile->width_pixels == 800 &&
-        profile->height_pixels == 480) {
+    if (caps.width_pixels == 800 &&
+        caps.height_pixels == 480) {
       resolution = Resolution::VIDEO_800x480;
       resolution_detail = "800x480 cached profile";
-    } else if (profile && profile->width_pixels == 1920 &&
-               profile->height_pixels == 1080) {
+    } else if (caps.width_pixels == 1920 &&
+               caps.height_pixels == 1080) {
       resolution = Resolution::VIDEO_1920x1080;
       resolution_detail = "1920x1080 cached profile";
     }
