@@ -5,6 +5,13 @@ Android phone over USB and presents it to a car as a wireless CarPlay phone.
 It is aimed at owners of CarPlay-only head units who want to use an Android
 phone with them.
 
+```
+Android phone ── Android Auto ──> AA2ACP ── CarPlay ──> car head unit
+```
+
+The bridge owns Bluetooth pairing, the CarPlay Wi-Fi handover, persistent
+AirPlay pairing, and the media/control translation.
+
 > **Work in progress:** this is an experimental development project, not a
 > finished consumer product. It has a verified video path, but audio, physical
 > controls, wireless Android Auto, production authentication, and appliance
@@ -28,7 +35,6 @@ Media and guidance audio forwarding are verified with LIVI; system-audio
 forwarding is implemented but not yet exercised with a phone-side trigger.
 Call audio and physical-control forwarding are not implemented yet. See
 [TODO.md](TODO.md) for the active task list,
-[ARCHITECTURE.md](ARCHITECTURE.md) for the system design,
 [TESTING.md](TESTING.md) for the verified end-to-end runbook, and
 [DEPLOYMENT.md](DEPLOYMENT.md) for the management-network behavior.
 

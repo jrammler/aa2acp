@@ -14,15 +14,11 @@ hotspot named `AA2ACP-<MAC suffix>-1`. Its initial WPA2 password is
 it. Password setup asks for confirmation and, by default, changes the SSID by
 incrementing its final counter so a phone can connect to the new network
 without forgetting the old one. The selected adapter, SSID, and password are
-persisted, and the UI lets the owner change all three later. On a single-radio
-installation, the bridge stops the hotspot only while joining the car's
-CarPlay network and recreates it when that session ends.
-
-With wired Android Auto and one Wi-Fi adapter, that adapter hosts the hotspot
-while idle and leaves it to join the car's wireless-CarPlay network during an
-active projection session. The UI is unavailable for that interval. Wireless
-Android Auto requires a second radio so its Wi-Fi path stays independent of
-the CarPlay Wi-Fi client connection.
+persisted, and the UI lets the owner change all three later. With wired Android Auto and one Wi-Fi adapter, the adapter hosts the hotspot
+while idle. During an active projection session the bridge joins the car's
+wireless-CarPlay network; the UI is unavailable for that interval.
+Wireless Android Auto requires a second radio so its Wi-Fi path stays
+independent of the CarPlay Wi-Fi client connection.
 
 ## Raspberry Pi service
 
