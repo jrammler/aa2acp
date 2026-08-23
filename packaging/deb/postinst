@@ -11,6 +11,14 @@ configure)
     # System group for USB device access (udev rule grants this group).
     getent group aa2acp >/dev/null || groupadd --system aa2acp
 
+    # Dedicated service account (its primary group is aa2acp, so it gets
+    # USB access). State lives in /var/lib/aa2acp via XDG_STATE_HOME.
+    getent passwd aa2acp >/dev/null || adduser --system \
+        --ingroup aa2acp --home /var/lib/aa2acp \
+        --shell /usr/sbin/nologin --no-create-home aa2acp
+    mkdir -p /var/lib/aa2acp
+    chown aa2acp:aa2acp /var/lib/aa2acp
+
     if [ -d /run/systemd/system ] && command -v systemctl >/dev/null; then
         # Running system: enable units, reload managers.
         systemctl enable aa2acp.service >/dev/null || true

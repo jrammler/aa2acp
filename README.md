@@ -96,7 +96,9 @@ sudo udevadm control --reload
 sudo udevadm trigger --subsystem-match=usb
 ```
 
-Use a dedicated service account with that group in a production image.
+The deb package runs the service under a dedicated `aa2acp` system account
+(state in `/var/lib/aa2acp`), which is the group's only intended member in a
+production setup.
 
 ## Development
 

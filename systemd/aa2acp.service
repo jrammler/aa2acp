@@ -5,11 +5,11 @@ After=NetworkManager.service bluetooth.service
 
 [Service]
 Type=simple
-# TODO(appliance-image): run as a dedicated system account once the image
-# defines one; the state directory follows the user's XDG_STATE_HOME.
-User=pi
-Group=pi
-SupplementaryGroups=aa2acp
+# Dedicated system account created by the package postinst; its primary
+# group is also aa2acp, which grants USB device access via the udev rule.
+User=aa2acp
+Group=aa2acp
+Environment=XDG_STATE_HOME=/var/lib
 ExecStart=/usr/bin/aa2acp --no-file-log
 Restart=on-failure
 RestartSec=3
