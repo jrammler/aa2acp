@@ -36,7 +36,7 @@ Wi-Fi client connection.
 4. Soak-test connect, unplug, replug, shutdown, reconnect, and persisted state.
 5. Add wireless Android Auto using a dedicated second Wi-Fi radio.
 6. Package the daemon as a minimal Raspberry Pi image with ignition/power
-   handling and persistent state.
+   handling and persistent state, building on the released arm64 deb.
 
 The development MFi implementation and LIVI test setup are external test
 infrastructure; they are not part of this repository or a production
