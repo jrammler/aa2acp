@@ -74,6 +74,17 @@ pairing or the Wi-Fi handover.
   discovery before falling back to 1280x720.
 - `journalctl -u aa2acp.service` for the deb-installed service; run the binary
   in a terminal without `--no-file-log` for file logging during local runs.
+- **Log level** defaults to `info` and can be raised to `debug` via the
+  `AA2ACP_LOG_LEVEL` environment variable (`debug`, `info`, `warning`,
+  `error`). For the deb-installed service, use a systemd drop-in:
+
+  ```bash
+  sudo systemctl edit aa2acp.service
+  # add:
+  #   [Service]
+  #   Environment=AA2ACP_LOG_LEVEL=debug
+  sudo systemctl restart aa2acp.service
+  ```
 
 ## Regression cases
 
