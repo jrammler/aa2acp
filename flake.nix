@@ -23,6 +23,9 @@
             (nixpkgs.lib.splitString "\n" (builtins.readFile ./deps.lock)));
       lock = builtins.listToAttrs lockEntries;
 
+      baseVersion = builtins.head (builtins.match "[[:space:]]*([0-9.]+)[[:space:]]*"
+        (builtins.readFile ./VERSION));
+
       mkAasdkPackage = system:
         let pkgs = nixpkgs.legacyPackages.${system};
         in pkgs.stdenv.mkDerivation {
@@ -66,7 +69,7 @@
           pname = "aa2acp";
           # Version follows the release tag when built from a tagged commit;
           # dev builds carry the short revision so artifacts stay distinguishable.
-          version = "0.1.0-${self.shortRev or "dirty"}";
+          version = "${baseVersion}-${self.shortRev or "dirty"}";
           src = self;
           nativeBuildInputs = with pkgs; [ cmake pkg-config ];
           buildInputs = commonBuildInputs {

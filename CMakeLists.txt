@@ -12,6 +12,25 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(AA2ACP_BUILD_DIAGNOSTICS "Build standalone diagnostic tools" OFF)
 
+# Base version lives in the VERSION file; when built from a git checkout
+# with tags available, git describe refines it (exact tag on release
+# commits, <tag>-N-g<sha>[-dirty] otherwise).
+if(NOT AA2ACP_VERSION)
+  file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" AA2ACP_BASE_VERSION REGEX "[0-9]+\\.[0-9]+\\.[0-9]+")
+  find_package(Git QUIET)
+  set(AA2ACP_VERSION "${AA2ACP_BASE_VERSION}")
+  if(Git_FOUND)
+    execute_process(
+      COMMAND ${GIT_EXECUTABLE} describe --tags --match "v*" --dirty
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+      OUTPUT_VARIABLE _git_describe OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET RESULT_VARIABLE _git_result)
+    if(_git_result EQUAL 0 AND _git_describe)
+      string(REGEX REPLACE "^v" "" AA2ACP_VERSION "${_git_describe}")
+    endif()
+  endif()
+endif()
+
 # GCC 13/14 (trixie) has a known -Wmaybe-uninitialized false positive on
 # short-circuit-guarded std::optional reads and value_or; keep the warning
 # visible but non-fatal (-Werror comes from per-target option lists).
@@ -203,7 +222,7 @@ endif()
 install(FILES udev/70-aa2acp-android-auto.rules DESTINATION lib/udev/rules.d)
 
 set(CPACK_PACKAGE_NAME aa2acp)
-set(CPACK_PACKAGE_VERSION 0.1.0)
+set(CPACK_PACKAGE_VERSION ${AA2ACP_VERSION})
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Android Auto to CarPlay Raspberry Pi bridge")
 set(CPACK_PACKAGE_VENDOR aa2acp)
 set(CPACK_PACKAGE_CONTACT "Johannes Rammler <johannes.rammler@gmail.com>")

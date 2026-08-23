@@ -10,7 +10,22 @@ permissions:
   contents: write
 
 jobs:
+  verify-version:
+    # Guard against tagging without bumping the VERSION file.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify tag matches VERSION
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          FILE_VERSION="$(tr -d '[:space:]' < VERSION)"
+          if [ "$TAG_VERSION" != "$FILE_VERSION" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match VERSION ($FILE_VERSION). Bump VERSION and re-tag."
+            exit 1
+          fi
+
   build:
+    needs: verify-version
     uses: ./.github/workflows/build.yml
     with:
       build_type: Release
