@@ -1,6 +1,10 @@
 name: build
 
+# Reusable workflow: triggered directly on push/PR, and called by
+# release.yml (which then downloads the aa2acp-artifacts artifact).
 on:
+  workflow_call:
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request:
@@ -15,7 +19,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            cmake g++ pkg-config git ccache \
+            cmake g++ pkg-config git \
             libssl-dev libboost1.83-all-dev libabsl-dev protobuf-compiler libprotobuf-dev \
             libusb-1.0-0-dev libdbus-1-dev libbluetooth-dev \
             libavcodec-dev libavutil-dev
@@ -32,7 +36,7 @@ jobs:
         run: ./scripts/build-deps.sh
 
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_PREFIX_PATH="$PWD/.deps/install"
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$PWD/.deps/install"
 
       - name: Build
         run: cmake --build build -j"$(nproc)"
