@@ -138,12 +138,13 @@ int CarPlayWorker::run(std::vector<std::string> arguments,
   for (;;) {
     if (stopping && stop_deadline &&
         std::chrono::steady_clock::now() > *stop_deadline) {
+      // Escalate: SIGKILL the wedged child. Its death closes the output
+      // pipe, which the poll loop below handles via the connection-lost
+      // path (waitpid + cleanup included).
       log(LogLevel::warning)
           << "Bridge daemon: CarPlay worker did not exit after stop; "
              "killing child\n";
-      hooks.on_connection_lost();
-      active_child = -1;
-      return 1;
+      ::kill(pid_, SIGKILL);
     }
     pollfd descriptors[]{{output_fd_, POLLIN, 0}, {control_fd_, POLLIN, 0}};
     if (poll(descriptors, 2, 100) > 0) {

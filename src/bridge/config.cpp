@@ -134,17 +134,14 @@ bool save_config(const std::filesystem::path &path, const Config &config) {
   ::close(fd);
 
   ok = ok && ::rename(temporary.c_str(), path.c_str()) == 0;
-  // Persist the directory entry itself.
-  if (ok) {
+  // Persist the directory entry itself (nothing to do for a bare filename).
+  if (ok && !path.parent_path().empty()) {
     if (const int dir_fd =
             ::open(path.parent_path().c_str(), O_RDONLY | O_DIRECTORY);
         dir_fd >= 0) {
       ::fsync(dir_fd);
       ::close(dir_fd);
     }
-  } else {
-    std::error_code ignored;
-    std::filesystem::remove(temporary, ignored);
   }
   return ok;
 }
