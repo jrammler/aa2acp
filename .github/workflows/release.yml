@@ -1,0 +1,56 @@
+name: release
+
+# Cut a GitHub release by pushing a tag: git tag v0.1.0 && git push origin v0.1.0
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-26.04-arm
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake g++ pkg-config git \
+            libssl-dev libboost1.83-all-dev libabsl-dev protobuf-compiler libprotobuf-dev \
+            libusb-1.0-0-dev libdbus-1-dev libbluetooth-dev \
+            libavcodec-dev libavutil-dev
+
+      - name: Cache aasdk/aap_protobuf
+        id: deps-cache
+        uses: actions/cache@v6
+        with:
+          path: .deps/install
+          key: aasdk-${{ hashFiles('deps.lock') }}-${{ hashFiles('patches/aasdk/*.patch') }}
+
+      - name: Build pinned dependencies
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        run: ./scripts/build-deps.sh
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$PWD/.deps/install"
+
+      - name: Build and test
+        run: |
+          cmake --build build -j"$(nproc)"
+          ctest --test-dir build --output-on-failure
+
+      - name: Package
+        run: |
+          cpack --config build/CPackConfig.cmake
+          mv *.deb aa2acp.deb
+
+      - name: Create release
+        uses: softprops/action-gh-release@v3
+        with:
+          generate_release_notes: true
+          files: |
+            aa2acp.deb
+            build/aa2acp

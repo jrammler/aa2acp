@@ -64,7 +64,9 @@
           pkgs = nixpkgs.legacyPackages.${system};
         in pkgs.stdenv.mkDerivation {
           pname = "aa2acp";
-          version = "0.1.0";
+          # Version follows the release tag when built from a tagged commit;
+          # dev builds carry the short revision so artifacts stay distinguishable.
+          version = "0.1.0-${self.shortRev or "dirty"}";
           src = self;
           nativeBuildInputs = with pkgs; [ cmake pkg-config ];
           buildInputs = commonBuildInputs {

@@ -185,5 +185,8 @@ set(CPACK_PACKAGE_VENDOR aa2acp)
 set(CPACK_PACKAGE_CONTACT "jrammler <jrammler@users.noreply.github.com>")
 set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE arm64)
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS OFF)
+# Maintainer script: creates the aa2acp group and enables systemd units.
+# Safe in chroots/offline installs (see the script header).
+set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA "${CMAKE_SOURCE_DIR}/packaging/deb/postinst")
 set(CPACK_GENERATOR DEB)
 include(CPack)
