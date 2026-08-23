@@ -2,8 +2,8 @@
 
 #include "aa2acp/bridge/logging.hpp"
 
-#include <functional>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string_view>
 

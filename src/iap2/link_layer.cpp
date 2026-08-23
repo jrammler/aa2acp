@@ -127,8 +127,7 @@ void PhoneLink::receive(const std::span<const std::uint8_t> bytes,
       if (!bytes.empty() && log_ != nullptr) {
         // Dump unrecognized traffic while waiting for the accessory marker,
         // so an incompatible dialect is visible in debug logs.
-        std::string hex = "iAP2: received " +
-                          std::to_string(bytes.size()) +
+        std::string hex = "iAP2: received " + std::to_string(bytes.size()) +
                           " byte(s) without marker:";
         char byte_hex[4];
         for (const auto byte : bytes) {

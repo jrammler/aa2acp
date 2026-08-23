@@ -8,11 +8,11 @@
 #include <dbus/dbus.h>
 
 #include <algorithm>
-#include <optional>
 #include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <string>
 
@@ -24,8 +24,7 @@ std::optional<std::uint8_t> discover_spp_channel(const std::string_view mac) {
   if (str2ba(std::string(mac).c_str(), &target) != 0) {
     return std::nullopt;
   }
-  sdp_session_t *session =
-      sdp_connect(&local, &target, SDP_RETRY_IF_BUSY);
+  sdp_session_t *session = sdp_connect(&local, &target, SDP_RETRY_IF_BUSY);
   if (session == nullptr) {
     return std::nullopt;
   }
@@ -37,9 +36,8 @@ std::optional<std::uint8_t> discover_spp_channel(const std::string_view mac) {
   sdp_list_t *results = nullptr;
 
   std::optional<std::uint8_t> channel;
-  if (sdp_service_search_attr_req(session, search_list,
-                                  SDP_ATTR_REQ_RANGE, attr_ids,
-                                  &results) == 0) {
+  if (sdp_service_search_attr_req(session, search_list, SDP_ATTR_REQ_RANGE,
+                                  attr_ids, &results) == 0) {
     for (sdp_list_t *entry = results; entry != nullptr && !channel.has_value();
          entry = entry->next) {
       auto *record = static_cast<sdp_record_t *>(entry->data);
@@ -71,7 +69,9 @@ std::optional<std::uint8_t> discover_spp_channel(const std::string_view mac) {
       }
       sdp_record_free(record);
     }
-    sdp_list_free(results, [](void *data) { sdp_record_free(static_cast<sdp_record_t *>(data)); });
+    sdp_list_free(results, [](void *data) {
+      sdp_record_free(static_cast<sdp_record_t *>(data));
+    });
   }
   sdp_list_free(search_list, nullptr);
   sdp_list_free(attr_ids, free);
