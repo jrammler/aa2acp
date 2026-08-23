@@ -1,0 +1,30 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 1b1eb74..c5c3245 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -390,14 +390,14 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/include/aasdk/Version.hpp"
+ # Install SSL certificate and key files
+ install(FILES
+     "${CMAKE_CURRENT_SOURCE_DIR}/cert/headunit.crt"
+-    DESTINATION /etc/aasdk
++    DESTINATION etc/aasdk
+     PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ
+     COMPONENT runtime
+ )
+ 
+ install(FILES
+     "${CMAKE_CURRENT_SOURCE_DIR}/cert/headunit.key"
+-    DESTINATION /etc/aasdk
++    DESTINATION etc/aasdk
+     PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ
+     COMPONENT runtime
+ )
+@@ -405,7 +405,7 @@ install(FILES
+ # Align direct "make install" behavior with package postinst:
+ # create/use aasdk group and assign cert/key group ownership + key group-read.
+ install(CODE [[
+-    set(_cert_dir "$ENV{DESTDIR}/etc/aasdk")
++    set(_cert_dir "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/etc/aasdk")
+     set(_cert_file "${_cert_dir}/headunit.crt")
+     set(_key_file "${_cert_dir}/headunit.key")
+ 

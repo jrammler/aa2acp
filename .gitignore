@@ -4,3 +4,6 @@
 
 # nix
 /result
+
+# locally built dependencies (scripts/build-deps.sh)
+/.deps/

@@ -1,0 +1,44 @@
+diff --git a/include/aasdk/USB/AOAPDevice.hpp b/include/aasdk/USB/AOAPDevice.hpp
+index 59ca051..fa77eab 100644
+--- a/include/aasdk/USB/AOAPDevice.hpp
++++ b/include/aasdk/USB/AOAPDevice.hpp
+@@ -30,6 +30,7 @@ namespace aasdk {
+     class AOAPDevice : public IAOAPDevice, boost::noncopyable {
+     public:
+       AOAPDevice(IUSBWrapper &usbWrapper, boost::asio::io_service &ioService, DeviceHandle handle,
++                 ConfigDescriptorHandle config_descriptor,
+                  const libusb_interface_descriptor *interfaceDescriptor);
+ 
+       ~AOAPDevice() override;
+@@ -50,6 +51,7 @@ namespace aasdk {
+ 
+       IUSBWrapper &usbWrapper_;
+       DeviceHandle handle_;
++      ConfigDescriptorHandle config_descriptor_;
+       const libusb_interface_descriptor *interfaceDescriptor_;
+       IUSBEndpoint::Pointer inEndpoint_;
+       IUSBEndpoint::Pointer outEndpoint_;
+diff --git a/src/USB/AOAPDevice.cpp b/src/USB/AOAPDevice.cpp
+index c169ab1..b3354b9 100644
+--- a/src/USB/AOAPDevice.cpp
++++ b/src/USB/AOAPDevice.cpp
+@@ -25,8 +25,9 @@ namespace aasdk {
+   namespace usb {
+ 
+     AOAPDevice::AOAPDevice(IUSBWrapper &usbWrapper, boost::asio::io_service &ioService, DeviceHandle handle,
++                           ConfigDescriptorHandle config_descriptor,
+                            const libusb_interface_descriptor *interfaceDescriptor)
+-        : usbWrapper_(usbWrapper), handle_(std::move(handle)), interfaceDescriptor_(interfaceDescriptor) {
++        : usbWrapper_(usbWrapper), handle_(std::move(handle)), config_descriptor_(std::move(config_descriptor)), interfaceDescriptor_(interfaceDescriptor) {
+       if ((interfaceDescriptor->endpoint[0].bEndpointAddress & LIBUSB_ENDPOINT_DIR_MASK) == LIBUSB_ENDPOINT_IN) {
+         inEndpoint_ = std::make_shared<USBEndpoint>(usbWrapper_, ioService, handle_,
+                                                     interfaceDescriptor_->endpoint[0].bEndpointAddress);
+@@ -70,7 +71,7 @@ namespace aasdk {
+         throw error::Error(error::ErrorCode::USB_CLAIM_INTERFACE, result);
+       }
+ 
+-      return std::make_unique<AOAPDevice>(usbWrapper, ioService, std::move(handle), interfaceDescriptor);
++      return std::make_unique<AOAPDevice>(usbWrapper, ioService, std::move(handle), std::move(configDescriptorHandle), interfaceDescriptor);
+     }
+ 
+     ConfigDescriptorHandle AOAPDevice::getConfigDescriptor(IUSBWrapper &usbWrapper, DeviceHandle handle) {

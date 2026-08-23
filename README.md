@@ -33,7 +33,36 @@ in [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ## Build and test
 
-All project commands run through the Nix development shell:
+### Plain Linux / Raspberry Pi OS (no Nix)
+
+Install the build dependencies (Debian/Ubuntu package names; adapt for other
+distros):
+
+```bash
+sudo apt-get install -y \
+  cmake g++ pkg-config git \
+  libssl-dev libboost1.83-all-dev libabsl-dev protobuf-compiler libprotobuf-dev \
+  libusb-1.0-0-dev libdbus-1-dev libbluetooth-dev \
+  libavcodec-dev libavutil-dev
+```
+
+Build the pinned external dependencies (`deps.lock`, bundled into
+`.deps/install`), then the bridge itself:
+
+```bash
+./scripts/build-deps.sh
+cmake -S . -B build -DCMAKE_PREFIX_PATH="$PWD/.deps/install"
+cmake --build build -j"$(nproc)"
+ctest --test-dir build --output-on-failure
+```
+
+The dependency step is idempotent: it rebuilds only when `deps.lock` or a
+patch changes.
+
+### Nix
+
+For Nix users: `flake.nix` provides a development shell with all dependencies
+prebuilt, plus package outputs. See `flake.nix` for details.
 
 ```bash
 nix develop --command bash -c '

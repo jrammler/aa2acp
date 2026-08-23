@@ -1,0 +1,10 @@
+# Pinned external dependency revisions.
+#
+# This file is the single source of truth for dependency versions. It is read
+# by scripts/build-deps.sh (plain distro / Raspberry Pi OS builds and CI) and
+# by flake.nix (Nix builds). Bump a revision here and both paths follow.
+# Format: KEY=VALUE lines; '#' lines are comments. Keep it parseable by both
+# bash (source) and Nix (builtins.readFile).
+
+AASDK_URL=https://github.com/opencardev/aasdk
+AASDK_REV=9bf6adf933665dee26532201719fac14a047ccf1

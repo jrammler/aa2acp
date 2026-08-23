@@ -141,3 +141,23 @@ if(BUILD_TESTING)
            COMMAND ${CMAKE_COMMAND} -DPROJECT_SOURCE_DIR=${PROJECT_SOURCE_DIR}
                    -P ${PROJECT_SOURCE_DIR}/tests/no_direct_stream_logs.cmake)
 endif()
+
+option(AA2ACP_INSTALL_SYSTEMD "Install systemd units with the package" ON)
+
+install(TARGETS aa2acp RUNTIME DESTINATION bin)
+if(AA2ACP_INSTALL_SYSTEMD)
+    install(FILES systemd/aa2acp.service
+                  systemd/aa2acp-update.path
+                  systemd/aa2acp-update.service
+            DESTINATION lib/systemd/system)
+endif()
+install(FILES udev/70-aa2acp-android-auto.rules DESTINATION lib/udev/rules.d)
+
+set(CPACK_PACKAGE_NAME aa2acp)
+set(CPACK_PACKAGE_VERSION 0.1.0)
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Android Auto to CarPlay Raspberry Pi bridge")
+set(CPACK_PACKAGE_VENDOR aa2acp)
+set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE arm64)
+set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS OFF)
+set(CPACK_GENERATOR DEB)
+include(CPack)
