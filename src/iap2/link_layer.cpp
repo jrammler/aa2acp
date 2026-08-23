@@ -129,10 +129,15 @@ void PhoneLink::receive(const std::span<const std::uint8_t> bytes,
         // so an incompatible dialect is visible in debug logs.
         std::string hex = "iAP2: received " + std::to_string(bytes.size()) +
                           " byte(s) without marker:";
+        constexpr std::size_t kMaxDumpBytes = 32;
+        const auto dumped = std::min(bytes.size(), kMaxDumpBytes);
         char byte_hex[4];
-        for (const auto byte : bytes) {
-          std::snprintf(byte_hex, sizeof(byte_hex), " %02x", byte);
+        for (std::size_t index = 0; index < dumped; ++index) {
+          std::snprintf(byte_hex, sizeof(byte_hex), " %02x", bytes[index]);
           hex += byte_hex;
+        }
+        if (bytes.size() > kMaxDumpBytes) {
+          hex += " ...";
         }
         log_(hex.c_str());
       }

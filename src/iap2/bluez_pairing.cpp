@@ -30,6 +30,11 @@ std::optional<std::uint8_t> discover_spp_channel(const std::string_view mac) {
   }
   uuid_t spp_uuid{};
   sdp_uuid16_create(&spp_uuid, SERIAL_PORT_SVCLASS_ID);
+  uuid_t rfcomm_uuid{};
+  sdp_uuid16_create(&rfcomm_uuid, RFCOMM_UUID);
+  // The search/attribute lists reference stack data: free the list nodes
+  // only (nullptr deleter). The returned records own their memory and are
+  // freed via the results-list deleter below.
   sdp_list_t *search_list = sdp_list_append(nullptr, &spp_uuid);
   uint32_t range = 0x0000ffff;
   sdp_list_t *attr_ids = sdp_list_append(nullptr, &range);
@@ -53,9 +58,7 @@ std::optional<std::uint8_t> discover_spp_channel(const std::string_view mac) {
             if (descriptor == nullptr || descriptor->dtd != SDP_UUID16) {
               continue;
             }
-            uuid_t rfcomm{};
-            sdp_uuid16_create(&rfcomm, RFCOMM_UUID);
-            if (sdp_uuid_cmp(&descriptor->val.uuid, &rfcomm) != 0) {
+            if (sdp_uuid_cmp(&descriptor->val.uuid, &rfcomm_uuid) != 0) {
               continue;
             }
             // The parameter following the RFCOMM UUID is the channel.
@@ -65,14 +68,20 @@ std::optional<std::uint8_t> discover_spp_channel(const std::string_view mac) {
             }
           }
         }
+        // Free each protocol's nested list (its nodes/data are heap
+        // allocated), then the outer list nodes.
+        for (sdp_list_t *iter = protocols; iter != nullptr; iter = iter->next) {
+          sdp_list_free(static_cast<sdp_list_t *>(iter->data), free);
+        }
         sdp_list_free(protocols, nullptr);
       }
-      sdp_record_free(record);
     }
     sdp_list_free(results, [](void *data) {
       sdp_record_free(static_cast<sdp_record_t *>(data));
     });
   }
+  sdp_list_free(attr_ids, nullptr);
+  sdp_list_free(search_list, nullptr);
   sdp_list_free(search_list, nullptr);
   sdp_list_free(attr_ids, free);
   sdp_close(session);
