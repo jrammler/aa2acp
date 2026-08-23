@@ -106,6 +106,11 @@ bool SrpClient::process_challenge(
   const auto multiplier_hash = sha512({padded_prime, padded_generator});
   auto multiplier = bn_from(multiplier_hash);
 
+  // CarPlay pair-setup uses an unauthenticated, protocol-fixed PIN by
+  // design (no user entry, no MFi at this stage); see LIVI's pairSetup
+  // responder, which documents the same constant. Real authentication
+  // happens afterwards: the Ed25519 long-term-key exchange over the SRP
+  // channel (M5/M6) and Pair-Verify against the persisted identity.
   constexpr std::string_view username = "Pair-Setup";
   constexpr std::string_view password = "3939";
   constexpr std::array<std::uint8_t, 1> colon{':'};
