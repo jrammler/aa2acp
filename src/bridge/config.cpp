@@ -5,7 +5,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cstdlib>
+#include <cstring>
 
 namespace aa2acp::bridge {
 namespace {
@@ -92,45 +94,59 @@ bool save_config(const std::filesystem::path &path, const Config &config) {
   std::filesystem::create_directories(path.parent_path(), error);
   if (error)
     return false;
-  // A unique temp name per writer: two request threads saving concurrently
-  // must not interleave into the same file.
+  // A temp name unique to this call: two request threads saving
+  // concurrently must not interleave into the same file.
+  static std::atomic<unsigned> save_counter{};
   const auto temporary =
-      path.string() + ".tmp." + std::to_string(static_cast<long>(::getpid()));
-  {
-    std::ofstream stream(temporary, std::ios::trunc);
-    if (!stream)
-      return false;
-    stream << kMagic << '\n'
-           << "head_unit_mac=" << config.head_unit_mac << '\n'
-           << "wifi_interface=" << config.wifi_interface << '\n'
-           << "management_hotspot_ssid=" << config.management_hotspot_ssid
-           << '\n'
-           << "management_hotspot_passphrase="
-           << config.management_hotspot_passphrase << '\n';
-    if (!config.airplay_pairing_store.empty())
-      stream << "airplay_pairing_store="
-             << config.airplay_pairing_store.string() << '\n';
-    if (!stream)
-      return false;
-  }
-  // Flush data to storage before renaming: without fsync, a power loss can
-  // commit the rename while the content blocks are still in page cache,
-  // leaving an empty or truncated config behind.
-  if (const int fd = ::open(temporary.c_str(), O_RDONLY); fd >= 0) {
-    ::fsync(fd);
-    ::close(fd);
-  }
-  if (::chmod(temporary.c_str(), S_IRUSR | S_IWUSR) != 0 ||
-      ::rename(temporary.c_str(), path.c_str()) != 0)
+      path.string() + ".tmp." + std::to_string(static_cast<long>(::getpid())) +
+      "-" + std::to_string(save_counter.fetch_add(1));
+
+  // Build the full content up front so the file can be created exclusively
+  // with restrictive permissions; it contains the hotspot passphrase.
+  std::string content = std::string(kMagic) + '\n';
+  content += "head_unit_mac=" + config.head_unit_mac + '\n';
+  content += "wifi_interface=" + config.wifi_interface + '\n';
+  content += "management_hotspot_ssid=" + config.management_hotspot_ssid +
+             '\n';
+  content += "management_hotspot_passphrase=" +
+             config.management_hotspot_passphrase + '\n';
+  if (!config.airplay_pairing_store.empty())
+    content += "airplay_pairing_store=" +
+               config.airplay_pairing_store.string() + '\n';
+
+  const int fd =
+      ::open(temporary.c_str(),
+             O_WRONLY | O_CREAT | O_EXCL | O_TRUNC, S_IRUSR | S_IWUSR);
+  if (fd < 0)
     return false;
+  const auto write_all = [&](const std::string &data) {
+    std::size_t written = 0;
+    while (written < data.size()) {
+      const auto n = ::write(fd, data.data() + written, data.size() - written);
+      if (n <= 0) {
+        return false;
+      }
+      written += static_cast<std::size_t>(n);
+    }
+    return true;
+  };
+  bool ok = write_all(content) && ::fsync(fd) == 0;
+  ::close(fd);
+
+  ok = ok && ::rename(temporary.c_str(), path.c_str()) == 0;
   // Persist the directory entry itself.
-  if (const int dir_fd =
-          ::open(path.parent_path().c_str(), O_RDONLY | O_DIRECTORY);
-      dir_fd >= 0) {
-    ::fsync(dir_fd);
-    ::close(dir_fd);
+  if (ok) {
+    if (const int dir_fd =
+            ::open(path.parent_path().c_str(), O_RDONLY | O_DIRECTORY);
+        dir_fd >= 0) {
+      ::fsync(dir_fd);
+      ::close(dir_fd);
+    }
+  } else {
+    std::error_code ignored;
+    std::filesystem::remove(temporary, ignored);
   }
-  return true;
+  return ok;
 }
 
 } // namespace aa2acp::bridge

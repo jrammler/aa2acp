@@ -84,7 +84,8 @@ int connect_rfcomm(const std::string &address, const std::uint8_t channel,
       *error = EINVAL;
     return -1;
   }
-  const auto socket_fd = socket(AF_BLUETOOTH, SOCK_STREAM, BTPROTO_RFCOMM);
+  const auto socket_fd =
+      socket(AF_BLUETOOTH, SOCK_STREAM | SOCK_CLOEXEC, BTPROTO_RFCOMM);
   if (socket_fd < 0) {
     if (error != nullptr)
       *error = errno;
@@ -376,7 +377,11 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
       } catch (const std::exception &) {
       }
     } else if (argument == "--timeout" && index + 1 < argc) {
-      timeout_seconds = std::stoi(argv[++index]);
+      try {
+        timeout_seconds = std::stoi(argv[++index]);
+      } catch (const std::exception &) {
+        timeout_seconds = 15;
+      }
     } else if (argument == "--bootstrap") {
       bootstrap = true;
     } else if (argument == "--carplay") {

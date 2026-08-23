@@ -31,6 +31,16 @@ if(NOT AA2ACP_VERSION)
   endif()
 endif()
 
+# Debian revision semantics: an exact tag stays as-is; anything else
+# (containing hyphens) becomes <base>~<rest> with '+' separators so it
+# sorts strictly before the release it was built from.
+if(AA2ACP_VERSION MATCHES "-")
+  string(REGEX REPLACE "^[^-]+-" "" AA2ACP_REVISION "${AA2ACP_VERSION}")
+  string(REGEX REPLACE "-.*$" "" AA2ACP_VERSION_BASE "${AA2ACP_VERSION}")
+  string(REPLACE "-" "+" AA2ACP_REVISION "${AA2ACP_REVISION}")
+  set(AA2ACP_VERSION "${AA2ACP_VERSION_BASE}~${AA2ACP_REVISION}")
+endif()
+
 # GCC 13/14 (trixie) has a known -Wmaybe-uninitialized false positive on
 # short-circuit-guarded std::optional reads and value_or; keep the warning
 # visible but non-fatal (-Werror comes from per-target option lists).
@@ -226,7 +236,16 @@ set(CPACK_PACKAGE_VERSION ${AA2ACP_VERSION})
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Android Auto to CarPlay Raspberry Pi bridge")
 set(CPACK_PACKAGE_VENDOR aa2acp)
 set(CPACK_PACKAGE_CONTACT "Johannes Rammler <johannes.rammler@gmail.com>")
-set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE arm64)
+# Derive the deb architecture from the build host; a mislabeled package is
+# worse than a failed configure.
+if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
+  set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE arm64)
+elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
+  set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE amd64)
+else()
+  message(FATAL_ERROR "Unsupported architecture for packaging: "
+      "${CMAKE_SYSTEM_PROCESSOR}")
+endif()
 # Built in a debian:trixie container matching Raspberry Pi OS, so
 # dpkg-shlibdeps can compute real Depends for the runtime libraries.
 # PRIVATE_DIRS lets shlibdeps scan the bundled private lib dir too.

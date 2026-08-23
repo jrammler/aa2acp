@@ -301,6 +301,7 @@ void run_carplay_preflight(const aa2acp::bridge::Config config,
 
 int run_wired_android_auto_receiver(
     const std::function<aa2acp::bridge::Config()> &config_provider,
+    std::shared_ptr<std::atomic_bool> preparation_failed,
     const std::stop_token stop) {
   bool configuration_warning_logged = false;
   while (!stop.stop_requested()) {
@@ -317,6 +318,10 @@ int run_wired_android_auto_receiver(
   }
   if (stop.stop_requested())
     return 0;
+
+  // Snapshot for the session; also captured by value into the detached
+  // capabilities thread so nothing references daemon locals.
+  const auto session_config = config_provider();
 
   const auto video_socket =
       std::filesystem::path("/tmp") /
@@ -348,12 +353,11 @@ int run_wired_android_auto_receiver(
   }
   std::atomic_bool carplay_start_requested{};
   std::atomic_bool phone_disconnected{};
-  std::atomic_bool carplay_preparation_failed{};
   std::atomic<pid_t> active_carplay_child{-1};
   aa2acp::bridge::H264Normalizer h264_normalizer;
   aa2acp::aa::WiredReceiver receiver(
-      [&carplay_start_requested, &phone_disconnected,
-       &carplay_preparation_failed, &active_carplay_child](const auto &event) {
+      [&carplay_start_requested, &phone_disconnected, &preparation_failed,
+       &active_carplay_child](const auto &event) {
         switch (event.type) {
         case aa2acp::aa::WiredReceiverEventType::waiting_for_phone:
           aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
@@ -362,7 +366,7 @@ int run_wired_android_auto_receiver(
           break;
         case aa2acp::aa::WiredReceiverEventType::aoap_transport_ready:
           phone_disconnected = false;
-          carplay_preparation_failed = false;
+          preparation_failed->store(false);
           aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
               << "Bridge daemon: Android Auto USB transport ready: "
               << event.detail << '\n';
@@ -440,16 +444,18 @@ int run_wired_android_auto_receiver(
           break;
         }
       },
-      [&config_provider, &carplay_preparation_failed]()
+      [preparation_failed, session_config]()
           -> std::optional<aa2acp::aa::HeadUnitCapabilities> {
-        const auto config = config_provider();
+        const auto &config = session_config;
         // A cold preflight normally populates this cache. Keep the fallback
         // bounded so a failed CarPlay attempt cannot consume Android Auto's
-        // entire connection window.
+        // entire connection window. Captures are self-contained (shared_ptr
+        // and a config snapshot) because this callable is copied into a
+        // detached thread that may outlive the daemon's locals.
         const auto deadline =
             std::chrono::steady_clock::now() + std::chrono::seconds(5);
         do {
-          if (carplay_preparation_failed.load())
+          if (preparation_failed->load())
             return std::nullopt;
           const auto capabilities =
               aa2acp::airplay::load_head_unit_capabilities(
@@ -515,7 +521,7 @@ int run_wired_android_auto_receiver(
     if (result == 0) {
       retry_delay = std::chrono::seconds(0);
     } else {
-      carplay_preparation_failed = true;
+      preparation_failed->store(true);
       if (retry_delay.count() == 0)
         retry_delay = std::chrono::seconds(1);
       else
@@ -541,6 +547,8 @@ int run_wired_android_auto_receiver(
 } // namespace
 
 int main(int argc, char **argv) {
+  auto carplay_preparation_failed =
+      std::make_shared<std::atomic_bool>(false);
   std::cout.setf(std::ios::unitbuf);
   std::cerr.setf(std::ios::unitbuf);
   bool file_logging = true;
@@ -637,13 +645,14 @@ int main(int argc, char **argv) {
     return 1;
   }
   std::jthread android_auto_worker(
-      [&config, &config_mutex](const std::stop_token stop) {
+      [&config, &config_mutex,
+       preparation_failed = carplay_preparation_failed](const std::stop_token stop) {
         run_wired_android_auto_receiver(
             [&config, &config_mutex] {
               std::lock_guard lock(config_mutex);
               return config;
             },
-            stop);
+            preparation_failed, stop);
       });
   std::jthread carplay_preflight_worker;
   std::jthread bluetooth_scan_worker;

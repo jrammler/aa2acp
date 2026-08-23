@@ -6,5 +6,13 @@
 #
 # The bridge service account must belong to aa2acp. This deliberately grants
 # that dedicated, trusted group access to USB devices so AASDK can probe for
-# AOAP support.
-SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", MODE="0660", GROUP="aa2acp", TAG+="uaccess"
+# AOAP support. The grant is intentionally NOT tagged with "uaccess": that
+# would additionally expose devices to logged-in desktop users, widening the
+# surface beyond the service account.
+#
+# Post-AOAP Google IDs get an explicit rule so the common case (phone already
+# in accessory mode) does not depend on the blanket grant.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="18d1", ATTRS{idProduct}=="2d00", MODE="0660", GROUP="aa2acp"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="18d1", ATTRS{idProduct}=="2d01", MODE="0660", GROUP="aa2acp"
+
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", MODE="0660", GROUP="aa2acp"

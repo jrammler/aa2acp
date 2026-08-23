@@ -13,6 +13,10 @@ Environment=XDG_STATE_HOME=/var/lib
 ExecStart=/usr/bin/aa2acp --no-file-log
 Restart=on-failure
 RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/aa2acp
 
 [Install]
 WantedBy=multi-user.target

@@ -177,9 +177,12 @@ public:
   }
 
 private:
-  // Containers reference other nodes; a crafted file may reference itself.
-  // Bound recursion so hostile input cannot exhaust the stack.
+  // Containers reference other nodes; a crafted file may reference itself
+  // (stack exhaustion) or fan out shared references (exponential value
+  // copying). Bound both: recursion depth and total nodes materialized per
+  // decode.
   static constexpr std::size_t kMaxDepth = 64;
+  static constexpr std::size_t kMaxMaterializedNodes = 65536;
 
   std::optional<std::pair<std::size_t, std::size_t>>
   count(const std::size_t offset, const std::uint8_t nibble) const {
@@ -197,6 +200,8 @@ private:
   std::optional<PlistValue> object(const std::size_t index,
                                    const std::size_t depth = 0) const {
     if (index >= offsets_.size() || depth > kMaxDepth)
+      return std::nullopt;
+    if (++materialized_nodes_ > kMaxMaterializedNodes)
       return std::nullopt;
     const auto offset = offsets_[index];
     const auto marker = bytes_[offset];
@@ -296,6 +301,7 @@ private:
   std::size_t offset_size_{};
   std::size_t ref_size_{};
   std::vector<std::size_t> offsets_;
+  mutable std::size_t materialized_nodes_{0};
 };
 
 } // namespace

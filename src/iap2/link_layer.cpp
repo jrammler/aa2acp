@@ -182,10 +182,12 @@ void PhoneLink::tick(const std::chrono::steady_clock::time_point now) {
     if (now < message.deadline)
       continue;
     if (message.retries >= lsp_.max_retransmissions) {
-      log("iAP2: control message exhausted retransmissions");
-      message.deadline =
-          now + std::chrono::milliseconds(lsp_.retransmission_timeout);
-      continue;
+      // A control message that never gets acknowledged means the link is
+      // not delivering traffic; carrying on would silently drop it.
+      log("iAP2: control message exhausted retransmissions; link is dead");
+      state_ = State::Dead;
+      pending_.clear();
+      return;
     }
     ++message.retries;
     message.deadline =
@@ -335,7 +337,15 @@ void PhoneLink::handle_packet(const Header &header,
       return;
     }
     if (const auto received_lsp = decode_lsp(payload)) {
-      lsp_ = *received_lsp;
+      auto negotiated = *received_lsp;
+      // Clamp hostile/nonsensical parameters before adopting them: a zero
+      // retransmission timeout would flood the socket and a huge window
+      // defeats the flow-control purpose of max_outgoing.
+      negotiated.retransmission_timeout =
+          std::max(negotiated.retransmission_timeout, std::uint16_t{100});
+      negotiated.max_outgoing =
+          std::min(negotiated.max_outgoing, std::uint8_t{128});
+      lsp_ = negotiated;
       last_received_sequence_ = header.sequence;
       syn_outstanding_ = false;
       send_ack();
@@ -366,6 +376,11 @@ void PhoneLink::handle_packet(const Header &header,
   }
 
   if ((header.control & ~kControlAck) == 0 && !payload.empty()) {
+    if (state_ != State::Normal) {
+      // Data before the handshake completed would desync the session.
+      log("iAP2: ignoring data frame while link is not established");
+      return;
+    }
     if (header.sequence == last_received_sequence_) {
       // Duplicate/replayed frame: re-acknowledge but do not deliver twice.
       send_ack();

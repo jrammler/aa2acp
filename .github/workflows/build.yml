@@ -44,9 +44,21 @@ jobs:
           path: .deps/install
           key: aasdk-trixie-${{ hashFiles('deps.lock') }}-${{ hashFiles('patches/aasdk/*.patch') }}
 
+      # Run unconditionally: build-deps.sh validates its own stamp (rev +
+      # patches + toolchain) and exits early on a hit. A restored cache can
+      # contain a stale or partial install; only the script knows for sure.
       - name: Build pinned dependencies
-        if: steps.deps-cache.outputs.cache-hit != 'true'
         run: ./scripts/build-deps.sh
+
+      - name: Verify patch list matches flake.nix
+        run: |
+          for patch in patches/aasdk/*.patch; do
+            name="$(basename "$patch")"
+            grep -q "$name" flake.nix || {
+              echo "::error::patches/aasdk/$name is not listed in flake.nix - Nix builds would silently skip it"
+              exit 1
+            }
+          done
 
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ inputs.build_type || 'RelWithDebInfo' }} -DCMAKE_PREFIX_PATH="$PWD/.deps/install"

@@ -50,7 +50,8 @@ complete_response_size(const std::span<const std::uint8_t> bytes) {
   if (header_end == std::string_view::npos) {
     return std::nullopt;
   }
-  std::size_t content_length = 0;
+  constexpr std::size_t kContentLengthNotSet = ~std::size_t{0};
+  std::size_t content_length = kContentLengthNotSet;
   std::size_t cursor = 0;
   while (cursor < header_end) {
     const auto line_end = text.find("\r\n", cursor);
@@ -60,6 +61,10 @@ complete_response_size(const std::span<const std::uint8_t> bytes) {
     const auto colon = line.find(':');
     if (colon != std::string_view::npos &&
         lower(std::string(line.substr(0, colon))) == "content-length") {
+      // Conflicting duplicates are a smuggling-style ambiguity; reject.
+      if (content_length != kContentLengthNotSet) {
+        return std::nullopt;
+      }
       const auto value = trim(line.substr(colon + 1));
       const auto [end, error] = std::from_chars(
           value.data(), value.data() + value.size(), content_length);
@@ -71,6 +76,9 @@ complete_response_size(const std::span<const std::uint8_t> bytes) {
       break;
     }
     cursor = line_end + 2;
+  }
+  if (content_length == kContentLengthNotSet) {
+    content_length = 0;
   }
   // Reject absurd lengths (memory exhaustion) and compute completion
   // without wrap-around on near-SIZE_MAX values.
