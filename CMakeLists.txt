@@ -87,7 +87,15 @@ target_compile_options(h264_normalizer PRIVATE -Wall -Wextra -Wpedantic -Werror)
 add_library(android_auto_usb src/aa/wired_receiver.cpp)
 target_include_directories(android_auto_usb PUBLIC include)
 target_include_directories(android_auto_usb PRIVATE ${LIBUSB_INCLUDE_DIR})
-target_link_libraries(android_auto_usb PUBLIC AASDK::aasdk absl::log_internal_check_op)
+# Newer Abseil (>= 20240722, e.g. Nix) exports this internal target; older
+# distro builds (e.g. Ubuntu 24.04) do not and expose the symbols via
+# absl::log instead.
+if(TARGET absl::log_internal_check_op)
+    set(ABSL_LOG_LINK absl::log_internal_check_op)
+else()
+    set(ABSL_LOG_LINK absl::log)
+endif()
+target_link_libraries(android_auto_usb PUBLIC AASDK::aasdk ${ABSL_LOG_LINK})
 target_compile_options(android_auto_usb PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 add_executable(aa2acp-airplay-pair-setup-probe src/airplay_pair_setup_probe_main.cpp)
