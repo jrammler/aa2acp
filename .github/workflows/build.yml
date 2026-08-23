@@ -40,13 +40,18 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
-      - name: Upload binaries
+      - name: Package
+        run: |
+          cpack --config build/CPackConfig.cmake
+          mv *.deb aa2acp.deb
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: aa2acp-binaries
+          name: aa2acp-artifacts
           path: |
             build/aa2acp
-            build/aa2acp-android-auto-usb
+            aa2acp.deb
           retention-days: 7
 
   format:
