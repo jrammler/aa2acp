@@ -1,17 +1,29 @@
 #include "aa2acp/airplay/pairing_store.hpp"
 
-#include <array>
+#include <fcntl.h>
 #include <fstream>
 #include <sys/stat.h>
+#include <unistd.h>
+
+#include <array>
 
 namespace aa2acp::airplay {
 namespace {
 
 constexpr std::array<char, 8> kMagic{'A', 'C', 'P', 'P', 'A', 'I', 'R', '1'};
 
-void write_u16(std::ostream &stream, const std::uint16_t value) {
-  stream.put(static_cast<char>(value));
-  stream.put(static_cast<char>(value >> 8));
+bool write_u16(const int fd, const std::uint16_t value) {
+  const char bytes[2] = {static_cast<char>(value & 0xff),
+                         static_cast<char>((value >> 8) & 0xff)};
+  std::size_t written = 0;
+  while (written < 2) {
+    const auto n = ::write(fd, bytes + written, 2 - written);
+    if (n <= 0) {
+      return false;
+    }
+    written += static_cast<std::size_t>(n);
+  }
+  return true;
 }
 
 std::optional<std::uint16_t> read_u16(std::istream &stream) {
@@ -61,28 +73,48 @@ bool save_pairing_record(const std::filesystem::path &path,
   std::filesystem::create_directories(path.parent_path(), error);
   if (error)
     return false;
+  // The file contains the Ed25519 private key: create it exclusively with
+  // owner-only permissions so it is never briefly world-readable.
   const auto temporary = path.string() + ".tmp";
-  {
-    std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
-    if (!stream)
-      return false;
-    stream.write(kMagic.data(), kMagic.size());
-    write_u16(stream, static_cast<std::uint16_t>(record.controller_id.size()));
-    stream.write(record.controller_id.data(), record.controller_id.size());
-    stream.write(
-        reinterpret_cast<const char *>(record.controller.private_key.data()),
-        32);
-    stream.write(
-        reinterpret_cast<const char *>(record.controller.public_key.data()),
-        32);
-    stream.write(
-        reinterpret_cast<const char *>(record.accessory_public_key.data()), 32);
-    if (!stream.good())
-      return false;
-  }
-  if (chmod(temporary.c_str(), S_IRUSR | S_IWUSR) != 0 ||
-      std::rename(temporary.c_str(), path.c_str()) != 0)
+  const int fd =
+      ::open(temporary.c_str(),
+             O_WRONLY | O_CREAT | O_EXCL | O_TRUNC, S_IRUSR | S_IWUSR);
+  if (fd < 0) {
     return false;
+  }
+  const auto close_and_remove = [&]() {
+    ::close(fd);
+    ::unlink(temporary.c_str());
+  };
+  const auto write_all = [&](const void *data, std::size_t size) {
+    const auto *bytes = static_cast<const char *>(data);
+    std::size_t written = 0;
+    while (written < size) {
+      const auto n = ::write(fd, bytes + written, size - written);
+      if (n <= 0) {
+        return false;
+      }
+      written += static_cast<std::size_t>(n);
+    }
+    return true;
+  };
+  bool ok = write_all(kMagic.data(), kMagic.size()) &&
+            write_u16(fd, static_cast<std::uint16_t>(
+                              record.controller_id.size())) &&
+            write_all(record.controller_id.data(),
+                      record.controller_id.size()) &&
+            write_all(record.controller.private_key.data(), 32) &&
+            write_all(record.controller.public_key.data(), 32) &&
+            write_all(record.accessory_public_key.data(), 32) && ::fsync(fd) == 0;
+  ::close(fd);
+  if (!ok) {
+    close_and_remove();
+    return false;
+  }
+  if (std::rename(temporary.c_str(), path.c_str()) != 0) {
+    close_and_remove();
+    return false;
+  }
   return true;
 }
 

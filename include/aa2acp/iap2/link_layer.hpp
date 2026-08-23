@@ -105,6 +105,7 @@ private:
   Lsp lsp_{};
   std::uint8_t sent_sequence_{99};
   std::uint8_t last_received_sequence_{};
+  bool last_sequence_valid_{false}; // suppresses false duplicates on seq 0
   std::vector<std::uint8_t> receive_buffer_;
   std::chrono::steady_clock::time_point next_marker_{};
   std::chrono::steady_clock::time_point next_syn_{};

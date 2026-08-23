@@ -63,8 +63,15 @@ std::optional<std::uint8_t> discover_spp_channel(const std::string_view mac) {
             }
             // The parameter following the RFCOMM UUID is the channel.
             const auto *params = descriptor->next;
-            if (params != nullptr && params->dtd == SDP_UINT8) {
+            if (params == nullptr) {
+              continue;
+            }
+            // Some units encode the channel as UINT16.
+            if (params->dtd == SDP_UINT8) {
               channel = static_cast<std::uint8_t>(params->val.uint8);
+            } else if (params->dtd == SDP_UINT16 &&
+                       params->val.uint16 <= 30) {
+              channel = static_cast<std::uint8_t>(params->val.uint16);
             }
           }
         }

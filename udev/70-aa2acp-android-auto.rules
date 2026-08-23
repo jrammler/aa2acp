@@ -12,7 +12,7 @@
 #
 # Post-AOAP Google IDs get an explicit rule so the common case (phone already
 # in accessory mode) does not depend on the blanket grant.
-SUBSYSTEM=="usb", ATTRS{idVendor}=="18d1", ATTRS{idProduct}=="2d00", MODE="0660", GROUP="aa2acp"
-SUBSYSTEM=="usb", ATTRS{idVendor}=="18d1", ATTRS{idProduct}=="2d01", MODE="0660", GROUP="aa2acp"
+SUBSYSTEM=="usb", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTRS{idVendor}=="18d1", ATTRS{idProduct}=="2d00", MODE="0660", GROUP="aa2acp"
+SUBSYSTEM=="usb", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTRS{idVendor}=="18d1", ATTRS{idProduct}=="2d01", MODE="0660", GROUP="aa2acp"
 
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", MODE="0660", GROUP="aa2acp"

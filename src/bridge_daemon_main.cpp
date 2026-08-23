@@ -563,10 +563,14 @@ int main(int argc, char **argv) {
         << "Unable to start CarPlay worker\n";
     return 1;
   }
-  RecentLog recent_log;
+  // Process-lifetime allocations: detached helper threads (e.g. the
+  // capabilities provider) may log during the final seconds of shutdown,
+  // after main's locals would already be destroyed.
+  auto *recent_log = new RecentLog();
   const auto log_path = file_logging ? next_daemon_log_path()
                                      : std::optional<std::filesystem::path>{};
-  DaemonLog daemon_log(recent_log, log_path);
+  auto *daemon_log = new DaemonLog(*recent_log, log_path);
+  (void)daemon_log; // process-lifetime by design; reclaimed at exit
   if (log_path)
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
         << "Bridge daemon: logging to " << *log_path << '\n';
@@ -758,7 +762,7 @@ int main(int argc, char **argv) {
                           carplay_error, csrf_token));
     } else if (request.starts_with("GET /logs")) {
       respond(200, "text/html; charset=utf-8",
-              render_logs_page(recent_log.snapshot(),
+              render_logs_page(recent_log->snapshot(),
                                RecentLog::kMaximumBytes / 1024),
               "Cache-Control: no-store\r\n");
     } else if (request.starts_with("POST ") &&

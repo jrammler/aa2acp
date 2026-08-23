@@ -41,7 +41,7 @@ CMAKE_FLAGS=(
 PATCH_HASH=$(cat "$ROOT"/patches/aasdk/*.patch | sha256sum | cut -d' ' -f1)
 # Include toolchain versions in the stamp: protobuf-generated headers and
 # C++ objects must match the compiler/protoc that aa2acp itself will use.
-TOOLCHAIN=$(protoc --version; cmake --version | head -1; gcc --version | head -1)
+TOOLCHAIN=$(protoc --version; cmake --version | head -1; ${CC:-gcc} --version | head -1; ${CXX:-g++} --version | head -1)
 STAMP_FILE="$INSTALL_DIR/.built-stamp"
 STAMP_EXPECTED="rev=$AASDK_REV patches=$PATCH_HASH toolchain=$(printf '%s\n' "$TOOLCHAIN" | sha256sum | cut -d' ' -f1)"
 
@@ -52,7 +52,9 @@ fi
 
 echo "building aasdk $AASDK_REV into $INSTALL_DIR"
 
-rm -rf "$SRC_DIR" "$BUILD_DIR"
+# Wipe the install prefix too: a new revision may stop shipping files that
+# a stale prefix would keep exporting to consumers.
+rm -rf "$SRC_DIR" "$BUILD_DIR" "$INSTALL_DIR"
 mkdir -p "$SRC_DIR" "$BUILD_DIR" "$INSTALL_DIR"
 
 git clone "$AASDK_URL" "$SRC_DIR"

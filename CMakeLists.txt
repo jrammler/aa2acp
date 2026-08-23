@@ -39,6 +39,10 @@ if(AA2ACP_VERSION MATCHES "-")
   string(REGEX REPLACE "-.*$" "" AA2ACP_VERSION_BASE "${AA2ACP_VERSION}")
   string(REPLACE "-" "+" AA2ACP_REVISION "${AA2ACP_REVISION}")
   set(AA2ACP_VERSION "${AA2ACP_VERSION_BASE}~${AA2ACP_REVISION}")
+  if(AA2ACP_REVISION MATCHES "dirty")
+    message(WARNING "Building a deb from a dirty source tree; the package "
+                    "version will sort before the release it is based on.")
+  endif()
 endif()
 
 # GCC 13/14 (trixie) has a known -Wmaybe-uninitialized false positive on
@@ -123,16 +127,6 @@ target_include_directories(android_auto_usb PUBLIC include)
 target_include_directories(android_auto_usb PRIVATE ${LIBUSB_INCLUDE_DIR})
 # Newer Abseil (>= 20240722, e.g. Nix) exports this internal target; older
 # distro builds (e.g. Ubuntu 24.04) do not and expose the symbols via
-# absl::log instead.
-if(TARGET absl::log_internal_check_op)
-    set(ABSL_LOG_LINK absl::log_internal_check_op)
-elseif(TARGET absl::log)
-    set(ABSL_LOG_LINK absl::log)
-else()
-    # Distro abseil packages (e.g. Ubuntu 24.04) may not export log targets
-    # at all; aasdk resolves those symbols against the system libabsl itself.
-    set(ABSL_LOG_LINK "")
-endif()
 # aasdk's public headers leak Abseil CHECK() macros into consumers
 # (e.g. wired_receiver.cpp references MakeCheckOpString). Newer Abseil
 # (Nix) puts those symbols in an internal library that neither AASDK nor

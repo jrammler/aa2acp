@@ -81,6 +81,10 @@ bool SrpClient::process_challenge(
   BnPtr prime(raw_prime, BN_free);
   auto generator = bn_new();
   auto server = bn_from(server_public_key);
+  // A server key >= the prime is malformed; reject it explicitly rather than
+  // relying on the implicit reduction.
+  if (!server || BN_cmp(server.get(), raw_prime) >= 0)
+    return false;
   auto context = CtxPtr(BN_CTX_new(), BN_CTX_free);
   if (!prime || !generator || !server || !context ||
       BN_set_word(generator.get(), 5) != 1)
@@ -128,6 +132,11 @@ bool SrpClient::process_challenge(
       BN_mod_exp(verifier.get(), generator.get(), x.get(), prime.get(),
                  context.get()) != 1)
     return false;
+  // RFC 5054 §2.6.2: a hostile server can craft inputs that zero the
+  // scramble parameter or the premaster base, pinning the session key to a
+  // known constant. Reject both before the final exponentiation.
+  if (BN_is_zero(u.get()))
+    return false;
 
   auto multiplier_verifier = bn_new();
   auto base = bn_new();
@@ -138,8 +147,11 @@ bool SrpClient::process_challenge(
       BN_mod_mul(multiplier_verifier.get(), multiplier.get(), verifier.get(),
                  prime.get(), context.get()) != 1 ||
       BN_mod_sub(base.get(), server.get(), multiplier_verifier.get(),
-                 prime.get(), context.get()) != 1 ||
-      BN_mod_mul(ux.get(), u.get(), x.get(), prime.get(), context.get()) != 1 ||
+                 prime.get(), context.get()) != 1)
+    return false;
+  if (BN_is_zero(base.get()))
+    return false;
+  if (BN_mod_mul(ux.get(), u.get(), x.get(), prime.get(), context.get()) != 1 ||
       BN_mod_add(exponent.get(), private_key.get(), ux.get(), prime.get(),
                  context.get()) != 1 ||
       BN_mod_exp(shared.get(), base.get(), exponent.get(), prime.get(),
