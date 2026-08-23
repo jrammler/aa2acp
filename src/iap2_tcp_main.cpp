@@ -72,7 +72,13 @@ int main(int argc, char **argv) {
     } else if (argument == "--port" && index + 1 < argc) {
       port = argv[++index];
     } else if (argument == "--timeout" && index + 1 < argc) {
-      timeout_seconds = std::stoi(argv[++index]);
+      try {
+        timeout_seconds = std::stoi(argv[++index]);
+      } catch (const std::exception &) {
+        timeout_seconds = 10;
+      }
+      if (timeout_seconds <= 0)
+        timeout_seconds = 10;
     } else if (argument == "--bootstrap") {
       bootstrap = true;
     } else if (argument == "--carplay") {

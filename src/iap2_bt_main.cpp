@@ -382,6 +382,8 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
       } catch (const std::exception &) {
         timeout_seconds = 15;
       }
+      if (timeout_seconds <= 0)
+        timeout_seconds = 15;
     } else if (argument == "--bootstrap") {
       bootstrap = true;
     } else if (argument == "--carplay") {

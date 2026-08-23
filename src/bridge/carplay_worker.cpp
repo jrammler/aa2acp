@@ -132,7 +132,19 @@ int CarPlayWorker::run(std::vector<std::string> arguments,
     return 1;
   active_child = pid_;
   bool stopping = false;
+  // Bound the post-stop drain: if the child wedges without closing its fds,
+  // we SIGKILL it rather than blocking shutdown forever.
+  std::optional<std::chrono::steady_clock::time_point> stop_deadline;
   for (;;) {
+    if (stopping && stop_deadline &&
+        std::chrono::steady_clock::now() > *stop_deadline) {
+      log(LogLevel::warning)
+          << "Bridge daemon: CarPlay worker did not exit after stop; "
+             "killing child\n";
+      hooks.on_connection_lost();
+      active_child = -1;
+      return 1;
+    }
     pollfd descriptors[]{{output_fd_, POLLIN, 0}, {control_fd_, POLLIN, 0}};
     if (poll(descriptors, 2, 100) > 0) {
       if ((descriptors[0].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0 ||
@@ -179,6 +191,8 @@ int CarPlayWorker::run(std::vector<std::string> arguments,
       const char stop_command = '\2';
       send(control_fd_, &stop_command, sizeof(stop_command), MSG_NOSIGNAL);
       stopping = true;
+      stop_deadline =
+          std::chrono::steady_clock::now() + std::chrono::seconds(10);
     }
   }
 }

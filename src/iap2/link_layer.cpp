@@ -169,6 +169,9 @@ void PhoneLink::receive(const std::span<const std::uint8_t> bytes,
 }
 
 void PhoneLink::tick(const std::chrono::steady_clock::time_point now) {
+  if (state_ == State::Dead) {
+    return;
+  }
   if (state_ == State::Detect && now >= next_marker_) {
     send_marker();
     next_marker_ = now + std::chrono::seconds(1);
@@ -319,6 +322,9 @@ void PhoneLink::handle_packet(const Header &header,
                               const std::chrono::steady_clock::time_point now) {
   if ((header.control & kControlRst) != 0) {
     state_ = State::Dead;
+    pending_.clear();
+    syn_outstanding_ = false;
+    receive_buffer_.clear();
     log("iAP2: accessory sent reset");
     return;
   }
@@ -384,6 +390,15 @@ void PhoneLink::handle_packet(const Header &header,
     if (state_ != State::Normal) {
       // Data before the handshake completed would desync the session.
       log("iAP2: ignoring data frame while link is not established");
+      return;
+    }
+    if (last_sequence_valid_ && header.sequence != last_received_sequence_ &&
+        static_cast<std::uint8_t>(header.sequence - last_received_sequence_) >
+            128) {
+      // A frame whose sequence moved *backwards* far enough is an old/
+      // replayed frame rather than a forward skip; drop it instead of
+      // regressing the expected sequence.
+      send_ack();
       return;
     }
     if (last_sequence_valid_ &&

@@ -83,7 +83,7 @@ bool save_pairing_record(const std::filesystem::path &path,
     return false;
   }
   const auto close_and_remove = [&]() {
-    ::close(fd);
+    // fd already closed by the caller; only remove the leaked file.
     ::unlink(temporary.c_str());
   };
   const auto write_all = [&](const void *data, std::size_t size) {
