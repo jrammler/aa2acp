@@ -146,6 +146,9 @@ target_compile_options(aa2acp-android-auto-usb PRIVATE -Wall -Wextra -Wpedantic 
 
 include(CTest)
 if(BUILD_TESTING)
+  # Keep assert() active in test code even in Release builds (which define
+  # NDEBUG); tests rely on assertions and would otherwise be no-ops.
+  add_compile_options(-UNDEBUG)
   add_executable(iap2-link-tests tests/link_layer_tests.cpp)
   target_link_libraries(iap2-link-tests PRIVATE iap2_link)
   target_compile_options(iap2-link-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
