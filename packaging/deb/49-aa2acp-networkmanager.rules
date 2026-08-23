@@ -1,0 +1,10 @@
+// Allow the aa2acp service account to manage NetworkManager connections.
+// The management hotspot is configured at runtime via nmcli; NetworkManager's
+// stock polkit policy only trusts members of the netdev group from active
+// login sessions, which a systemd service does not have.
+polkit.addRule(function(action, subject) {
+    if (subject.user == "aa2acp" &&
+        action.id.indexOf("org.freedesktop.NetworkManager.") == 0) {
+        return polkit.Result.YES;
+    }
+});

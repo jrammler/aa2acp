@@ -193,6 +193,9 @@ install(DIRECTORY "${AASDK_LIB_DIR}/" DESTINATION lib/aa2acp
         FILES_MATCHING PATTERN "libaasdk.so*")
 install(DIRECTORY "${AAP_PROTOBUF_LIB_DIR}/" DESTINATION lib/aa2acp
         FILES_MATCHING PATTERN "libaap_protobuf.so*")
+# Polkit rule: the service account manages the hotspot via NetworkManager.
+install(FILES packaging/deb/49-aa2acp-networkmanager.rules
+        DESTINATION share/polkit-1/rules.d)
 if(AA2ACP_INSTALL_SYSTEMD)
     install(FILES systemd/aa2acp.service
             DESTINATION lib/systemd/system)

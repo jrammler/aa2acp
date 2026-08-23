@@ -16,6 +16,9 @@ configure)
     getent passwd aa2acp >/dev/null || adduser --system \
         --ingroup aa2acp --home /var/lib/aa2acp \
         --shell /usr/sbin/nologin --no-create-home aa2acp
+    # netdev membership is belt-and-braces for NetworkManager access; the
+    # shipped polkit rule grants full NM rights to this account.
+    getent group netdev >/dev/null && adduser aa2acp netdev >/dev/null || true
     mkdir -p /var/lib/aa2acp
     chown aa2acp:aa2acp /var/lib/aa2acp
 
