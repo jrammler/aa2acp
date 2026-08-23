@@ -12,6 +12,11 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(AA2ACP_BUILD_DIAGNOSTICS "Build standalone diagnostic tools" OFF)
 
+# GCC 13/14 (trixie) has a known -Wmaybe-uninitialized false positive on
+# short-circuit-guarded std::optional reads and value_or; keep the warning
+# visible but non-fatal (-Werror comes from per-target option lists).
+add_compile_options(-Wno-error=maybe-uninitialized)
+
 find_package(OpenSSL REQUIRED)
 find_package(Boost 1.83 REQUIRED COMPONENTS system log_setup log unit_test_framework)
 find_package(absl CONFIG REQUIRED)
