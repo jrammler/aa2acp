@@ -16,16 +16,20 @@ on:
 
 jobs:
   build:
+    # Build inside the target distro (Raspberry Pi OS trixie base) so the
+    # deb's shared-library sonames match the Pi at runtime.
     runs-on: ubuntu-26.04-arm
+    container:
+      image: debian:trixie
     steps:
       - uses: actions/checkout@v7
 
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            cmake g++ pkg-config git \
-            libssl-dev libboost1.83-all-dev libabsl-dev protobuf-compiler libprotobuf-dev \
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            cmake g++ pkg-config git dpkg-dev \
+            libssl-dev libboost1.83-dev libabsl-dev protobuf-compiler libprotobuf-dev \
             libusb-1.0-0-dev libdbus-1-dev libbluetooth-dev \
             libavcodec-dev libavutil-dev
 
@@ -34,7 +38,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: .deps/install
-          key: aasdk-${{ hashFiles('deps.lock') }}-${{ hashFiles('patches/aasdk/*.patch') }}
+          key: aasdk-trixie-${{ hashFiles('deps.lock') }}-${{ hashFiles('patches/aasdk/*.patch') }}
 
       - name: Build pinned dependencies
         if: steps.deps-cache.outputs.cache-hit != 'true'

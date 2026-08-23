@@ -185,7 +185,9 @@ set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Android Auto to CarPlay Raspberry Pi brid
 set(CPACK_PACKAGE_VENDOR aa2acp)
 set(CPACK_PACKAGE_CONTACT "Johannes Rammler <johannes.rammler@gmail.com>")
 set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE arm64)
-set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS OFF)
+# Built in a debian:trixie container matching Raspberry Pi OS, so
+# dpkg-shlibdeps can compute real Depends for the runtime libraries.
+set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
 # Maintainer script: creates the aa2acp group and enables systemd units.
 # Safe in chroots/offline installs (see the script header).
 set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA "${CMAKE_SOURCE_DIR}/packaging/deb/postinst")
