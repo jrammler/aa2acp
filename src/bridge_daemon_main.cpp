@@ -444,8 +444,8 @@ int run_wired_android_auto_receiver(
           break;
         }
       },
-      [preparation_failed, session_config]()
-          -> std::optional<aa2acp::aa::HeadUnitCapabilities> {
+      [preparation_failed,
+       session_config]() -> std::optional<aa2acp::aa::HeadUnitCapabilities> {
         const auto &config = session_config;
         // A cold preflight normally populates this cache. Keep the fallback
         // bounded so a failed CarPlay attempt cannot consume Android Auto's
@@ -547,8 +547,7 @@ int run_wired_android_auto_receiver(
 } // namespace
 
 int main(int argc, char **argv) {
-  auto carplay_preparation_failed =
-      std::make_shared<std::atomic_bool>(false);
+  auto carplay_preparation_failed = std::make_shared<std::atomic_bool>(false);
   std::cout.setf(std::ios::unitbuf);
   std::cerr.setf(std::ios::unitbuf);
   bool file_logging = true;
@@ -645,8 +644,8 @@ int main(int argc, char **argv) {
     return 1;
   }
   std::jthread android_auto_worker(
-      [&config, &config_mutex,
-       preparation_failed = carplay_preparation_failed](const std::stop_token stop) {
+      [&config, &config_mutex, preparation_failed = carplay_preparation_failed](
+          const std::stop_token stop) {
         run_wired_android_auto_receiver(
             [&config, &config_mutex] {
               std::lock_guard lock(config_mutex);
