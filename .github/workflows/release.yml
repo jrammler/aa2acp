@@ -24,6 +24,9 @@ jobs:
         with:
           name: aa2acp-artifacts
 
+      - name: Flatten for release
+        run: mv build/aa2acp aa2acp
+
       - name: Create release
         uses: softprops/action-gh-release@v3
         with:
