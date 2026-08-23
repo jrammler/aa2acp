@@ -2,9 +2,13 @@
 #include "aa2acp/bridge/bluez_inventory.hpp"
 #include "aa2acp/iap2/bluetooth_worker.hpp"
 
+#include <bluetooth/bluetooth.h>
+#include <bluetooth/sdp.h>
+#include <bluetooth/sdp_lib.h>
 #include <dbus/dbus.h>
 
 #include <algorithm>
+#include <optional>
 #include <cctype>
 #include <chrono>
 #include <cstdint>
@@ -13,6 +17,68 @@
 #include <string>
 
 namespace aa2acp::iap2 {
+
+std::optional<std::uint8_t> discover_spp_channel(const std::string_view mac) {
+  bdaddr_t target{};
+  bdaddr_t local{};
+  if (str2ba(std::string(mac).c_str(), &target) != 0) {
+    return std::nullopt;
+  }
+  sdp_session_t *session =
+      sdp_connect(&local, &target, SDP_RETRY_IF_BUSY);
+  if (session == nullptr) {
+    return std::nullopt;
+  }
+  uuid_t spp_uuid{};
+  sdp_uuid16_create(&spp_uuid, SERIAL_PORT_SVCLASS_ID);
+  sdp_list_t *search_list = sdp_list_append(nullptr, &spp_uuid);
+  uint32_t range = 0x0000ffff;
+  sdp_list_t *attr_ids = sdp_list_append(nullptr, &range);
+  sdp_list_t *results = nullptr;
+
+  std::optional<std::uint8_t> channel;
+  if (sdp_service_search_attr_req(session, search_list,
+                                  SDP_ATTR_REQ_RANGE, attr_ids,
+                                  &results) == 0) {
+    for (sdp_list_t *entry = results; entry != nullptr && !channel.has_value();
+         entry = entry->next) {
+      auto *record = static_cast<sdp_record_t *>(entry->data);
+      sdp_list_t *protocols = nullptr;
+      if (sdp_get_access_protos(record, &protocols) == 0) {
+        for (sdp_list_t *proto_list = protocols;
+             proto_list != nullptr && !channel.has_value();
+             proto_list = proto_list->next) {
+          for (sdp_list_t *proto = static_cast<sdp_list_t *>(proto_list->data);
+               proto != nullptr; proto = proto->next) {
+            const auto *descriptor =
+                static_cast<const sdp_data_t *>(proto->data);
+            if (descriptor == nullptr || descriptor->dtd != SDP_UUID16) {
+              continue;
+            }
+            uuid_t rfcomm{};
+            sdp_uuid16_create(&rfcomm, RFCOMM_UUID);
+            if (sdp_uuid_cmp(&descriptor->val.uuid, &rfcomm) != 0) {
+              continue;
+            }
+            // The parameter following the RFCOMM UUID is the channel.
+            const auto *params = descriptor->next;
+            if (params != nullptr && params->dtd == SDP_UINT8) {
+              channel = static_cast<std::uint8_t>(params->val.uint8);
+            }
+          }
+        }
+        sdp_list_free(protocols, nullptr);
+      }
+      sdp_record_free(record);
+    }
+    sdp_list_free(results, [](void *data) { sdp_record_free(static_cast<sdp_record_t *>(data)); });
+  }
+  sdp_list_free(search_list, nullptr);
+  sdp_list_free(attr_ids, free);
+  sdp_close(session);
+  return channel;
+}
+
 namespace {
 
 constexpr char kBluez[] = "org.bluez";

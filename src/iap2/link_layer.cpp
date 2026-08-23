@@ -1,7 +1,9 @@
 #include "aa2acp/iap2/link_layer.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
+#include <string>
 
 namespace aa2acp::iap2 {
 namespace {
@@ -122,6 +124,19 @@ void PhoneLink::receive(const std::span<const std::uint8_t> bytes,
         std::search(receive_buffer_.begin(), receive_buffer_.end(),
                     kMarker.begin(), kMarker.end());
     if (marker == receive_buffer_.end()) {
+      if (!bytes.empty() && log_ != nullptr) {
+        // Dump unrecognized traffic while waiting for the accessory marker,
+        // so an incompatible dialect is visible in debug logs.
+        std::string hex = "iAP2: received " +
+                          std::to_string(bytes.size()) +
+                          " byte(s) without marker:";
+        char byte_hex[4];
+        for (const auto byte : bytes) {
+          std::snprintf(byte_hex, sizeof(byte_hex), " %02x", byte);
+          hex += byte_hex;
+        }
+        log_(hex.c_str());
+      }
       if (receive_buffer_.size() > kMarker.size() - 1) {
         receive_buffer_.erase(
             receive_buffer_.begin(),

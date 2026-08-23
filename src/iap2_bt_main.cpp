@@ -21,6 +21,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cstring>
+#include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -257,6 +258,53 @@ private:
 
 } // namespace
 
+// Runs the iAP2 marker-detection phase on an open RFCOMM socket for a few
+// seconds. Returns true once the accessory marker is recognized (or any
+// state transition out of Detect happens), meaning the channel carries iAP2.
+bool probe_iap2_detect(const int socket_fd, const std::string &address,
+                       const std::uint8_t channel) {
+  aa2acp::iap2::PhoneLink link(
+      [socket_fd](const std::span<const std::uint8_t> bytes) {
+        return send_all(socket_fd, bytes);
+      },
+      [](const char *message) {
+        if (aa2acp::bridge::debug_logging_enabled())
+          aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+              << message << '\n';
+      },
+      [](const std::span<const std::uint8_t>) {});
+  const auto start = std::chrono::steady_clock::now();
+  constexpr auto kDetectWindow = std::chrono::seconds(5);
+  link.start(start);
+  std::array<std::uint8_t, 1024> buffer{};
+  while (std::chrono::steady_clock::now() - start < kDetectWindow) {
+    pollfd descriptor{socket_fd, POLLIN, 0};
+    const auto result = poll(&descriptor, 1, 100);
+    const auto now = std::chrono::steady_clock::now();
+    if (result > 0 && (descriptor.revents & POLLIN) != 0) {
+      const auto count = recv(socket_fd, buffer.data(), buffer.size(), 0);
+      if (count <= 0) {
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+            << "Bluetooth: RFCOMM channel " << static_cast<int>(channel)
+            << " closed by accessory during detection\n";
+        return false;
+      }
+      link.receive(std::span(buffer).first(static_cast<std::size_t>(count)),
+                   now);
+    }
+    link.tick(now);
+    if (link.state() != aa2acp::iap2::State::Detect) {
+      return true;
+    }
+  }
+  aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+      << "Bluetooth: no iAP2 response on RFCOMM channel "
+      << static_cast<int>(channel) << " to " << address
+      << "; trying next channel\n";
+  (void)address;
+  return false;
+}
+
 int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
   // bridge-daemon captures this process through a pipe. Keep protocol progress
   // visible in the daemon log instead of waiting for process exit to flush it.
@@ -264,6 +312,11 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
   std::cerr.setf(std::ios::unitbuf);
   std::string address;
   std::uint8_t channel = 3;
+  // RFCOMM channels are not negotiated; some head units expose SPP on a
+  // different channel than the default. Overridable for experiments.
+  if (const auto *env_channel = std::getenv("AA2ACP_IAP2_CHANNEL")) {
+    channel = static_cast<std::uint8_t>(std::stoi(env_channel));
+  }
   int timeout_seconds = 15;
   bool bootstrap = false;
   bool carplay = false;
@@ -387,28 +440,65 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
     return 1;
   }
 
+  // Candidate RFCOMM channels: SDP-discovered first (authoritative), then
+  // the configured/default channel, then common low channels as fallback.
+  std::vector<std::uint8_t> channel_candidates;
+  const auto discovered_channel = aa2acp::iap2::discover_spp_channel(address);
+  if (discovered_channel.has_value()) {
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+        << "Bluetooth: SDP advertises SPP on RFCOMM channel "
+        << static_cast<int>(*discovered_channel) << '\n';
+    channel_candidates.push_back(*discovered_channel);
+  } else {
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+        << "Bluetooth: SDP discovery found no SPP channel; sweeping\n";
+  }
+  channel_candidates.push_back(channel);
+  for (std::uint8_t candidate = 1; candidate <= 8; ++candidate) {
+    channel_candidates.push_back(candidate);
+  }
+  std::sort(channel_candidates.begin(), channel_candidates.end());
+  channel_candidates.erase(
+      std::unique(channel_candidates.begin(), channel_candidates.end()),
+      channel_candidates.end());
+
   int socket_fd = -1;
-  int rfcomm_error{};
-  constexpr int kRfcommAttempts = 6;
-  for (int attempt = 1; attempt <= kRfcommAttempts; ++attempt) {
-    socket_fd = connect_rfcomm(address, channel, &rfcomm_error);
-    if (socket_fd >= 0)
-      break;
-    if (attempt < kRfcommAttempts) {
-      aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
-          << "Bluetooth: unable to connect RFCOMM channel "
-          << static_cast<int>(channel) << " (" << std::strerror(rfcomm_error)
-          << ", errno " << rfcomm_error << "; attempt " << attempt << "/"
-          << kRfcommAttempts << "); retrying in 500 ms\n";
-      std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  for (const auto candidate : channel_candidates) {
+    int rfcomm_error{};
+    constexpr int kRfcommAttempts = 3;
+    bool connected = false;
+    for (int attempt = 1; attempt <= kRfcommAttempts; ++attempt) {
+      socket_fd = connect_rfcomm(address, candidate, &rfcomm_error);
+      if (socket_fd >= 0) {
+        connected = true;
+        break;
+      }
+      if (attempt < kRfcommAttempts) {
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+            << "Bluetooth: unable to connect RFCOMM channel "
+            << static_cast<int>(candidate) << " ("
+            << std::strerror(rfcomm_error) << ", errno " << rfcomm_error
+            << "; attempt " << attempt << "/" << kRfcommAttempts
+            << "); retrying in 500 ms\n";
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+      }
     }
+    if (!connected || socket_fd < 0) {
+      continue;
+    }
+    if (probe_iap2_detect(socket_fd, address, candidate)) {
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+          << "Bluetooth: iAP2 marker exchange succeeded on RFCOMM channel "
+          << static_cast<int>(candidate) << '\n';
+      break;
+    }
+    close(socket_fd);
+    socket_fd = -1;
   }
   if (socket_fd < 0) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
-        << "Unable to connect RFCOMM channel " << static_cast<int>(channel)
-        << " to " << address << ": " << std::strerror(rfcomm_error)
-        << " (errno " << rfcomm_error
-        << "); ensure the device is in range, paired, and advertising iAP2\n";
+        << "Unable to establish an iAP2 RFCOMM connection to " << address
+        << "; ensure the device is in range, paired, and advertising iAP2\n";
     return 1;
   }
   if (aa2acp::bridge::debug_logging_enabled())
