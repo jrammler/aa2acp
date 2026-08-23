@@ -323,18 +323,25 @@ int run_wired_android_auto_receiver(
   // capabilities thread so nothing references daemon locals.
   const auto session_config = config_provider();
 
-  const auto video_socket =
-      std::filesystem::path("/tmp") /
-      ("aa2acp-video-" + std::to_string(getpid()) + ".sock");
-  const auto media_audio_socket =
-      std::filesystem::path("/tmp") /
-      ("aa2acp-media-audio-" + std::to_string(getpid()) + ".sock");
-  const auto guidance_audio_socket =
-      std::filesystem::path("/tmp") /
-      ("aa2acp-guidance-audio-" + std::to_string(getpid()) + ".sock");
-  const auto system_audio_socket =
-      std::filesystem::path("/tmp") /
-      ("aa2acp-system-audio-" + std::to_string(getpid()) + ".sock");
+  // Runtime IPC sockets: prefer the runtime directory (systemd services get
+  // a private, writable /run/aa2acp via RuntimeDirectory=); fall back to
+  // /tmp for plain user runs.
+  const auto *runtime_dir = std::getenv("XDG_RUNTIME_DIR");
+  const std::filesystem::path socket_dir =
+      runtime_dir && *runtime_dir ? std::filesystem::path(runtime_dir)
+                                  : std::filesystem::path("/tmp");
+  const auto video_socket = socket_dir /
+                            ("aa2acp-video-" + std::to_string(getpid()) +
+                             ".sock");
+  const auto media_audio_socket = socket_dir /
+                                  ("aa2acp-media-audio-" +
+                                   std::to_string(getpid()) + ".sock");
+  const auto guidance_audio_socket = socket_dir /
+                                     ("aa2acp-guidance-audio-" +
+                                      std::to_string(getpid()) + ".sock");
+  const auto system_audio_socket = socket_dir /
+                                   ("aa2acp-system-audio-" +
+                                    std::to_string(getpid()) + ".sock");
   VideoSocketForwarder forwarder(video_socket);
   if (!forwarder.ready()) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)

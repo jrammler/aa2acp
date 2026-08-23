@@ -17,9 +17,10 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/aa2acp
-# The media forwarders create their Unix sockets in /tmp; PrivateTmp gives
-# the service a private writable instance (shared with its forked workers).
-PrivateTmp=true
+# Runtime IPC sockets for the worker children live in /run/aa2acp;
+# systemd creates and cleans up the directory automatically.
+RuntimeDirectory=aa2acp
+Environment=XDG_RUNTIME_DIR=/run/aa2acp
 
 [Install]
 WantedBy=multi-user.target
