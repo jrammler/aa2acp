@@ -99,6 +99,19 @@ else()
     # at all; aasdk resolves those symbols against the system libabsl itself.
     set(ABSL_LOG_LINK "")
 endif()
+# aasdk's public headers leak Abseil CHECK() macros into consumers
+# (e.g. wired_receiver.cpp references MakeCheckOpString). Newer Abseil
+# (Nix) puts those symbols in an internal library that neither AASDK nor
+# absl::log pulls in transitively, so link it explicitly when exported.
+# Older distros (Ubuntu 24.04) lack these targets and resolve the symbols
+# differently, so fall back gracefully.
+if(TARGET absl::log_internal_check_op)
+    set(ABSL_LOG_LINK absl::log_internal_check_op)
+elseif(TARGET absl::log)
+    set(ABSL_LOG_LINK absl::log)
+else()
+    set(ABSL_LOG_LINK "")
+endif()
 target_link_libraries(android_auto_usb PUBLIC AASDK::aasdk ${ABSL_LOG_LINK})
 target_compile_options(android_auto_usb PRIVATE -Wall -Wextra -Wpedantic -Werror)
 

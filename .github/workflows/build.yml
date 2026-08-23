@@ -32,13 +32,7 @@ jobs:
         run: ./scripts/build-deps.sh
 
       - name: Configure
-        id: configure
-        run: |
-          set -o pipefail
-          if ! cmake -S . -B build -DCMAKE_PREFIX_PATH="$PWD/.deps/install" 2>&1 | tee cmake-config.log; then
-            echo "::error::configure failed$(tail -60 cmake-config.log | sed ':a;N;$!ba;s/\n/%0A/g')"
-            exit 1
-          fi
+        run: cmake -S . -B build -DCMAKE_PREFIX_PATH="$PWD/.deps/install"
 
       - name: Build
         run: cmake --build build -j"$(nproc)"
