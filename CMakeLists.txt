@@ -146,6 +146,8 @@ endif()
 # dependencies resolve against the distro via dpkg-shlibdeps Depends.
 find_library(AASDK_SHARED_LIBRARY NAMES aasdk REQUIRED)
 find_library(AAP_PROTOBUF_SHARED_LIBRARY NAMES aap_protobuf REQUIRED)
+cmake_path(GET AASDK_SHARED_LIBRARY PARENT_PATH AASDK_LIB_DIR)
+cmake_path(GET AAP_PROTOBUF_SHARED_LIBRARY PARENT_PATH AAP_PROTOBUF_LIB_DIR)
 
 add_executable(aa2acp src/bridge_daemon_main.cpp)
 target_link_libraries(aa2acp PRIVATE bridge_config bridge_daemon_log bridge_media_forwarders bridge_management_ui bridge_carplay_worker bluez_inventory android_auto_usb h264_normalizer airplay_rtsp iap2_link iap2_bluetooth_worker)
@@ -185,8 +187,12 @@ endif()
 option(AA2ACP_INSTALL_SYSTEMD "Install systemd units with the package" ON)
 
 install(TARGETS aa2acp RUNTIME DESTINATION bin)
-install(FILES "${AASDK_SHARED_LIBRARY}" "${AAP_PROTOBUF_SHARED_LIBRARY}"
-        DESTINATION lib/aa2acp)
+# Directory install so the full soname chain (libX.so -> .so.N) ships;
+# install(FILES) would copy only dangling symlinks.
+install(DIRECTORY "${AASDK_LIB_DIR}/" DESTINATION lib/aa2acp
+        FILES_MATCHING PATTERN "libaasdk.so*")
+install(DIRECTORY "${AAP_PROTOBUF_LIB_DIR}/" DESTINATION lib/aa2acp
+        FILES_MATCHING PATTERN "libaap_protobuf.so*")
 if(AA2ACP_INSTALL_SYSTEMD)
     install(FILES systemd/aa2acp.service
             DESTINATION lib/systemd/system)
