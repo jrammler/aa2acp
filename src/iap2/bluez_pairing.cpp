@@ -20,9 +20,9 @@ namespace aa2acp::iap2 {
 
 // Runs one SDP service search for `service_uuid` and extracts the RFCOMM
 // channel of the matching record. Returns nullopt when nothing is found.
-std::optional<std::uint8_t>
-sdp_channel_for(sdp_session_t *sdp_session, const uuid_t &service_uuid,
-                const uuid_t &rfcomm_uuid) {
+std::optional<std::uint8_t> sdp_channel_for(sdp_session_t *sdp_session,
+                                            const uuid_t &service_uuid,
+                                            const uuid_t &rfcomm_uuid) {
   sdp_list_t *search_list =
       sdp_list_append(nullptr, const_cast<uuid_t *>(&service_uuid));
   uint32_t range = 0x0000ffff;
@@ -30,9 +30,8 @@ sdp_channel_for(sdp_session_t *sdp_session, const uuid_t &service_uuid,
   sdp_list_t *results = nullptr;
 
   std::optional<std::uint8_t> channel;
-  if (sdp_service_search_attr_req(sdp_session,
-                                  search_list, SDP_ATTR_REQ_RANGE, attr_ids,
-                                  &results) == 0) {
+  if (sdp_service_search_attr_req(sdp_session, search_list, SDP_ATTR_REQ_RANGE,
+                                  attr_ids, &results) == 0) {
     for (sdp_list_t *entry = results; entry != nullptr && !channel.has_value();
          entry = entry->next) {
       auto *record = static_cast<sdp_record_t *>(entry->data);
@@ -100,9 +99,9 @@ std::optional<std::uint8_t> discover_spp_channel(const std::string_view mac) {
   // CarPlay head units advertise the Apple iAP2 accessory service under a
   // vendor-specific 128-bit UUID; generic SPP is the fallback.
   uuid_t iap2_uuid{};
-  sdp_uuid128_create(
-      &iap2_uuid, (const void *)"\x00\x00\x00\x00\xde\xca\xfa\xde"
-                                "\xde\xca\xde\xaf\xde\xca\xca\xff");
+  sdp_uuid128_create(&iap2_uuid,
+                     (const void *)"\x00\x00\x00\x00\xde\xca\xfa\xde"
+                                   "\xde\xca\xde\xaf\xde\xca\xca\xff");
   uuid_t spp_uuid{};
   sdp_uuid16_create(&spp_uuid, SERIAL_PORT_SVCLASS_ID);
   for (const auto *service_uuid : {&iap2_uuid, &spp_uuid}) {
