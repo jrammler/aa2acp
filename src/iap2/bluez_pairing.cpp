@@ -34,6 +34,7 @@ static void extract_endpoint(sdp_record_t *record,
   for (sdp_list_t *proto_list = protocols; proto_list != nullptr;
        proto_list = proto_list->next) {
     std::optional<std::uint16_t> proto_psm;
+    bool proto_has_rfcomm = false;
     for (sdp_list_t *proto = static_cast<sdp_list_t *>(proto_list->data);
          proto != nullptr; proto = proto->next) {
       const auto *descriptor = static_cast<const sdp_data_t *>(proto->data);
@@ -48,14 +49,16 @@ static void extract_endpoint(sdp_record_t *record,
                    params->val.uint16 <= 30) {
           rfcomm_channel = static_cast<std::uint8_t>(params->val.uint16);
         }
+        proto_has_rfcomm = true;
       } else if (sdp_uuid_cmp(&descriptor->val.uuid, &l2cap_uuid) == 0) {
         if (params && params->dtd == SDP_UINT16)
           proto_psm = params->val.uint16;
       }
     }
-    // A PSM parameter belongs to the L2CAP entry of this protocol; keep the
-    // last protocol's PSM as the service payload carrier.
-    if (proto_psm)
+    // A PSM next to an RFCOMM entry describes the multiplexor that carries
+    // SPP, not a direct payload endpoint. Only an L2CAP-terminated protocol
+    // (no RFCOMM following) means iAP2 runs over L2CAP itself.
+    if (proto_psm && !proto_has_rfcomm)
       l2cap_psm = proto_psm;
   }
   for (sdp_list_t *iter = protocols; iter != nullptr; iter = iter->next) {

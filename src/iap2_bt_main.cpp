@@ -537,14 +537,21 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
         << "Bluetooth: SDP discovery found no endpoint; sweeping\n";
   }
-  channel_candidates.push_back(channel);
+  // Fallback sweep: default channel plus common low channels. The
+  // SDP-discovered channel (already pushed first, above) keeps its priority -
+  // sorting only the sweep entries preserves that ordering.
+  std::vector<std::uint8_t> sweep_candidates{channel};
   for (std::uint8_t candidate = 1; candidate <= 8; ++candidate) {
-    channel_candidates.push_back(candidate);
+    sweep_candidates.push_back(candidate);
   }
-  std::sort(channel_candidates.begin(), channel_candidates.end());
-  channel_candidates.erase(
-      std::unique(channel_candidates.begin(), channel_candidates.end()),
-      channel_candidates.end());
+  std::sort(sweep_candidates.begin(), sweep_candidates.end());
+  sweep_candidates.erase(
+      std::unique(sweep_candidates.begin(), sweep_candidates.end()),
+      sweep_candidates.end());
+  for (const auto candidate : sweep_candidates) {
+    if (channel_candidates.empty() || channel_candidates.back() != candidate)
+      channel_candidates.push_back(candidate);
+  }
 
   int socket_fd = -1;
   int last_rfcomm_error{};
