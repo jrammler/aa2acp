@@ -75,9 +75,8 @@ static void run_sdp_query(sdp_session_t *sdp_session,
   sdp_list_t *attr_ids = sdp_list_append(nullptr, &range);
   sdp_list_t *results = nullptr;
 
-  if (sdp_service_search_attr_req(sdp_session, search_list,
-                                  SDP_ATTR_REQ_RANGE, attr_ids,
-                                  &results) == 0) {
+  if (sdp_service_search_attr_req(sdp_session, search_list, SDP_ATTR_REQ_RANGE,
+                                  attr_ids, &results) == 0) {
     int records = 0;
     for (sdp_list_t *entry = results; entry != nullptr; entry = entry->next) {
       ++records;

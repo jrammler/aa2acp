@@ -17,8 +17,8 @@ using PairingLogFunction =
 // in BlueZ; it does not open iAP2.
 struct DiscoveredEndpoint {
   // At most one of these is set after a successful discovery.
-  std::optional<std::uint8_t> rfcomm_channel;  // classic SPP/iAP2 over RFCOMM
-  std::optional<std::uint16_t> l2cap_psm;      // iAP2 over L2CAP
+  std::optional<std::uint8_t> rfcomm_channel; // classic SPP/iAP2 over RFCOMM
+  std::optional<std::uint16_t> l2cap_psm;     // iAP2 over L2CAP
 };
 
 // Queries the remote device's SDP records for an iAP2/CarPlay accessory

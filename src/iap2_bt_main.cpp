@@ -555,8 +555,7 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
         connect_l2cap(address, *discovered.l2cap_psm, &last_rfcomm_error);
     if (socket_fd >= 0) {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
-          << "Bluetooth: connected L2CAP PSM " << *discovered.l2cap_psm
-          << '\n';
+          << "Bluetooth: connected L2CAP PSM " << *discovered.l2cap_psm << '\n';
     } else {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
           << "Bluetooth: L2CAP PSM " << *discovered.l2cap_psm
@@ -576,49 +575,49 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
     }
   }
   if (socket_fd < 0) {
-  aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
-      << "Bluetooth: probing " << channel_candidates.size()
-      << " candidate RFCOMM channel(s) for iAP2\n";
-  for (const auto candidate : channel_candidates) {
-    if (shutdown_requested()) {
-      return 128 + SIGTERM;
-    }
-    int rfcomm_error{};
-    constexpr int kRfcommAttempts = 3;
-    bool connected = false;
-    for (int attempt = 1; attempt <= kRfcommAttempts; ++attempt) {
-      socket_fd = connect_rfcomm(address, candidate, &rfcomm_error);
-      last_rfcomm_error = rfcomm_error;
-      if (socket_fd >= 0) {
-        connected = true;
-        break;
-      }
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+        << "Bluetooth: probing " << channel_candidates.size()
+        << " candidate RFCOMM channel(s) for iAP2\n";
+    for (const auto candidate : channel_candidates) {
       if (shutdown_requested()) {
         return 128 + SIGTERM;
       }
-      if (attempt < kRfcommAttempts) {
-        aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
-            << "Bluetooth: unable to connect RFCOMM channel "
-            << static_cast<int>(candidate) << " ("
-            << std::strerror(rfcomm_error) << ", errno " << rfcomm_error
-            << "; attempt " << attempt << "/" << kRfcommAttempts
-            << "); retrying in 500 ms\n";
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+      int rfcomm_error{};
+      constexpr int kRfcommAttempts = 3;
+      bool connected = false;
+      for (int attempt = 1; attempt <= kRfcommAttempts; ++attempt) {
+        socket_fd = connect_rfcomm(address, candidate, &rfcomm_error);
+        last_rfcomm_error = rfcomm_error;
+        if (socket_fd >= 0) {
+          connected = true;
+          break;
+        }
+        if (shutdown_requested()) {
+          return 128 + SIGTERM;
+        }
+        if (attempt < kRfcommAttempts) {
+          aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+              << "Bluetooth: unable to connect RFCOMM channel "
+              << static_cast<int>(candidate) << " ("
+              << std::strerror(rfcomm_error) << ", errno " << rfcomm_error
+              << "; attempt " << attempt << "/" << kRfcommAttempts
+              << "); retrying in 500 ms\n";
+          std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
       }
+      if (!connected || socket_fd < 0) {
+        continue;
+      }
+      if (probe_iap2_detect(socket_fd, address, candidate)) {
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+            << "Bluetooth: iAP2 marker exchange succeeded on RFCOMM channel "
+            << static_cast<int>(candidate) << '\n';
+        selected_channel = candidate;
+        break;
+      }
+      close(socket_fd);
+      socket_fd = -1;
     }
-    if (!connected || socket_fd < 0) {
-      continue;
-    }
-    if (probe_iap2_detect(socket_fd, address, candidate)) {
-      aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
-          << "Bluetooth: iAP2 marker exchange succeeded on RFCOMM channel "
-          << static_cast<int>(candidate) << '\n';
-      selected_channel = candidate;
-      break;
-    }
-    close(socket_fd);
-    socket_fd = -1;
-  }
   } // RFCOMM sweep (skipped when an L2CAP endpoint already connected)
   if (socket_fd < 0) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
