@@ -330,18 +330,16 @@ int run_wired_android_auto_receiver(
   const std::filesystem::path socket_dir =
       runtime_dir && *runtime_dir ? std::filesystem::path(runtime_dir)
                                   : std::filesystem::path("/tmp");
-  const auto video_socket = socket_dir /
-                            ("aa2acp-video-" + std::to_string(getpid()) +
-                             ".sock");
-  const auto media_audio_socket = socket_dir /
-                                  ("aa2acp-media-audio-" +
-                                   std::to_string(getpid()) + ".sock");
-  const auto guidance_audio_socket = socket_dir /
-                                     ("aa2acp-guidance-audio-" +
-                                      std::to_string(getpid()) + ".sock");
-  const auto system_audio_socket = socket_dir /
-                                   ("aa2acp-system-audio-" +
-                                    std::to_string(getpid()) + ".sock");
+  const auto video_socket =
+      socket_dir / ("aa2acp-video-" + std::to_string(getpid()) + ".sock");
+  const auto media_audio_socket =
+      socket_dir / ("aa2acp-media-audio-" + std::to_string(getpid()) + ".sock");
+  const auto guidance_audio_socket =
+      socket_dir /
+      ("aa2acp-guidance-audio-" + std::to_string(getpid()) + ".sock");
+  const auto system_audio_socket =
+      socket_dir /
+      ("aa2acp-system-audio-" + std::to_string(getpid()) + ".sock");
   VideoSocketForwarder forwarder(video_socket);
   if (!forwarder.ready()) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
