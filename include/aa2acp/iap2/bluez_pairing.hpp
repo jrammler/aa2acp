@@ -15,9 +15,16 @@ using PairingLogFunction =
 // Ensures BlueZ knows, pairs, and trusts a device using a DisplayYesNo agent.
 // Numeric-comparison requests are accepted automatically. It persists the bond
 // in BlueZ; it does not open iAP2.
-// Queries the remote device's SDP records for its Serial Port service and
-// returns the RFCOMM channel it listens on.
-std::optional<std::uint8_t> discover_spp_channel(std::string_view mac);
+struct DiscoveredEndpoint {
+  // At most one of these is set after a successful discovery.
+  std::optional<std::uint8_t> rfcomm_channel;  // classic SPP/iAP2 over RFCOMM
+  std::optional<std::uint16_t> l2cap_psm;      // iAP2 over L2CAP
+};
+
+// Queries the remote device's SDP records for an iAP2/CarPlay accessory
+// service (Apple vendor UUID) or, failing that, generic SPP, and returns the
+// endpoint it listens on.
+DiscoveredEndpoint discover_endpoint(std::string_view mac);
 
 bool ensure_bluez_pairing(std::string_view mac, int timeout_seconds,
                           const PairingLogFunction &log = {});

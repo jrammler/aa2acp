@@ -18,58 +18,76 @@
 
 namespace aa2acp::iap2 {
 
-// Runs one SDP service search for `service_uuid` and extracts the RFCOMM
-// channel of the matching record. Returns nullopt when nothing is found.
-std::optional<std::uint8_t> sdp_channel_for(sdp_session_t *sdp_session,
-                                            const uuid_t &service_uuid,
-                                            const uuid_t &rfcomm_uuid) {
+// Walks one SDP record's protocol descriptor list and extracts the RFCOMM
+// channel and/or L2CAP PSM of the matching protocol.
+static void extract_endpoint(sdp_record_t *record,
+                             std::optional<std::uint8_t> &rfcomm_channel,
+                             std::optional<std::uint16_t> &l2cap_psm) {
+  uuid_t rfcomm_uuid{};
+  sdp_uuid16_create(&rfcomm_uuid, RFCOMM_UUID);
+  uuid_t l2cap_uuid{};
+  sdp_uuid16_create(&l2cap_uuid, L2CAP_UUID);
+
+  sdp_list_t *protocols = nullptr;
+  if (sdp_get_access_protos(record, &protocols) != 0)
+    return;
+  for (sdp_list_t *proto_list = protocols; proto_list != nullptr;
+       proto_list = proto_list->next) {
+    std::optional<std::uint16_t> proto_psm;
+    for (sdp_list_t *proto = static_cast<sdp_list_t *>(proto_list->data);
+         proto != nullptr; proto = proto->next) {
+      const auto *descriptor = static_cast<const sdp_data_t *>(proto->data);
+      if (descriptor == nullptr || descriptor->dtd != SDP_UUID16)
+        continue;
+      const auto *params = descriptor->next;
+      if (sdp_uuid_cmp(&descriptor->val.uuid, &rfcomm_uuid) == 0) {
+        // The parameter following the RFCOMM UUID is the channel.
+        if (params && params->dtd == SDP_UINT8) {
+          rfcomm_channel = static_cast<std::uint8_t>(params->val.uint8);
+        } else if (params && params->dtd == SDP_UINT16 &&
+                   params->val.uint16 <= 30) {
+          rfcomm_channel = static_cast<std::uint8_t>(params->val.uint16);
+        }
+      } else if (sdp_uuid_cmp(&descriptor->val.uuid, &l2cap_uuid) == 0) {
+        if (params && params->dtd == SDP_UINT16)
+          proto_psm = params->val.uint16;
+      }
+    }
+    // A PSM parameter belongs to the L2CAP entry of this protocol; keep the
+    // last protocol's PSM as the service payload carrier.
+    if (proto_psm)
+      l2cap_psm = proto_psm;
+  }
+  for (sdp_list_t *iter = protocols; iter != nullptr; iter = iter->next) {
+    sdp_list_free(static_cast<sdp_list_t *>(iter->data), free);
+  }
+  sdp_list_free(protocols, nullptr);
+}
+
+// Runs one SDP service search for `service_uuid` and extracts endpoints from
+// every matching record.
+static void run_sdp_query(sdp_session_t *sdp_session,
+                          const uuid_t &service_uuid,
+                          DiscoveredEndpoint &endpoint) {
   sdp_list_t *search_list =
       sdp_list_append(nullptr, const_cast<uuid_t *>(&service_uuid));
   uint32_t range = 0x0000ffff;
   sdp_list_t *attr_ids = sdp_list_append(nullptr, &range);
   sdp_list_t *results = nullptr;
 
-  std::optional<std::uint8_t> channel;
-  if (sdp_service_search_attr_req(sdp_session, search_list, SDP_ATTR_REQ_RANGE,
-                                  attr_ids, &results) == 0) {
-    for (sdp_list_t *entry = results; entry != nullptr && !channel.has_value();
-         entry = entry->next) {
+  if (sdp_service_search_attr_req(sdp_session, search_list,
+                                  SDP_ATTR_REQ_RANGE, attr_ids,
+                                  &results) == 0) {
+    int records = 0;
+    for (sdp_list_t *entry = results; entry != nullptr; entry = entry->next) {
+      ++records;
       auto *record = static_cast<sdp_record_t *>(entry->data);
-      sdp_list_t *protocols = nullptr;
-      if (sdp_get_access_protos(record, &protocols) == 0) {
-        for (sdp_list_t *proto_list = protocols;
-             proto_list != nullptr && !channel.has_value();
-             proto_list = proto_list->next) {
-          for (sdp_list_t *proto = static_cast<sdp_list_t *>(proto_list->data);
-               proto != nullptr; proto = proto->next) {
-            const auto *descriptor =
-                static_cast<const sdp_data_t *>(proto->data);
-            if (descriptor == nullptr || descriptor->dtd != SDP_UUID16) {
-              continue;
-            }
-            if (sdp_uuid_cmp(&descriptor->val.uuid, &rfcomm_uuid) != 0) {
-              continue;
-            }
-            // The parameter following the RFCOMM UUID is the channel.
-            const auto *params = descriptor->next;
-            if (params == nullptr) {
-              continue;
-            }
-            // Some units encode the channel as UINT16.
-            if (params->dtd == SDP_UINT8) {
-              channel = static_cast<std::uint8_t>(params->val.uint8);
-            } else if (params->dtd == SDP_UINT16 && params->val.uint16 <= 30) {
-              channel = static_cast<std::uint8_t>(params->val.uint16);
-            }
-          }
-        }
-        // Free each protocol's nested list (its nodes/data are heap
-        // allocated), then the outer list nodes.
-        for (sdp_list_t *iter = protocols; iter != nullptr; iter = iter->next) {
-          sdp_list_free(static_cast<sdp_list_t *>(iter->data), free);
-        }
-        sdp_list_free(protocols, nullptr);
-      }
+      extract_endpoint(record, endpoint.rfcomm_channel, endpoint.l2cap_psm);
+    }
+    if (records > 0 && !endpoint.rfcomm_channel && !endpoint.l2cap_psm) {
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+          << "Bluetooth: SDP returned " << records
+          << " record(s) with no recognizable endpoint\n";
     }
     sdp_list_free(results, [](void *data) {
       sdp_record_free(static_cast<sdp_record_t *>(data));
@@ -77,25 +95,20 @@ std::optional<std::uint8_t> sdp_channel_for(sdp_session_t *sdp_session,
   }
   sdp_list_free(attr_ids, nullptr);
   sdp_list_free(search_list, nullptr);
-  return channel;
 }
 
-std::optional<std::uint8_t> discover_spp_channel(const std::string_view mac) {
+DiscoveredEndpoint discover_endpoint(const std::string_view mac) {
   bdaddr_t target{};
   if (str2ba(std::string(mac).c_str(), &target) != 0) {
-    return std::nullopt;
+    return {};
   }
   // BDADDR_ANY expands to an rvalue-cast that C++ rejects; use a zeroed
   // local address instead.
   bdaddr_t local{};
   sdp_session_t *session = sdp_connect(&local, &target, SDP_RETRY_IF_BUSY);
   if (session == nullptr) {
-    return std::nullopt;
+    return {};
   }
-  uuid_t rfcomm_uuid{};
-  sdp_uuid16_create(&rfcomm_uuid, RFCOMM_UUID);
-
-  std::optional<std::uint8_t> channel;
   // CarPlay head units advertise the Apple iAP2 accessory service under a
   // vendor-specific 128-bit UUID; generic SPP is the fallback.
   uuid_t iap2_uuid{};
@@ -104,13 +117,15 @@ std::optional<std::uint8_t> discover_spp_channel(const std::string_view mac) {
                                    "\xde\xca\xde\xaf\xde\xca\xca\xff");
   uuid_t spp_uuid{};
   sdp_uuid16_create(&spp_uuid, SERIAL_PORT_SVCLASS_ID);
+
+  DiscoveredEndpoint endpoint;
   for (const auto *service_uuid : {&iap2_uuid, &spp_uuid}) {
-    channel = sdp_channel_for(session, *service_uuid, rfcomm_uuid);
-    if (channel.has_value())
+    run_sdp_query(session, *service_uuid, endpoint);
+    if (endpoint.rfcomm_channel || endpoint.l2cap_psm)
       break;
   }
   sdp_close(session);
-  return channel;
+  return endpoint;
 }
 
 namespace {
