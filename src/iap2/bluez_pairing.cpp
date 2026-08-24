@@ -18,31 +18,21 @@
 
 namespace aa2acp::iap2 {
 
-std::optional<std::uint8_t> discover_spp_channel(const std::string_view mac) {
-  bdaddr_t target{};
-  bdaddr_t local{};
-  if (str2ba(std::string(mac).c_str(), &target) != 0) {
-    return std::nullopt;
-  }
-  sdp_session_t *session = sdp_connect(&local, &target, SDP_RETRY_IF_BUSY);
-  if (session == nullptr) {
-    return std::nullopt;
-  }
-  uuid_t spp_uuid{};
-  sdp_uuid16_create(&spp_uuid, SERIAL_PORT_SVCLASS_ID);
-  uuid_t rfcomm_uuid{};
-  sdp_uuid16_create(&rfcomm_uuid, RFCOMM_UUID);
-  // The search/attribute lists reference stack data: free the list nodes
-  // only (nullptr deleter). The returned records own their memory and are
-  // freed via the results-list deleter below.
-  sdp_list_t *search_list = sdp_list_append(nullptr, &spp_uuid);
+// Runs one SDP service search for `service_uuid` and extracts the RFCOMM
+// channel of the matching record. Returns nullopt when nothing is found.
+std::optional<std::uint8_t>
+sdp_channel_for(sdp_session_t *sdp_session, const uuid_t &service_uuid,
+                const uuid_t &rfcomm_uuid) {
+  sdp_list_t *search_list =
+      sdp_list_append(nullptr, const_cast<uuid_t *>(&service_uuid));
   uint32_t range = 0x0000ffff;
   sdp_list_t *attr_ids = sdp_list_append(nullptr, &range);
   sdp_list_t *results = nullptr;
 
   std::optional<std::uint8_t> channel;
-  if (sdp_service_search_attr_req(session, search_list, SDP_ATTR_REQ_RANGE,
-                                  attr_ids, &results) == 0) {
+  if (sdp_service_search_attr_req(sdp_session,
+                                  search_list, SDP_ATTR_REQ_RANGE, attr_ids,
+                                  &results) == 0) {
     for (sdp_list_t *entry = results; entry != nullptr && !channel.has_value();
          entry = entry->next) {
       auto *record = static_cast<sdp_record_t *>(entry->data);
@@ -88,6 +78,38 @@ std::optional<std::uint8_t> discover_spp_channel(const std::string_view mac) {
   }
   sdp_list_free(attr_ids, nullptr);
   sdp_list_free(search_list, nullptr);
+  return channel;
+}
+
+std::optional<std::uint8_t> discover_spp_channel(const std::string_view mac) {
+  bdaddr_t target{};
+  if (str2ba(std::string(mac).c_str(), &target) != 0) {
+    return std::nullopt;
+  }
+  // BDADDR_ANY expands to an rvalue-cast that C++ rejects; use a zeroed
+  // local address instead.
+  bdaddr_t local{};
+  sdp_session_t *session = sdp_connect(&local, &target, SDP_RETRY_IF_BUSY);
+  if (session == nullptr) {
+    return std::nullopt;
+  }
+  uuid_t rfcomm_uuid{};
+  sdp_uuid16_create(&rfcomm_uuid, RFCOMM_UUID);
+
+  std::optional<std::uint8_t> channel;
+  // CarPlay head units advertise the Apple iAP2 accessory service under a
+  // vendor-specific 128-bit UUID; generic SPP is the fallback.
+  uuid_t iap2_uuid{};
+  sdp_uuid128_create(
+      &iap2_uuid, (const void *)"\x00\x00\x00\x00\xde\xca\xfa\xde"
+                                "\xde\xca\xde\xaf\xde\xca\xca\xff");
+  uuid_t spp_uuid{};
+  sdp_uuid16_create(&spp_uuid, SERIAL_PORT_SVCLASS_ID);
+  for (const auto *service_uuid : {&iap2_uuid, &spp_uuid}) {
+    channel = sdp_channel_for(session, *service_uuid, rfcomm_uuid);
+    if (channel.has_value())
+      break;
+  }
   sdp_close(session);
   return channel;
 }
