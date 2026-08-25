@@ -802,7 +802,7 @@ int main(int argc, char **argv) {
           std::to_string(snapshot.carplay_preflight_phase_id);
       const bool stale = snapshot.carplay_preflight_running &&
                          (!known_phase || *known_phase != current_phase);
-      respond(stale ? 204 : 205, "text/plain",
+      respond(stale ? 205 : 204, "text/plain",
               snapshot.carplay_preflight_status);
     } else if (request.starts_with("POST /management-hotspot ")) {
       const auto passphrase = form_field(body, "management_hotspot_passphrase");
