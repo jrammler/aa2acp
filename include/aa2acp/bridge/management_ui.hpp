@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -21,6 +22,9 @@ struct Snapshot {
   std::string bluetooth_scan_phase{"idle"};
   std::string bluetooth_error;
   bool carplay_preflight_running{};
+  // Bumped on every preflight state change (start, pairing prompt,
+  // confirmation resolved, finished) so the UI can reload only on change.
+  std::uint64_t carplay_preflight_phase_id{};
   std::string carplay_preflight_status;
   std::optional<iap2::PairingConfirmationMessage> pairing_confirmation;
   bool management_hotspot_password_pending{};

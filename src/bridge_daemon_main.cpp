@@ -261,6 +261,9 @@ int run_carplay_session(const aa2acp::bridge::Config &config,
            [](const aa2acp::iap2::PairingConfirmationMessage &confirmation) {
              std::lock_guard state_lock(management_state.mutex);
              management_state.snapshot.pairing_confirmation = confirmation;
+             management_state.snapshot.carplay_preflight_phase_id++;
+             management_state.snapshot.carplay_preflight_phase_id++;
+             management_state.snapshot.carplay_preflight_phase_id++;
              management_state.snapshot.carplay_preflight_status =
                  "compare the Bluetooth pairing code in the management UI";
            },
@@ -277,6 +280,7 @@ void run_carplay_preflight(const aa2acp::bridge::Config config,
   {
     std::lock_guard lock(management.mutex);
     management.snapshot.carplay_preflight_running = true;
+    management.snapshot.carplay_preflight_phase_id++;
     management.snapshot.carplay_preflight_status = "starting";
   }
   std::atomic<pid_t> active_child{-1};
@@ -789,12 +793,17 @@ int main(int argc, char **argv) {
               : 205;
       respond(status, "text/plain", "");
     } else if (request.starts_with("GET /carplay-prepare-status")) {
+      // Reload (205) only when the UI's rendered phase is stale - e.g. a
+      // pairing prompt appeared or the preflight finished. Otherwise keep
+      // the page stable (204) so buttons stay tappable.
       const auto snapshot = management_snapshot(management_state);
-      respond(snapshot.carplay_preflight_running &&
-                      !snapshot.pairing_confirmation
-                  ? 204
-                  : 205,
-              "text/plain", snapshot.carplay_preflight_status);
+      const auto known_phase = query_field(request, "phase");
+      const auto current_phase =
+          std::to_string(snapshot.carplay_preflight_phase_id);
+      const bool stale = snapshot.carplay_preflight_running &&
+                         (!known_phase || *known_phase != current_phase);
+      respond(stale ? 204 : 205, "text/plain",
+              snapshot.carplay_preflight_status);
     } else if (request.starts_with("POST /management-hotspot ")) {
       const auto passphrase = form_field(body, "management_hotspot_passphrase");
       const auto confirmation =
@@ -886,6 +895,7 @@ int main(int argc, char **argv) {
         if (!management_state.snapshot.carplay_preflight_running &&
             !management_state.snapshot.bluetooth_scan_running) {
           management_state.snapshot.carplay_preflight_running = true;
+          management_state.snapshot.carplay_preflight_phase_id++;
           management_state.snapshot.carplay_preflight_status = "queued";
           start_preflight = true;
         }
@@ -906,6 +916,7 @@ int main(int argc, char **argv) {
         {
           std::lock_guard lock(management_state.mutex);
           management_state.snapshot.carplay_preflight_running = false;
+          management_state.snapshot.carplay_preflight_phase_id++;
           management_state.snapshot.carplay_preflight_status =
               management_state.snapshot.bluetooth_scan_running
                   ? "wait for Bluetooth scanning to finish first"
@@ -941,6 +952,10 @@ int main(int argc, char **argv) {
           if (!management_state.snapshot.pairing_confirmation)
             management_state.snapshot.pairing_confirmation = *confirmation;
         }
+        {
+          std::lock_guard lock(management_state.mutex);
+          management_state.snapshot.carplay_preflight_phase_id++;
+        }
         respond(409, "text/plain",
                 "No matching Bluetooth confirmation is pending\n");
       } else {
@@ -973,6 +988,7 @@ int main(int argc, char **argv) {
         refresh_bluetooth_inventory(management_state);
         {
           std::lock_guard lock(management_state.mutex);
+          management_state.snapshot.carplay_preflight_phase_id++;
           management_state.snapshot.carplay_preflight_status =
               "local Bluetooth bond removed; clear or restart pairing on the "
               "head unit if needed";

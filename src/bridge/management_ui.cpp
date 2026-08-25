@@ -202,6 +202,8 @@ std::string render_page(const Config &config, const Snapshot &snapshot,
       std::string(snapshot.bluetooth_scan_running ? "1" : "0") +
       "\" data-scan-phase=\"" +
       std::to_string(snapshot.bluetooth_scan_phase_id) +
+      "\" data-preflight-phase=\"" +
+      std::to_string(snapshot.carplay_preflight_phase_id) +
       "\" data-preflight-running=\"" +
       std::string(snapshot.carplay_preflight_running ? "1" : "0") +
       "\">"
@@ -377,8 +379,10 @@ std::string render_page(const Config &config, const Snapshot &snapshot,
       "1000);"
       "}catch{setTimeout(poll,2000);}};poll();})();</script>"
       "<script>(()=>{if(document.body.dataset.preflightRunning!=='1')return;"
+      "const "
+      "phase=encodeURIComponent(document.body.dataset.preflightPhase||'0');"
       "const poll=async()=>{try{const response=await "
-      "fetch('/carplay-prepare-status');"
+      "fetch('/carplay-prepare-status?phase='+phase);"
       "if(response.status===205){location.reload();return;}setTimeout(poll,"
       "1000);}catch{setTimeout(poll,2000);}};poll();})();</script></"
       "body></html>";
