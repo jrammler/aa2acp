@@ -648,18 +648,45 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
   // The overall CarPlay phase permits a minute, but discovery should remain a
   // bounded user-visible operation rather than consuming that whole budget.
   const auto discovery_seconds = std::clamp(timeout_seconds, 12, 30);
-  const auto discovery_deadline = std::chrono::steady_clock::now() +
-                                  std::chrono::seconds(discovery_seconds);
-  bool found = false;
-  while (std::chrono::steady_clock::now() < discovery_deadline) {
-    dbus_connection_read_write_dispatch(connection, 200);
-    if (device_visible(mac)) {
-      found = true;
-      write_log(log, aa2acp::bridge::LogLevel::info,
-                "found " + std::string(mac) + " during discovery");
-      break;
+
+  const auto wait_for_device = [&](const int seconds) {
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
+    while (std::chrono::steady_clock::now() < deadline) {
+      dbus_connection_read_write_dispatch(connection, 200);
+      if (device_visible(mac)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  bool found = wait_for_device(discovery_seconds);
+
+  // BlueZ inquiries occasionally stall or start producing results only
+  // after several cycles (observed with BMW head units that need waking).
+  // A manual scan from the UI always worked because it simply kept going
+  // longer - so instead of failing, restart the inquiry once and try again.
+  if (!found) {
+    write_log(log, aa2acp::bridge::LogLevel::warning,
+              "discovery window empty; restarting inquiry once");
+    std::string stop_name;
+    std::string stop_detail;
+    call_no_arguments(connection, kAdapterPath, kAdapterInterface,
+                      "StopDiscovery", 5000, stop_name, stop_detail);
+    std::string start_name;
+    std::string start_detail;
+    if (!call_no_arguments(connection, kAdapterPath, kAdapterInterface,
+                           "StartDiscovery", 5000, start_name,
+                           start_detail)) {
+      write_log(log, aa2acp::bridge::LogLevel::error,
+                "discovery restart failed: " + start_name + " " +
+                    start_detail);
+    } else {
+      found = wait_for_device(discovery_seconds);
     }
   }
+
   if (!found) {
     write_log(log, aa2acp::bridge::LogLevel::error,
               "discovery timeout reached for " + std::string(mac));
@@ -674,8 +701,7 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
     return false;
   }
   write_log(log, aa2acp::bridge::LogLevel::info,
-            "pairing " + std::string(mac) +
-                " using DisplayYesNo (management confirmation required)");
+            "found " + std::string(mac) + " during discovery");
   const int pair_timeout = timeout_seconds > 0 ? timeout_seconds * 1000 : 60000;
   // Device1 objects can disappear and be recreated while discovery updates a
   // freshly removed bond. Retry the method on the stable address-derived path
@@ -688,11 +714,30 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
     if (!paired && name == "org.freedesktop.DBus.Error.UnknownObject" &&
         attempt < 2) {
       write_log(log, aa2acp::bridge::LogLevel::warning,
-                "device object changed during discovery; retrying pair");
+                "Device1 object vanished mid-pairing; waiting for it to "
+                "reappear before retrying");
       const auto retry_deadline =
-          std::chrono::steady_clock::now() + std::chrono::seconds(2);
-      while (std::chrono::steady_clock::now() < retry_deadline)
-        dbus_connection_read_write_dispatch(connection, 100);
+          std::chrono::steady_clock::now() + std::chrono::seconds(15);
+      bool visible_again = false;
+      while (std::chrono::steady_clock::now() < retry_deadline) {
+        dbus_connection_read_write_dispatch(connection, 200);
+        if (device_visible(mac)) {
+          visible_again = true;
+          break;
+        }
+      }
+      if (!visible_again) {
+        write_log(log, aa2acp::bridge::LogLevel::error,
+                  "Bluetooth device " + std::string(mac) +
+                      " did not reappear; giving up on pairing");
+        std::string cleanup_name;
+        std::string cleanup_detail;
+        call_no_arguments(connection, kAdapterPath, kAdapterInterface,
+                          "StopDiscovery", 5000, cleanup_name,
+                          cleanup_detail);
+        cleanup_agent();
+        return false;
+      }
     }
   }
   const auto pair_error_name = name;

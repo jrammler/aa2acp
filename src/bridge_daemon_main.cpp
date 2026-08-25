@@ -793,16 +793,19 @@ int main(int argc, char **argv) {
               : 205;
       respond(status, "text/plain", "");
     } else if (request.starts_with("GET /carplay-prepare-status")) {
-      // Reload (205) only when the UI's rendered phase is stale - e.g. a
-      // pairing prompt appeared or the preflight finished. Otherwise keep
-      // the page stable (204) so buttons stay tappable.
       const auto snapshot = management_snapshot(management_state);
       const auto known_phase = query_field(request, "phase");
       const auto current_phase =
           std::to_string(snapshot.carplay_preflight_phase_id);
-      const bool stale = snapshot.carplay_preflight_running &&
-                         (!known_phase || *known_phase != current_phase);
-      respond(stale ? 205 : 204, "text/plain",
+      // Keep the page stable (poll, no reload) only while the preflight runs
+      // AND the page already rendered the current phase. Reload (205) when a
+      // new phase appeared (e.g. pairing prompt) OR when the preflight
+      // finished, so the outcome becomes visible without manual refresh.
+      const bool page_is_current =
+          known_phase.has_value() && *known_phase == current_phase;
+      const bool keep_stable =
+          snapshot.carplay_preflight_running && page_is_current;
+      respond(keep_stable ? 204 : 205, "text/plain",
               snapshot.carplay_preflight_status);
     } else if (request.starts_with("POST /management-hotspot ")) {
       const auto passphrase = form_field(body, "management_hotspot_passphrase");
