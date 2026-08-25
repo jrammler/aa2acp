@@ -51,7 +51,10 @@ static void extract_endpoint(sdp_record_t *record,
         }
         proto_has_rfcomm = true;
       } else if (sdp_uuid_cmp(&descriptor->val.uuid, &l2cap_uuid) == 0) {
-        if (params && params->dtd == SDP_UINT16)
+        // L2CAP PSMs <= 0xff are encoded as UINT8, larger ones as UINT16.
+        if (params && params->dtd == SDP_UINT8)
+          proto_psm = params->val.uint8;
+        else if (params && params->dtd == SDP_UINT16)
           proto_psm = params->val.uint16;
       }
     }
