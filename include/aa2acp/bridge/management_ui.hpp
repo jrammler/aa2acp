@@ -12,6 +12,24 @@
 
 namespace aa2acp::bridge::management {
 
+// State machine for the CarPlay preflight workflow. Transitions:
+//   idle -> discovering -> pairing_prompt -> connecting -> succeeded
+//        -> failed (from any non-idle state)
+enum class PreflightState : int {
+  idle = 0,
+  discovering = 1,
+  pairing_prompt = 2,
+  connecting = 3,
+  succeeded = 4,
+  failed = 5,
+};
+
+inline bool preflight_active(PreflightState state) {
+  return state == PreflightState::discovering ||
+         state == PreflightState::pairing_prompt ||
+         state == PreflightState::connecting;
+}
+
 // State shown by the management UI, updated by background workers.
 struct Snapshot {
   std::vector<BluetoothDevice> bluetooth_devices;
@@ -21,11 +39,11 @@ struct Snapshot {
   int bluetooth_scan_phase_id{};
   std::string bluetooth_scan_phase{"idle"};
   std::string bluetooth_error;
-  bool carplay_preflight_running{};
-  // Bumped on every preflight state change (start, pairing prompt,
-  // confirmation resolved, finished) so the UI can reload only on change.
-  std::uint64_t carplay_preflight_phase_id{};
-  std::string carplay_preflight_status;
+  PreflightState preflight_state{PreflightState::idle};
+  // Bumped on every preflight change (start, pairing prompt, confirmation
+  // resolved, finished) so the UI can reload only on change.
+  std::uint64_t preflight_revision{};
+  std::string preflight_detail;
   std::optional<iap2::PairingConfirmationMessage> pairing_confirmation;
   bool management_hotspot_password_pending{};
   std::string pending_management_hotspot_ssid;

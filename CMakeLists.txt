@@ -108,6 +108,9 @@ target_link_libraries(bridge_carplay_worker PUBLIC iap2_bluetooth_worker)
 target_compile_options(bridge_carplay_worker PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 add_library(bridge_management_ui src/bridge/management_ui.cpp)
+# The version comes from the AA2ACP_VERSION cache variable computed above
+# from the VERSION file and git describe.
+target_compile_definitions(bridge_management_ui PRIVATE AA2ACP_VERSION="${AA2ACP_VERSION}")
 target_include_directories(bridge_management_ui PUBLIC include)
 target_link_libraries(bridge_management_ui PUBLIC bridge_config bluez_inventory iap2_bluetooth_worker)
 target_compile_options(bridge_management_ui PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -173,6 +176,7 @@ cmake_path(GET AASDK_SHARED_LIBRARY PARENT_PATH AASDK_LIB_DIR)
 cmake_path(GET AAP_PROTOBUF_SHARED_LIBRARY PARENT_PATH AAP_PROTOBUF_LIB_DIR)
 
 add_executable(aa2acp src/bridge_daemon_main.cpp)
+target_compile_definitions(aa2acp PRIVATE AA2ACP_VERSION="${AA2ACP_VERSION}")
 target_link_libraries(aa2acp PRIVATE bridge_config bridge_daemon_log bridge_media_forwarders bridge_management_ui bridge_carplay_worker bluez_inventory android_auto_usb h264_normalizer airplay_rtsp iap2_link iap2_bluetooth_worker)
 set_property(TARGET aa2acp PROPERTY INSTALL_RPATH "/usr/lib/aa2acp")
 target_compile_options(aa2acp PRIVATE -Wall -Wextra -Wpedantic -Werror)

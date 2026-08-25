@@ -677,11 +677,9 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
     std::string start_name;
     std::string start_detail;
     if (!call_no_arguments(connection, kAdapterPath, kAdapterInterface,
-                           "StartDiscovery", 5000, start_name,
-                           start_detail)) {
+                           "StartDiscovery", 5000, start_name, start_detail)) {
       write_log(log, aa2acp::bridge::LogLevel::error,
-                "discovery restart failed: " + start_name + " " +
-                    start_detail);
+                "discovery restart failed: " + start_name + " " + start_detail);
     } else {
       found = wait_for_device(discovery_seconds);
     }
@@ -733,8 +731,7 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
         std::string cleanup_name;
         std::string cleanup_detail;
         call_no_arguments(connection, kAdapterPath, kAdapterInterface,
-                          "StopDiscovery", 5000, cleanup_name,
-                          cleanup_detail);
+                          "StopDiscovery", 5000, cleanup_name, cleanup_detail);
         cleanup_agent();
         return false;
       }

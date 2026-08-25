@@ -261,11 +261,11 @@ int run_carplay_session(const aa2acp::bridge::Config &config,
            [](const aa2acp::iap2::PairingConfirmationMessage &confirmation) {
              std::lock_guard state_lock(management_state.mutex);
              management_state.snapshot.pairing_confirmation = confirmation;
-             management_state.snapshot.carplay_preflight_phase_id++;
-             management_state.snapshot.carplay_preflight_phase_id++;
-             management_state.snapshot.carplay_preflight_phase_id++;
-             management_state.snapshot.carplay_preflight_status =
+             management_state.snapshot.preflight_state =
+                 aa2acp::bridge::management::PreflightState::pairing_prompt;
+             management_state.snapshot.preflight_detail =
                  "compare the Bluetooth pairing code in the management UI";
+             ++management_state.snapshot.preflight_revision;
            },
        .on_pairing_reset =
            [] {
@@ -277,12 +277,18 @@ int run_carplay_session(const aa2acp::bridge::Config &config,
 void run_carplay_preflight(const aa2acp::bridge::Config config,
                            ManagementState &management,
                            const std::stop_token stop) {
-  {
-    std::lock_guard lock(management.mutex);
-    management.snapshot.carplay_preflight_running = true;
-    management.snapshot.carplay_preflight_phase_id++;
-    management.snapshot.carplay_preflight_status = "starting";
-  }
+  // Single writer helper: every preflight transition goes through here so
+  // state, detail and revision stay consistent.
+  const auto set_preflight =
+      [&](aa2acp::bridge::management::PreflightState state,
+          const std::string &detail) {
+        std::lock_guard lock(management.mutex);
+        management.snapshot.preflight_state = state;
+        management.snapshot.preflight_detail = detail;
+        ++management.snapshot.preflight_revision;
+      };
+  set_preflight(aa2acp::bridge::management::PreflightState::discovering,
+                "searching for the head unit over Bluetooth");
   std::atomic<pid_t> active_child{-1};
   std::atomic_bool phone_disconnected{false};
   aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
@@ -290,13 +296,11 @@ void run_carplay_preflight(const aa2acp::bridge::Config config,
       << '\n';
   const auto result = run_carplay_session(config, stop, phone_disconnected,
                                           active_child, {}, {}, {}, {}, true);
-  {
-    std::lock_guard lock(management.mutex);
-    management.snapshot.carplay_preflight_running = false;
-    management.snapshot.carplay_preflight_status =
-        result == 0 ? "ready; capabilities cached"
-                    : "failed (see daemon log for details)";
-  }
+  set_preflight(result == 0
+                    ? aa2acp::bridge::management::PreflightState::succeeded
+                    : aa2acp::bridge::management::PreflightState::failed,
+                result == 0 ? "ready; capabilities cached"
+                            : "failed (see daemon log for details)");
   aa2acp::bridge::log(result == 0 ? aa2acp::bridge::LogLevel::info
                                   : aa2acp::bridge::LogLevel::warning)
       << "Management: CarPlay preflight "
@@ -557,6 +561,8 @@ int run_wired_android_auto_receiver(
 
 int main(int argc, char **argv) {
   auto carplay_preparation_failed = std::make_shared<std::atomic_bool>(false);
+  aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+      << "AA2ACP " << AA2ACP_VERSION << " starting\n";
   std::cout.setf(std::ios::unitbuf);
   std::cerr.setf(std::ios::unitbuf);
   bool file_logging = true;
@@ -794,19 +800,22 @@ int main(int argc, char **argv) {
       respond(status, "text/plain", "");
     } else if (request.starts_with("GET /carplay-prepare-status")) {
       const auto snapshot = management_snapshot(management_state);
-      const auto known_phase = query_field(request, "phase");
-      const auto current_phase =
-          std::to_string(snapshot.carplay_preflight_phase_id);
-      // Keep the page stable (poll, no reload) only while the preflight runs
-      // AND the page already rendered the current phase. Reload (205) when a
-      // new phase appeared (e.g. pairing prompt) OR when the preflight
-      // finished, so the outcome becomes visible without manual refresh.
+      const auto known_state = query_field(request, "state");
+      const auto known_revision = query_field(request, "rev");
+      const auto current_state =
+          std::to_string(static_cast<int>(snapshot.preflight_state));
+      const auto current_revision = std::to_string(snapshot.preflight_revision);
+      // Keep the page stable (poll only) while the client's view matches the
+      // current state and revision AND the preflight is still active. Reload
+      // (205) on any change or when the preflight reached a terminal state,
+      // so outcomes appear without manual refresh.
       const bool page_is_current =
-          known_phase.has_value() && *known_phase == current_phase;
-      const bool keep_stable =
-          snapshot.carplay_preflight_running && page_is_current;
-      respond(keep_stable ? 204 : 205, "text/plain",
-              snapshot.carplay_preflight_status);
+          known_state.has_value() && known_revision.has_value() &&
+          *known_state == current_state && *known_revision == current_revision;
+      const bool keep_stable = aa2acp::bridge::management::preflight_active(
+                                   snapshot.preflight_state) &&
+                               page_is_current;
+      respond(keep_stable ? 204 : 205, "text/plain", snapshot.preflight_detail);
     } else if (request.starts_with("POST /management-hotspot ")) {
       const auto passphrase = form_field(body, "management_hotspot_passphrase");
       const auto confirmation =
@@ -895,11 +904,15 @@ int main(int argc, char **argv) {
       bool start_preflight = false;
       {
         std::lock_guard lock(management_state.mutex);
-        if (!management_state.snapshot.carplay_preflight_running &&
+        const bool preflight_active_now =
+            aa2acp::bridge::management::preflight_active(
+                management_state.snapshot.preflight_state);
+        if (!preflight_active_now &&
             !management_state.snapshot.bluetooth_scan_running) {
-          management_state.snapshot.carplay_preflight_running = true;
-          management_state.snapshot.carplay_preflight_phase_id++;
-          management_state.snapshot.carplay_preflight_status = "queued";
+          management_state.snapshot.preflight_state =
+              aa2acp::bridge::management::PreflightState::discovering;
+          management_state.snapshot.preflight_detail = "queued";
+          ++management_state.snapshot.preflight_revision;
           start_preflight = true;
         }
       }
@@ -918,9 +931,8 @@ int main(int argc, char **argv) {
       } else {
         {
           std::lock_guard lock(management_state.mutex);
-          management_state.snapshot.carplay_preflight_running = false;
-          management_state.snapshot.carplay_preflight_phase_id++;
-          management_state.snapshot.carplay_preflight_status =
+          ++management_state.snapshot.preflight_revision;
+          management_state.snapshot.preflight_detail =
               management_state.snapshot.bluetooth_scan_running
                   ? "wait for Bluetooth scanning to finish first"
                   : "configure a head-unit MAC and Wi-Fi interface first";
@@ -957,7 +969,7 @@ int main(int argc, char **argv) {
         }
         {
           std::lock_guard lock(management_state.mutex);
-          management_state.snapshot.carplay_preflight_phase_id++;
+          ++management_state.snapshot.preflight_revision;
         }
         respond(409, "text/plain",
                 "No matching Bluetooth confirmation is pending\n");
@@ -976,7 +988,8 @@ int main(int argc, char **argv) {
       std::string error;
       if (selected_config.head_unit_mac.empty()) {
         respond(400, "text/plain", "No configured Bluetooth device\n");
-      } else if (snapshot.carplay_preflight_running) {
+      } else if (aa2acp::bridge::management::preflight_active(
+                     snapshot.preflight_state)) {
         respond(409, "text/plain",
                 "Cannot forget a Bluetooth bond while CarPlay preparation is "
                 "running\n");
@@ -991,8 +1004,8 @@ int main(int argc, char **argv) {
         refresh_bluetooth_inventory(management_state);
         {
           std::lock_guard lock(management_state.mutex);
-          management_state.snapshot.carplay_preflight_phase_id++;
-          management_state.snapshot.carplay_preflight_status =
+          ++management_state.snapshot.preflight_revision;
+          management_state.snapshot.preflight_detail =
               "local Bluetooth bond removed; clear or restart pairing on the "
               "head unit if needed";
         }

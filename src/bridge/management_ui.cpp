@@ -202,10 +202,13 @@ std::string render_page(const Config &config, const Snapshot &snapshot,
       std::string(snapshot.bluetooth_scan_running ? "1" : "0") +
       "\" data-scan-phase=\"" +
       std::to_string(snapshot.bluetooth_scan_phase_id) +
-      "\" data-preflight-phase=\"" +
-      std::to_string(snapshot.carplay_preflight_phase_id) +
-      "\" data-preflight-running=\"" +
-      std::string(snapshot.carplay_preflight_running ? "1" : "0") +
+      "\" data-preflight-state=\"" +
+      std::to_string(static_cast<int>(snapshot.preflight_state)) +
+      "\" data-preflight-rev=\"" + std::to_string(snapshot.preflight_revision) +
+      "\" data-preflight-active=\"" +
+      (aa2acp::bridge::management::preflight_active(snapshot.preflight_state)
+           ? "1"
+           : "0") +
       "\">"
       "<script>document.addEventListener('submit',event=>{const "
       "form=event.target;"
@@ -265,9 +268,15 @@ std::string render_page(const Config &config, const Snapshot &snapshot,
     output +=
         "<p class=status>Android Auto is disabled until both settings are "
         "saved.</p>";
-  if (!snapshot.carplay_preflight_status.empty())
+  if (!snapshot.preflight_detail.empty()) {
     output += "<p class=status>CarPlay preparation: " +
-              html_escape(snapshot.carplay_preflight_status) + "</p>";
+              html_escape(snapshot.preflight_detail) + "</p>";
+  } else if (snapshot.preflight_state !=
+             aa2acp::bridge::management::PreflightState::idle) {
+    output += "<p class=status>CarPlay preparation: " +
+              std::to_string(static_cast<int>(snapshot.preflight_state)) +
+              "</p>";
+  }
   if (snapshot.pairing_confirmation) {
     auto code = std::to_string(snapshot.pairing_confirmation->passkey);
     code.insert(0, 6 - std::min<std::size_t>(6, code.size()), '0');
@@ -349,10 +358,14 @@ std::string render_page(const Config &config, const Snapshot &snapshot,
             "name=\"management_hotspot_passphrase_confirm\"></label><button "
             "type=submit>Save configuration</button></form>";
   output += "<p><a href=\"/logs\">View recent logs</a></p>";
+#ifdef AA2ACP_VERSION
+  output += "<p class=hint>AA2ACP v" AA2ACP_VERSION "</p>";
+#endif
   if (!config.head_unit_mac.empty() && !config.wifi_interface.empty())
     output += "<form method=post action=\"/carplay-prepare\">" + csrf_input +
               "<button type=submit " +
-              std::string(snapshot.carplay_preflight_running ||
+              std::string(aa2acp::bridge::management::preflight_active(
+                              snapshot.preflight_state) ||
                                   snapshot.bluetooth_scan_running
                               ? "disabled"
                               : "") +
@@ -363,7 +376,10 @@ std::string render_page(const Config &config, const Snapshot &snapshot,
         "confirm('Forget the local Bluetooth bond? You may also need to "
         "clear the pairing on the head unit.');\">" +
         csrf_input + "<button type=submit " +
-        std::string(snapshot.carplay_preflight_running ? "disabled" : "") +
+        std::string(aa2acp::bridge::management::preflight_active(
+                        snapshot.preflight_state)
+                        ? "disabled"
+                        : "") +
         ">Forget Bluetooth bond</button></form><p class=hint>This removes "
         "the bond from AA2ACP only. It keeps the configured head unit; clear "
         "or restart pairing on the head unit too if it remains stuck.</p>";
