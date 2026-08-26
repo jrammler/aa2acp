@@ -177,15 +177,10 @@ void run_bluetooth_scan(ManagementState &state, const std::stop_token stop) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
         << "Management Bluetooth: " << message << '\n';
   };
-  set_phase(2, "LE discovery in progress");
+  set_phase(3, "classic discovery in progress");
   const auto stop_requested = [stop] { return stop.stop_requested(); };
-  aa2acp::bridge::discover_bluez_devices("le", 30, log, stop_requested);
+  aa2acp::bridge::discover_bluez_devices("bredr", 15, log, stop_requested);
   refresh_bluetooth_inventory(state);
-  if (!stop.stop_requested()) {
-    set_phase(3, "classic discovery in progress");
-    aa2acp::bridge::discover_bluez_devices("bredr", 15, log, stop_requested);
-    refresh_bluetooth_inventory(state);
-  }
   {
     std::lock_guard lock(state.mutex);
     state.snapshot.bluetooth_scan_running = false;

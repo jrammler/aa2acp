@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <iostream>
@@ -70,33 +71,84 @@ static void extract_endpoint(sdp_record_t *record,
   sdp_list_free(protocols, nullptr);
 }
 
+static bool record_has_service_uuid(const sdp_record_t *record,
+                                    const uuid_t &wanted) {
+  sdp_list_t *classes = nullptr;
+  if (sdp_get_service_classes(record, &classes) != 0)
+    return false;
+  bool found = false;
+  for (sdp_list_t *entry = classes; entry != nullptr; entry = entry->next) {
+    const auto *uuid = static_cast<const uuid_t *>(entry->data);
+    if (uuid != nullptr && sdp_uuid_cmp(uuid, &wanted) == 0) {
+      found = true;
+      break;
+    }
+  }
+  sdp_list_free(classes, free);
+  return found;
+}
+
 // Runs one SDP service search for `service_uuid` and extracts endpoints from
-// every matching record.
-static void run_sdp_query(sdp_session_t *sdp_session,
+// every matching record. BlueZ handles SDP continuation states internally.
+static void run_sdp_query(sdp_session_t *sdp_session, const char *label,
                           const uuid_t &service_uuid,
-                          DiscoveredEndpoint &endpoint) {
+                          DiscoveredEndpoint &endpoint,
+                          const uuid_t *required_service = nullptr) {
   sdp_list_t *search_list =
       sdp_list_append(nullptr, const_cast<uuid_t *>(&service_uuid));
   uint32_t range = 0x0000ffff;
   sdp_list_t *attr_ids = sdp_list_append(nullptr, &range);
   sdp_list_t *results = nullptr;
 
-  if (sdp_service_search_attr_req(sdp_session, search_list, SDP_ATTR_REQ_RANGE,
-                                  attr_ids, &results) == 0) {
+  char uuid_text[37] = {};
+  sdp_uuid2strn(&service_uuid, uuid_text, sizeof(uuid_text));
+  aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+      << "Bluetooth: SDP query " << label << " (" << uuid_text << ")\n";
+  const int result = sdp_service_search_attr_req(
+      sdp_session, search_list, SDP_ATTR_REQ_RANGE, attr_ids, &results);
+  if (result == 0) {
     int records = 0;
     for (sdp_list_t *entry = results; entry != nullptr; entry = entry->next) {
       ++records;
       auto *record = static_cast<sdp_record_t *>(entry->data);
-      extract_endpoint(record, endpoint.rfcomm_channel, endpoint.l2cap_psm);
+      const uint32_t handle = record->handle;
+      sdp_list_t *classes = nullptr;
+      std::string class_text;
+      if (sdp_get_service_classes(record, &classes) == 0) {
+        for (sdp_list_t *class_entry = classes; class_entry != nullptr;
+             class_entry = class_entry->next) {
+          const auto *uuid = static_cast<const uuid_t *>(class_entry->data);
+          char text[37] = {};
+          if (uuid != nullptr)
+            sdp_uuid2strn(uuid, text, sizeof(text));
+          if (!class_text.empty())
+            class_text += ",";
+          class_text += text;
+        }
+        sdp_list_free(classes, free);
+      }
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+          << "Bluetooth: SDP record 0x" << std::hex << handle << std::dec
+          << " service classes [" << class_text << "]\n";
+      if (required_service == nullptr ||
+          record_has_service_uuid(record, *required_service))
+        extract_endpoint(record, endpoint.rfcomm_channel, endpoint.l2cap_psm);
     }
     if (records > 0 && !endpoint.rfcomm_channel && !endpoint.l2cap_psm) {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
           << "Bluetooth: SDP returned " << records
           << " record(s) with no recognizable endpoint\n";
     }
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+        << "Bluetooth: SDP query " << label << " returned " << records
+        << " record(s)\n";
     sdp_list_free(results, [](void *data) {
       sdp_record_free(static_cast<sdp_record_t *>(data));
     });
+  } else {
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+        << "Bluetooth: SDP query " << label << " failed (result " << result
+        << ", error " << sdp_get_error(sdp_session) << ")\n";
   }
   sdp_list_free(attr_ids, nullptr);
   sdp_list_free(search_list, nullptr);
@@ -112,6 +164,9 @@ DiscoveredEndpoint discover_endpoint(const std::string_view mac) {
   bdaddr_t local{};
   sdp_session_t *session = sdp_connect(&local, &target, SDP_RETRY_IF_BUSY);
   if (session == nullptr) {
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+        << "Bluetooth: SDP connect failed for " << mac << " (errno " << errno
+        << ")\n";
     return {};
   }
   // CarPlay head units advertise the Apple iAP2 accessory service under a
@@ -120,15 +175,28 @@ DiscoveredEndpoint discover_endpoint(const std::string_view mac) {
   sdp_uuid128_create(&iap2_uuid,
                      (const void *)"\x00\x00\x00\x00\xde\xca\xfa\xde"
                                    "\xde\xca\xde\xaf\xde\xca\xca\xff");
+  uuid_t iap2_client_uuid{};
+  sdp_uuid128_create(&iap2_client_uuid,
+                     (const void *)"\x00\x00\x00\x00\xde\xca\xfa\xde"
+                                   "\xde\xca\xde\xaf\xde\xca\xca\xfe");
   uuid_t spp_uuid{};
   sdp_uuid16_create(&spp_uuid, SERIAL_PORT_SVCLASS_ID);
+  uuid_t browse_root_uuid{};
+  sdp_uuid16_create(&browse_root_uuid, PUBLIC_BROWSE_GROUP);
 
   DiscoveredEndpoint endpoint;
-  for (const auto *service_uuid : {&iap2_uuid, &spp_uuid}) {
-    run_sdp_query(session, *service_uuid, endpoint);
-    if (endpoint.rfcomm_channel || endpoint.l2cap_psm)
-      break;
-  }
+  run_sdp_query(session, "iAP2 server UUID", iap2_uuid, endpoint, &iap2_uuid);
+  if (!endpoint.rfcomm_channel && !endpoint.l2cap_psm)
+    run_sdp_query(session, "iAP2 client UUID", iap2_client_uuid, endpoint,
+                  &iap2_client_uuid);
+  if (!endpoint.rfcomm_channel && !endpoint.l2cap_psm)
+    run_sdp_query(session, "public browse root", browse_root_uuid, endpoint,
+                  &iap2_uuid);
+  if (!endpoint.rfcomm_channel && !endpoint.l2cap_psm)
+    run_sdp_query(session, "public browse root (client UUID)", browse_root_uuid,
+                  endpoint, &iap2_client_uuid);
+  if (!endpoint.rfcomm_channel && !endpoint.l2cap_psm)
+    run_sdp_query(session, "SPP UUID", spp_uuid, endpoint);
   sdp_close(session);
   return endpoint;
 }
