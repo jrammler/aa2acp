@@ -537,26 +537,22 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
         << "Bluetooth: SDP discovery found no endpoint; sweeping\n";
   }
-  // Fallback sweep: default channel plus common low channels. The
-  // SDP-discovered channel (already pushed first, above) keeps its priority -
-  // sorting only the sweep entries preserves that ordering.
-  std::vector<std::uint8_t> sweep_candidates{channel};
-  for (std::uint8_t candidate = 1; candidate <= 8; ++candidate) {
-    sweep_candidates.push_back(candidate);
-  }
-  std::sort(sweep_candidates.begin(), sweep_candidates.end());
-  sweep_candidates.erase(
-      std::unique(sweep_candidates.begin(), sweep_candidates.end()),
-      sweep_candidates.end());
-  for (const auto candidate : sweep_candidates) {
-    if (channel_candidates.empty() || channel_candidates.back() != candidate)
+  // Fallback sweep: default channel plus common low channels. Keep the SDP
+  // candidate first, and do not probe any candidate more than once.
+  const auto add_channel = [&channel_candidates](const std::uint8_t candidate) {
+    if (std::find(channel_candidates.begin(), channel_candidates.end(),
+                  candidate) == channel_candidates.end())
       channel_candidates.push_back(candidate);
-  }
+  };
+  add_channel(channel);
+  for (std::uint8_t candidate = 1; candidate <= 8; ++candidate)
+    add_channel(candidate);
 
   int socket_fd = -1;
   int last_rfcomm_error{};
   std::optional<std::uint8_t> selected_channel;
-  // L2CAP endpoint from SDP takes priority over the RFCOMM sweep.
+  bool connected_l2cap = false;
+  // L2CAP endpoint from SDP is tried before the RFCOMM sweep.
   if (discovered.l2cap_psm) {
     socket_fd =
         connect_l2cap(address, *discovered.l2cap_psm, &last_rfcomm_error);
@@ -573,6 +569,7 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
   if (socket_fd >= 0) {
     // Probe the L2CAP endpoint before committing to it.
     if (probe_iap2_detect(socket_fd, address, 0)) {
+      connected_l2cap = true;
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
           << "Bluetooth: iAP2 marker exchange succeeded on L2CAP PSM "
           << *discovered.l2cap_psm << '\n';
@@ -636,10 +633,14 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
         << "; ensure the device is in range, paired, and advertising iAP2\n";
     return 1;
   }
-  if (aa2acp::bridge::debug_logging_enabled())
-    aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
-        << "RFCOMM connected to " << address << ':'
-        << static_cast<int>(selected_channel.value_or(channel)) << '\n';
+  if (aa2acp::bridge::debug_logging_enabled()) {
+    auto logger = aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug);
+    if (connected_l2cap)
+      logger << "L2CAP connected to " << address << '\n';
+    else
+      logger << "RFCOMM connected to " << address << ':'
+             << static_cast<int>(selected_channel.value_or(channel)) << '\n';
+  }
   aa2acp::iap2::BootstrapSession session;
   aa2acp::iap2::CarPlayProbe carplay_probe(address);
   aa2acp::iap2::PhoneLink link(

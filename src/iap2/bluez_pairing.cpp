@@ -32,10 +32,11 @@ static void extract_endpoint(sdp_record_t *record,
   sdp_list_t *protocols = nullptr;
   if (sdp_get_access_protos(record, &protocols) != 0)
     return;
+  std::optional<std::uint16_t> first_l2cap_psm;
   for (sdp_list_t *proto_list = protocols; proto_list != nullptr;
        proto_list = proto_list->next) {
-    std::optional<std::uint16_t> proto_psm;
-    bool proto_has_rfcomm = false;
+    std::optional<std::uint8_t> alternative_rfcomm;
+    std::optional<std::uint16_t> alternative_l2cap;
     for (sdp_list_t *proto = static_cast<sdp_list_t *>(proto_list->data);
          proto != nullptr; proto = proto->next) {
       const auto *descriptor = static_cast<const sdp_data_t *>(proto->data);
@@ -44,27 +45,31 @@ static void extract_endpoint(sdp_record_t *record,
       const auto *params = descriptor->next;
       if (sdp_uuid_cmp(&descriptor->val.uuid, &rfcomm_uuid) == 0) {
         // The parameter following the RFCOMM UUID is the channel.
-        if (params && params->dtd == SDP_UINT8) {
-          rfcomm_channel = static_cast<std::uint8_t>(params->val.uint8);
-        } else if (params && params->dtd == SDP_UINT16 &&
-                   params->val.uint16 <= 30) {
-          rfcomm_channel = static_cast<std::uint8_t>(params->val.uint16);
-        }
-        proto_has_rfcomm = true;
+        if (params && params->dtd == SDP_UINT8)
+          alternative_rfcomm = params->val.uint8;
+        else if (params && params->dtd == SDP_UINT16 &&
+                 params->val.uint16 <= 30)
+          alternative_rfcomm = static_cast<std::uint8_t>(params->val.uint16);
       } else if (sdp_uuid_cmp(&descriptor->val.uuid, &l2cap_uuid) == 0) {
         // L2CAP PSMs <= 0xff are encoded as UINT8, larger ones as UINT16.
         if (params && params->dtd == SDP_UINT8)
-          proto_psm = params->val.uint8;
+          alternative_l2cap = params->val.uint8;
         else if (params && params->dtd == SDP_UINT16)
-          proto_psm = params->val.uint16;
+          alternative_l2cap = params->val.uint16;
       }
     }
-    // A PSM next to an RFCOMM entry describes the multiplexor that carries
-    // SPP, not a direct payload endpoint. Only an L2CAP-terminated protocol
-    // (no RFCOMM following) means iAP2 runs over L2CAP itself.
-    if (proto_psm && !proto_has_rfcomm)
-      l2cap_psm = proto_psm;
+    // Keep alternatives together. RFCOMM is the normal iAP2 transport and
+    // takes precedence over an L2CAP transport from another alternative.
+    if (alternative_rfcomm) {
+      rfcomm_channel = alternative_rfcomm;
+      l2cap_psm.reset();
+      break;
+    }
+    if (!first_l2cap_psm && alternative_l2cap)
+      first_l2cap_psm = alternative_l2cap;
   }
+  if (!rfcomm_channel && first_l2cap_psm)
+    l2cap_psm = first_l2cap_psm;
   for (sdp_list_t *iter = protocols; iter != nullptr; iter = iter->next) {
     sdp_list_free(static_cast<sdp_list_t *>(iter->data), free);
   }
@@ -131,8 +136,18 @@ static void run_sdp_query(sdp_session_t *sdp_session, const char *label,
           << "Bluetooth: SDP record 0x" << std::hex << handle << std::dec
           << " service classes [" << class_text << "]\n";
       if (required_service == nullptr ||
-          record_has_service_uuid(record, *required_service))
-        extract_endpoint(record, endpoint.rfcomm_channel, endpoint.l2cap_psm);
+          record_has_service_uuid(record, *required_service)) {
+        DiscoveredEndpoint record_endpoint;
+        extract_endpoint(record, record_endpoint.rfcomm_channel,
+                         record_endpoint.l2cap_psm);
+        if (record_endpoint.rfcomm_channel) {
+          endpoint.rfcomm_channel = record_endpoint.rfcomm_channel;
+          endpoint.l2cap_psm.reset();
+        } else if (!endpoint.rfcomm_channel && !endpoint.l2cap_psm &&
+                   record_endpoint.l2cap_psm) {
+          endpoint.l2cap_psm = record_endpoint.l2cap_psm;
+        }
+      }
     }
     if (records > 0 && !endpoint.rfcomm_channel && !endpoint.l2cap_psm) {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)

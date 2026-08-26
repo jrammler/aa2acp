@@ -62,8 +62,9 @@ pairing or the Wi-Fi handover.
   Inspect `logs/` when a failed session is no longer visible in the terminal.
 - `bluetoothctl` inspects or removes a stale BlueZ bond. AA2ACP reuses an
   existing valid bond and otherwise performs Just Works pairing.
-- The management UI's Bluetooth scan covers LE and BR/EDR sequentially; some
-  head units take time to become visible.
+- The management UI's Bluetooth scan covers Bluetooth Classic (BR/EDR), which
+  is the transport used for CarPlay pairing and SDP; some head units take time
+  to become visible.
 - Set `AA2ACP_DUMP_H264=/tmp/android-auto.h264` before launching the daemon to
   capture the raw Android Auto H.264 elementary stream. Diagnosis only; the
   file grows quickly.
