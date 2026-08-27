@@ -12,15 +12,17 @@ Android phone ── Android Auto ──> AA2ACP ── CarPlay ──> car head
 The bridge owns Bluetooth pairing, the CarPlay Wi-Fi handover, persistent
 AirPlay pairing, and the media/control translation.
 
-> **Work in progress:** this is an experimental development project, not a
-> finished consumer product. It has a verified video path, but audio, physical
-> controls, wireless Android Auto, production authentication, and appliance
-> packaging are still in progress. Do not rely on it while driving.
+> **Work in progress:** AA2ACP does not yet connect to a real car head unit.
+> Bluetooth discovery and pairing with real cars are still in progress. The
+> wired Android Auto → wireless CarPlay path has been verified end to end with
+> [LIVI](https://github.com/f-io/LIVI). Audio, physical controls, wireless
+> Android Auto, production authentication, and appliance packaging are also
+> still in progress.
 
 ## Current state
 
-The wired Android Auto → wireless CarPlay video path has been verified end to
-end with [LIVI](https://github.com/f-io/LIVI):
+The following functionality has been verified with
+[LIVI](https://github.com/f-io/LIVI):
 
 - AOAP USB and Android Auto TLS/control session;
 - Bluetooth iAP2, pairing, MFi test authentication, and CarPlay Wi-Fi handover;
