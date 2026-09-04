@@ -606,8 +606,8 @@ bool call_set_trusted(DBusConnection *connection, const std::string &path,
   return result;
 }
 
-bool call_set_le_discovery_filter(DBusConnection *connection, std::string &name,
-                                  std::string &detail) {
+bool call_set_bredr_discovery_filter(DBusConnection *connection,
+                                     std::string &name, std::string &detail) {
   DBusMessage *message =
       new_call(kAdapterPath, kAdapterInterface, "SetDiscoveryFilter");
   if (message == nullptr) {
@@ -619,7 +619,7 @@ bool call_set_le_discovery_filter(DBusConnection *connection, std::string &name,
   DBusMessageIter entry;
   DBusMessageIter variant;
   const char *key = "Transport";
-  const char *transport = "le";
+  const char *transport = "bredr";
   dbus_message_iter_init_append(message, &arguments);
   dbus_message_iter_open_container(&arguments, DBUS_TYPE_ARRAY, "{sv}",
                                    &dictionary);
@@ -726,9 +726,9 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
               "RequestDefaultAgent failed: " + name + " " + detail);
   }
 
-  if (!call_set_le_discovery_filter(connection, name, detail)) {
+  if (!call_set_bredr_discovery_filter(connection, name, detail)) {
     write_log(log, aa2acp::bridge::LogLevel::warning,
-              "SetDiscoveryFilter(le) failed: " + name + " " + detail);
+              "SetDiscoveryFilter(bredr) failed: " + name + " " + detail);
   }
   if (!call_no_arguments(connection, kAdapterPath, kAdapterInterface,
                          "StartDiscovery", 5000, name, detail)) {
