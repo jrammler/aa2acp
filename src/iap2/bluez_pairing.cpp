@@ -13,13 +13,31 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <fcntl.h>
 #include <iostream>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unistd.h>
 
 namespace aa2acp::iap2 {
+
+struct BluezIap2Connection::State {
+  DBusConnection *connection{};
+  std::string device_path;
+  int socket_fd{-1};
+  bool profile_registered{};
+};
+
+namespace {
+
+struct DiscoveredEndpoint {
+  std::optional<std::uint8_t> rfcomm_channel;
+  std::optional<std::uint16_t> l2cap_psm;
+};
+
+} // namespace
 
 // Walks one SDP record's protocol descriptor list and extracts the RFCOMM
 // channel and/or L2CAP PSM of the matching protocol.
@@ -171,7 +189,8 @@ static void run_sdp_query(sdp_session_t *sdp_session, const char *label,
   sdp_list_free(search_list, nullptr);
 }
 
-DiscoveredEndpoint discover_endpoint(const std::string_view mac) {
+[[maybe_unused]] DiscoveredEndpoint
+discover_endpoint(const std::string_view mac) {
   bdaddr_t target{};
   if (str2ba(std::string(mac).c_str(), &target) != 0) {
     return {};
@@ -235,6 +254,10 @@ constexpr char kBluez[] = "org.bluez";
 constexpr char kAgentPath[] = "/com/aa2acp/agent";
 constexpr char kAgentManager[] = "org.bluez.AgentManager1";
 constexpr char kAgentInterface[] = "org.bluez.Agent1";
+constexpr char kProfilePath[] = "/com/aa2acp/iap2_profile";
+constexpr char kProfileManager[] = "org.bluez.ProfileManager1";
+constexpr char kProfileInterface[] = "org.bluez.Profile1";
+constexpr char kIap2ServerUuid[] = "00000000-deca-fade-deca-deafdecacaff";
 constexpr char kAdapterPath[] = "/org/bluez/hci0";
 constexpr char kAdapterInterface[] = "org.bluez.Adapter1";
 constexpr char kDeviceInterface[] = "org.bluez.Device1";
@@ -522,6 +545,187 @@ DBusHandlerResult agent_vtable_handler(DBusConnection *connection,
 
 DBusObjectPathVTable kAgentVTable{
     nullptr, agent_vtable_handler, nullptr, nullptr, nullptr, nullptr};
+
+bool profile_handler(DBusConnection *connection, DBusMessage *message,
+                     void *user_data) {
+  auto *state = static_cast<BluezIap2Connection::State *>(user_data);
+  if (dbus_message_is_method_call(message, kProfileInterface, "Release")) {
+    if (state != nullptr && state->socket_fd >= 0) {
+      close(state->socket_fd);
+      state->socket_fd = -1;
+    }
+    return true;
+  }
+  if (dbus_message_is_method_call(message, kProfileInterface,
+                                  "RequestDisconnection")) {
+    DBusMessage *reply = dbus_message_new_method_return(message);
+    if (reply != nullptr) {
+      dbus_connection_send(connection, reply, nullptr);
+      dbus_connection_flush(connection);
+      dbus_message_unref(reply);
+    }
+    return true;
+  }
+  if (!dbus_message_is_method_call(message, kProfileInterface,
+                                   "NewConnection")) {
+    return false;
+  }
+
+  DBusMessageIter arguments;
+  const char *device = nullptr;
+  int received_fd = -1;
+  const bool valid =
+      state != nullptr && dbus_message_iter_init(message, &arguments) &&
+      dbus_message_iter_get_arg_type(&arguments) == DBUS_TYPE_OBJECT_PATH;
+  if (valid) {
+    dbus_message_iter_get_basic(&arguments, &device);
+    dbus_message_iter_next(&arguments);
+  }
+  const bool has_fd =
+      valid && dbus_message_iter_get_arg_type(&arguments) == DBUS_TYPE_UNIX_FD;
+  if (has_fd)
+    dbus_message_iter_get_basic(&arguments, &received_fd);
+  const bool expected_device =
+      has_fd && device != nullptr && state->device_path == device;
+  const int duplicated_fd =
+      expected_device ? fcntl(received_fd, F_DUPFD_CLOEXEC, 3) : -1;
+  if (duplicated_fd >= 0 && state->socket_fd < 0) {
+    state->socket_fd = duplicated_fd;
+    DBusMessage *reply = dbus_message_new_method_return(message);
+    if (reply != nullptr) {
+      dbus_connection_send(connection, reply, nullptr);
+      dbus_connection_flush(connection);
+      dbus_message_unref(reply);
+    }
+    return true;
+  }
+  if (duplicated_fd >= 0)
+    close(duplicated_fd);
+  DBusMessage *reply = dbus_message_new_error(
+      message, "org.bluez.Error.Rejected",
+      expected_device ? "iAP2 connection is already active"
+                      : "unexpected iAP2 profile connection");
+  if (reply != nullptr) {
+    dbus_connection_send(connection, reply, nullptr);
+    dbus_connection_flush(connection);
+    dbus_message_unref(reply);
+  }
+  return true;
+}
+
+DBusHandlerResult profile_vtable_handler(DBusConnection *connection,
+                                         DBusMessage *message, void *data) {
+  return profile_handler(connection, message, data)
+             ? DBUS_HANDLER_RESULT_HANDLED
+             : DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+}
+
+DBusObjectPathVTable kProfileVTable{
+    nullptr, profile_vtable_handler, nullptr, nullptr, nullptr, nullptr};
+
+void append_profile_string_option(DBusMessageIter *dictionary, const char *key,
+                                  const char *value) {
+  DBusMessageIter entry;
+  DBusMessageIter variant;
+  dbus_message_iter_open_container(dictionary, DBUS_TYPE_DICT_ENTRY, nullptr,
+                                   &entry);
+  dbus_message_iter_append_basic(&entry, DBUS_TYPE_STRING, &key);
+  dbus_message_iter_open_container(&entry, DBUS_TYPE_VARIANT,
+                                   DBUS_TYPE_STRING_AS_STRING, &variant);
+  dbus_message_iter_append_basic(&variant, DBUS_TYPE_STRING, &value);
+  dbus_message_iter_close_container(&entry, &variant);
+  dbus_message_iter_close_container(dictionary, &entry);
+}
+
+void append_profile_bool_option(DBusMessageIter *dictionary, const char *key,
+                                const dbus_bool_t value) {
+  DBusMessageIter entry;
+  DBusMessageIter variant;
+  dbus_message_iter_open_container(dictionary, DBUS_TYPE_DICT_ENTRY, nullptr,
+                                   &entry);
+  dbus_message_iter_append_basic(&entry, DBUS_TYPE_STRING, &key);
+  dbus_message_iter_open_container(&entry, DBUS_TYPE_VARIANT,
+                                   DBUS_TYPE_BOOLEAN_AS_STRING, &variant);
+  dbus_message_iter_append_basic(&variant, DBUS_TYPE_BOOLEAN, &value);
+  dbus_message_iter_close_container(&entry, &variant);
+  dbus_message_iter_close_container(dictionary, &entry);
+}
+
+bool call_register_iap2_profile(DBusConnection *connection, std::string &name,
+                                std::string &detail) {
+  DBusMessage *message =
+      new_call("/org/bluez", kProfileManager, "RegisterProfile");
+  if (message == nullptr) {
+    detail = "unable to allocate D-Bus message";
+    return false;
+  }
+  const char *profile_path = kProfilePath;
+  const char *uuid = kIap2ServerUuid;
+  const char *profile_name = "AA2ACP iAP2 client";
+  const char *role = "client";
+  const dbus_bool_t require_authentication = true;
+  DBusMessageIter arguments;
+  DBusMessageIter dictionary;
+  dbus_message_iter_init_append(message, &arguments);
+  dbus_message_iter_append_basic(&arguments, DBUS_TYPE_OBJECT_PATH,
+                                 &profile_path);
+  dbus_message_iter_append_basic(&arguments, DBUS_TYPE_STRING, &uuid);
+  dbus_message_iter_open_container(&arguments, DBUS_TYPE_ARRAY, "{sv}",
+                                   &dictionary);
+  append_profile_string_option(&dictionary, "Name", profile_name);
+  append_profile_string_option(&dictionary, "Role", role);
+  append_profile_bool_option(&dictionary, "RequireAuthentication",
+                             require_authentication);
+  dbus_message_iter_close_container(&arguments, &dictionary);
+  const bool result = await_call(connection, message, 5000, name, detail);
+  dbus_message_unref(message);
+  return result;
+}
+
+bool call_unregister_iap2_profile(DBusConnection *connection, std::string &name,
+                                  std::string &detail) {
+  DBusMessage *message =
+      new_call("/org/bluez", kProfileManager, "UnregisterProfile");
+  if (message == nullptr) {
+    detail = "unable to allocate D-Bus message";
+    return false;
+  }
+  const char *profile_path = kProfilePath;
+  dbus_message_append_args(message, DBUS_TYPE_OBJECT_PATH, &profile_path,
+                           DBUS_TYPE_INVALID);
+  const bool result = await_call(connection, message, 5000, name, detail);
+  dbus_message_unref(message);
+  return result;
+}
+
+bool call_connect_iap2_profile(DBusConnection *connection, const char *path,
+                               const int timeout_ms, std::string &name,
+                               std::string &detail) {
+  DBusMessage *message = new_call(path, kDeviceInterface, "ConnectProfile");
+  if (message == nullptr) {
+    detail = "unable to allocate D-Bus message";
+    return false;
+  }
+  const char *uuid = kIap2ServerUuid;
+  dbus_message_append_args(message, DBUS_TYPE_STRING, &uuid, DBUS_TYPE_INVALID);
+  const bool result = await_call(connection, message, timeout_ms, name, detail);
+  dbus_message_unref(message);
+  return result;
+}
+
+bool call_disconnect_iap2_profile(DBusConnection *connection,
+                                  const char *path) {
+  DBusMessage *message = new_call(path, kDeviceInterface, "DisconnectProfile");
+  if (message == nullptr)
+    return false;
+  const char *uuid = kIap2ServerUuid;
+  dbus_message_append_args(message, DBUS_TYPE_STRING, &uuid, DBUS_TYPE_INVALID);
+  std::string name;
+  std::string detail;
+  const bool result = await_call(connection, message, 5000, name, detail);
+  dbus_message_unref(message);
+  return result;
+}
 
 std::string device_path(const std::string_view mac) {
   std::string path = "/org/bluez/hci0/dev_";
@@ -862,6 +1066,91 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
   write_log(log, aa2acp::bridge::LogLevel::info, "device is trusted");
   cleanup_agent();
   return true;
+}
+
+BluezIap2Connection::BluezIap2Connection(std::unique_ptr<State> state)
+    : state_(std::move(state)) {}
+
+BluezIap2Connection::BluezIap2Connection(BluezIap2Connection &&) noexcept =
+    default;
+
+BluezIap2Connection &
+BluezIap2Connection::operator=(BluezIap2Connection &&) noexcept = default;
+
+BluezIap2Connection::~BluezIap2Connection() { close(); }
+
+int BluezIap2Connection::fd() const {
+  return state_ == nullptr ? -1 : state_->socket_fd;
+}
+
+void BluezIap2Connection::close() {
+  if (state_ == nullptr)
+    return;
+  if (state_->socket_fd >= 0) {
+    ::close(state_->socket_fd);
+    state_->socket_fd = -1;
+  }
+  if (state_->profile_registered) {
+    call_disconnect_iap2_profile(state_->connection,
+                                 state_->device_path.c_str());
+    std::string name;
+    std::string detail;
+    call_unregister_iap2_profile(state_->connection, name, detail);
+    state_->profile_registered = false;
+  }
+  dbus_connection_unregister_object_path(state_->connection, kProfilePath);
+  state_.reset();
+}
+
+std::optional<BluezIap2Connection>
+connect_bluez_iap2(const std::string_view mac, const int timeout_seconds,
+                   const PairingLogFunction &log) {
+  DBusError error;
+  dbus_error_init(&error);
+  DBusConnection *connection = dbus_bus_get(DBUS_BUS_SYSTEM, &error);
+  if (connection == nullptr) {
+    write_log(log, aa2acp::bridge::LogLevel::error,
+              std::string("cannot connect to system D-Bus: ") +
+                  (error.message == nullptr ? "unknown error" : error.message));
+    dbus_error_free(&error);
+    return std::nullopt;
+  }
+
+  auto state = std::make_unique<BluezIap2Connection::State>();
+  state->connection = connection;
+  state->device_path = device_path(mac);
+  if (!dbus_connection_register_object_path(connection, kProfilePath,
+                                            &kProfileVTable, state.get())) {
+    write_log(log, aa2acp::bridge::LogLevel::error,
+              "cannot register BlueZ iAP2 profile object");
+    return std::nullopt;
+  }
+
+  std::string name;
+  std::string detail;
+  if (!call_register_iap2_profile(connection, name, detail)) {
+    write_log(log, aa2acp::bridge::LogLevel::error,
+              "RegisterProfile failed: " + name + " " + detail);
+    dbus_connection_unregister_object_path(connection, kProfilePath);
+    return std::nullopt;
+  }
+  state->profile_registered = true;
+
+  const int connect_timeout_ms = std::clamp(timeout_seconds, 10, 60) * 1000;
+  write_log(log, aa2acp::bridge::LogLevel::info,
+            "requesting BlueZ iAP2 profile connection for " + std::string(mac));
+  if (!call_connect_iap2_profile(connection, state->device_path.c_str(),
+                                 connect_timeout_ms, name, detail) ||
+      state->socket_fd < 0) {
+    write_log(log, aa2acp::bridge::LogLevel::error,
+              "ConnectProfile(iAP2) failed: " + name + " " + detail);
+    BluezIap2Connection failed_connection(std::move(state));
+    failed_connection.close();
+    return std::nullopt;
+  }
+  write_log(log, aa2acp::bridge::LogLevel::info,
+            "BlueZ connected the iAP2 profile");
+  return BluezIap2Connection(std::move(state));
 }
 
 } // namespace aa2acp::iap2

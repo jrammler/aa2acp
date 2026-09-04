@@ -2,8 +2,8 @@
 
 #include "aa2acp/bridge/logging.hpp"
 
-#include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string_view>
 
@@ -15,18 +15,38 @@ using PairingLogFunction =
 // Ensures BlueZ knows, pairs, and trusts a device using a DisplayYesNo agent.
 // Numeric-comparison requests are accepted automatically. It persists the bond
 // in BlueZ; it does not open iAP2.
-struct DiscoveredEndpoint {
-  // At most one of these is set after a successful discovery.
-  std::optional<std::uint8_t> rfcomm_channel; // classic SPP/iAP2 over RFCOMM
-  std::optional<std::uint16_t> l2cap_psm;     // iAP2 over L2CAP
-};
-
-// Queries the remote device's SDP records for an iAP2/CarPlay accessory
-// service (Apple vendor UUID) or, failing that, generic SPP, and returns the
-// endpoint it listens on.
-DiscoveredEndpoint discover_endpoint(std::string_view mac);
-
 bool ensure_bluez_pairing(std::string_view mac, int timeout_seconds,
                           const PairingLogFunction &log = {});
+
+// A connected iAP2 transport obtained through BlueZ's Profile1 API. BlueZ
+// discovers the remote service and owns the profile until close() is called.
+class BluezIap2Connection {
+public:
+  struct State;
+
+  BluezIap2Connection(BluezIap2Connection &&) noexcept;
+  BluezIap2Connection &operator=(BluezIap2Connection &&) noexcept;
+  ~BluezIap2Connection();
+
+  BluezIap2Connection(const BluezIap2Connection &) = delete;
+  BluezIap2Connection &operator=(const BluezIap2Connection &) = delete;
+
+  int fd() const;
+  void close();
+
+private:
+  explicit BluezIap2Connection(std::unique_ptr<State> state);
+
+  std::unique_ptr<State> state_;
+
+  friend std::optional<BluezIap2Connection>
+  connect_bluez_iap2(std::string_view, int, const PairingLogFunction &);
+};
+
+// Connects to the remote Apple iAP2 service using bluetoothd's cached/service
+// discovery state rather than creating a competing SDP client connection.
+std::optional<BluezIap2Connection>
+connect_bluez_iap2(std::string_view mac, int timeout_seconds,
+                   const PairingLogFunction &log = {});
 
 } // namespace aa2acp::iap2
