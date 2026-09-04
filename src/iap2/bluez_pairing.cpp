@@ -12,10 +12,12 @@
 #include <cerrno>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <thread>
 
 namespace aa2acp::iap2 {
 
@@ -177,13 +179,24 @@ DiscoveredEndpoint discover_endpoint(const std::string_view mac) {
   // BDADDR_ANY expands to an rvalue-cast that C++ rejects; use a zeroed
   // local address instead.
   bdaddr_t local{};
-  sdp_session_t *session = sdp_connect(&local, &target, SDP_RETRY_IF_BUSY);
-  if (session == nullptr) {
+  // bluetoothd starts its own generic SDP browse after pairing. Some head
+  // units, including the BMW, reject a concurrent SDP connection; give that
+  // browse time to finish, then retry our targeted query on a fresh session.
+  constexpr int kSdpAttempts = 4;
+  sdp_session_t *session = nullptr;
+  for (int attempt = 1; attempt <= kSdpAttempts; ++attempt) {
+    if (attempt > 1)
+      std::this_thread::sleep_for(std::chrono::milliseconds(750));
+    session = sdp_connect(&local, &target, SDP_RETRY_IF_BUSY);
+    if (session != nullptr)
+      break;
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
-        << "Bluetooth: SDP connect failed for " << mac << " (errno " << errno
-        << ")\n";
-    return {};
+        << "Bluetooth: SDP connect failed for " << mac << " ("
+        << std::strerror(errno) << ", errno " << errno << "; attempt "
+        << attempt << "/" << kSdpAttempts << ")\n";
   }
+  if (session == nullptr)
+    return {};
   // CarPlay head units advertise the Apple iAP2 accessory service under a
   // vendor-specific 128-bit UUID; generic SPP is the fallback.
   uuid_t iap2_uuid{};
