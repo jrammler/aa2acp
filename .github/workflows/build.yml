@@ -65,13 +65,16 @@ jobs:
             }
           done
 
-      - name: Resolve version tag
-        run: |
-          git fetch --force --tags
-          git describe --tags --match 'v*' --dirty
-
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ inputs.build_type || 'RelWithDebInfo' }} -DCMAKE_PREFIX_PATH="$PWD/.deps/install"
+        run: |
+          version="$(tr -d '\r\n' < VERSION)"
+          # Container actions see the checked-out source but not its .git
+          # directory. Tag builds retain the release version; ordinary CI
+          # artifacts carry their immutable GitHub commit identifier.
+          if [ "${GITHUB_REF#refs/tags/}" = "$GITHUB_REF" ]; then
+            version="${version}~g$(printf '%s' "$GITHUB_SHA" | cut -c1-7)"
+          fi
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ inputs.build_type || 'RelWithDebInfo' }} -DCMAKE_PREFIX_PATH="$PWD/.deps/install" -DAA2ACP_VERSION="$version"
 
       - name: Build
         run: cmake --build build -j"$(nproc)"
