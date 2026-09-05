@@ -15,6 +15,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -26,6 +27,9 @@ namespace aa2acp::iap2 {
 struct BluezIap2Connection::State {
   DBusConnection *connection{};
   std::string device_path;
+  std::string profile_path;
+  std::string profile_uuid;
+  bool client_profile{};
   int socket_fd{-1};
   bool profile_registered{};
 };
@@ -254,10 +258,13 @@ constexpr char kBluez[] = "org.bluez";
 constexpr char kAgentPath[] = "/com/aa2acp/agent";
 constexpr char kAgentManager[] = "org.bluez.AgentManager1";
 constexpr char kAgentInterface[] = "org.bluez.Agent1";
-constexpr char kProfilePath[] = "/com/aa2acp/iap2_profile";
+constexpr char kProfilePath[] = "/com/aa2acp/iap2_accessory_profile";
+constexpr char kDeviceProfilePath[] = "/com/aa2acp/iap2_device_profile";
 constexpr char kProfileManager[] = "org.bluez.ProfileManager1";
 constexpr char kProfileInterface[] = "org.bluez.Profile1";
 constexpr char kIap2ServerUuid[] = "00000000-deca-fade-deca-deafdecacaff";
+constexpr char kIap2DeviceUuid[] = "00000000-deca-fade-deca-deafdecacafe";
+std::unique_ptr<BluezIap2Connection::State> device_profile;
 constexpr char kAdapterPath[] = "/org/bluez/hci0";
 constexpr char kAdapterInterface[] = "org.bluez.Adapter1";
 constexpr char kDeviceInterface[] = "org.bluez.Device1";
@@ -682,16 +689,59 @@ bool call_register_iap2_profile(DBusConnection *connection, std::string &name,
   return result;
 }
 
-bool call_unregister_iap2_profile(DBusConnection *connection, std::string &name,
-                                  std::string &detail) {
+bool call_register_iap2_device_profile(DBusConnection *connection,
+                                       std::string &name, std::string &detail) {
+  DBusMessage *message =
+      new_call("/org/bluez", kProfileManager, "RegisterProfile");
+  if (message == nullptr) {
+    detail = "unable to allocate D-Bus message";
+    return false;
+  }
+  const char *profile_path = kDeviceProfilePath;
+  const char *uuid = kIap2DeviceUuid;
+  const char *profile_name = "AA2ACP iAP2 device server";
+  const char *role = "server";
+  const dbus_bool_t require_authentication = true;
+  const dbus_uint16_t automatic_channel = 0;
+  DBusMessageIter arguments;
+  DBusMessageIter dictionary;
+  dbus_message_iter_init_append(message, &arguments);
+  dbus_message_iter_append_basic(&arguments, DBUS_TYPE_OBJECT_PATH,
+                                 &profile_path);
+  dbus_message_iter_append_basic(&arguments, DBUS_TYPE_STRING, &uuid);
+  dbus_message_iter_open_container(&arguments, DBUS_TYPE_ARRAY, "{sv}",
+                                   &dictionary);
+  append_profile_string_option(&dictionary, "Name", profile_name);
+  append_profile_string_option(&dictionary, "Role", role);
+  append_profile_bool_option(&dictionary, "RequireAuthentication",
+                             require_authentication);
+  DBusMessageIter entry;
+  DBusMessageIter variant;
+  const char *channel = "Channel";
+  dbus_message_iter_open_container(&dictionary, DBUS_TYPE_DICT_ENTRY, nullptr,
+                                   &entry);
+  dbus_message_iter_append_basic(&entry, DBUS_TYPE_STRING, &channel);
+  dbus_message_iter_open_container(&entry, DBUS_TYPE_VARIANT,
+                                   DBUS_TYPE_UINT16_AS_STRING, &variant);
+  dbus_message_iter_append_basic(&variant, DBUS_TYPE_UINT16,
+                                 &automatic_channel);
+  dbus_message_iter_close_container(&entry, &variant);
+  dbus_message_iter_close_container(&dictionary, &entry);
+  dbus_message_iter_close_container(&arguments, &dictionary);
+  const bool result = await_call(connection, message, 5000, name, detail);
+  dbus_message_unref(message);
+  return result;
+}
+
+bool call_unregister_iap2_profile(DBusConnection *connection, const char *path,
+                                  std::string &name, std::string &detail) {
   DBusMessage *message =
       new_call("/org/bluez", kProfileManager, "UnregisterProfile");
   if (message == nullptr) {
     detail = "unable to allocate D-Bus message";
     return false;
   }
-  const char *profile_path = kProfilePath;
-  dbus_message_append_args(message, DBUS_TYPE_OBJECT_PATH, &profile_path,
+  dbus_message_append_args(message, DBUS_TYPE_OBJECT_PATH, &path,
                            DBUS_TYPE_INVALID);
   const bool result = await_call(connection, message, 5000, name, detail);
   dbus_message_unref(message);
@@ -733,6 +783,37 @@ std::string device_path(const std::string_view mac) {
     path.push_back(character == ':' ? '_' : character);
   }
   return path;
+}
+
+bool ensure_iap2_device_profile(DBusConnection *connection,
+                                const std::string_view mac,
+                                const PairingLogFunction &log) {
+  if (device_profile != nullptr)
+    return true;
+  auto state = std::make_unique<BluezIap2Connection::State>();
+  state->connection = connection;
+  state->device_path = device_path(mac);
+  state->profile_path = kDeviceProfilePath;
+  state->profile_uuid = kIap2DeviceUuid;
+  if (!dbus_connection_register_object_path(connection, kDeviceProfilePath,
+                                            &kProfileVTable, state.get())) {
+    write_log(log, aa2acp::bridge::LogLevel::error,
+              "cannot register BlueZ iAP2 device profile object");
+    return false;
+  }
+  std::string name;
+  std::string detail;
+  if (!call_register_iap2_device_profile(connection, name, detail)) {
+    write_log(log, aa2acp::bridge::LogLevel::error,
+              "RegisterProfile(iAP2 device) failed: " + name + " " + detail);
+    dbus_connection_unregister_object_path(connection, kDeviceProfilePath);
+    return false;
+  }
+  state->profile_registered = true;
+  device_profile = std::move(state);
+  write_log(log, aa2acp::bridge::LogLevel::info,
+            "advertising BlueZ iAP2 device service before pairing");
+  return true;
 }
 
 bool call_register_agent(DBusConnection *connection, const char *method,
@@ -884,6 +965,8 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
     return false;
   }
   const auto path = device_path(mac);
+  if (!ensure_iap2_device_profile(connection, mac, log))
+    return false;
   if (aa2acp::bridge::bluez_device_is_paired(mac)) {
     write_log(log, aa2acp::bridge::LogLevel::info,
               "reusing existing BlueZ bond for " + std::string(mac));
@@ -1091,14 +1174,18 @@ void BluezIap2Connection::close() {
     state_->socket_fd = -1;
   }
   if (state_->profile_registered) {
-    call_disconnect_iap2_profile(state_->connection,
-                                 state_->device_path.c_str());
+    if (state_->client_profile) {
+      call_disconnect_iap2_profile(state_->connection,
+                                   state_->device_path.c_str());
+    }
     std::string name;
     std::string detail;
-    call_unregister_iap2_profile(state_->connection, name, detail);
+    call_unregister_iap2_profile(state_->connection,
+                                 state_->profile_path.c_str(), name, detail);
     state_->profile_registered = false;
   }
-  dbus_connection_unregister_object_path(state_->connection, kProfilePath);
+  dbus_connection_unregister_object_path(state_->connection,
+                                         state_->profile_path.c_str());
   state_.reset();
 }
 
@@ -1116,9 +1203,29 @@ connect_bluez_iap2(const std::string_view mac, const int timeout_seconds,
     return std::nullopt;
   }
 
+  // The BMW may connect to the advertised iAP2 Device service itself after
+  // pairing. Give that standard server path a short opportunity before the
+  // deliberately retained outbound-accessory experiment below.
+  if (device_profile != nullptr) {
+    const auto inbound_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (device_profile->socket_fd < 0 &&
+           std::chrono::steady_clock::now() < inbound_deadline) {
+      dbus_connection_read_write_dispatch(connection, 100);
+    }
+    if (device_profile->socket_fd >= 0) {
+      write_log(log, aa2acp::bridge::LogLevel::info,
+                "BMW connected to the advertised iAP2 device service");
+      return BluezIap2Connection(std::move(device_profile));
+    }
+  }
+
   auto state = std::make_unique<BluezIap2Connection::State>();
   state->connection = connection;
   state->device_path = device_path(mac);
+  state->profile_path = kProfilePath;
+  state->profile_uuid = kIap2ServerUuid;
+  state->client_profile = true;
   if (!dbus_connection_register_object_path(connection, kProfilePath,
                                             &kProfileVTable, state.get())) {
     write_log(log, aa2acp::bridge::LogLevel::error,
