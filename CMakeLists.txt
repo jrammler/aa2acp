@@ -35,7 +35,7 @@ endif()
 # (containing hyphens) becomes <base>~<rest> with '+' separators so it
 # sorts strictly before the release it was built from.
 if(AA2ACP_VERSION MATCHES "-")
-  string(REGEX REPLACE "^[^-]+-" "" AA2ACP_REVISION "${AA2ACP_VERSION}")
+  string(REGEX REPLACE "^[0-9]+\\.[0-9]+\\.[0-9]+-" "" AA2ACP_REVISION "${AA2ACP_VERSION}")
   string(REGEX REPLACE "-.*$" "" AA2ACP_VERSION_BASE "${AA2ACP_VERSION}")
   string(REPLACE "-" "+" AA2ACP_REVISION "${AA2ACP_REVISION}")
   set(AA2ACP_VERSION "${AA2ACP_VERSION_BASE}~${AA2ACP_REVISION}")
@@ -44,6 +44,7 @@ if(AA2ACP_VERSION MATCHES "-")
                     "version will sort before the release it is based on.")
   endif()
 endif()
+message(STATUS "AA2ACP version: ${AA2ACP_VERSION}")
 
 # GCC 13/14 (trixie) has a known -Wmaybe-uninitialized false positive on
 # short-circuit-guarded std::optional reads and value_or; keep the warning
