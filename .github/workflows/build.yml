@@ -65,6 +65,11 @@ jobs:
             }
           done
 
+      - name: Resolve version tag
+        run: |
+          git fetch --force --tags
+          git describe --tags --match 'v*' --dirty
+
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ inputs.build_type || 'RelWithDebInfo' }} -DCMAKE_PREFIX_PATH="$PWD/.deps/install"
 
