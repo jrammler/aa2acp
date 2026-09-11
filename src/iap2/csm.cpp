@@ -89,16 +89,33 @@ bool verify_mfi_v2_signature(
       EVP_Digest(challenge.data(), challenge.size(), digest.data(),
                  &digest_size, EVP_sha1(), nullptr) == 1;
   EVP_PKEY_CTX *context = EVP_PKEY_CTX_new(key, nullptr);
+  std::array<std::uint8_t, EVP_MAX_MD_SIZE + 16> recovered{};
+  std::size_t recovered_size = recovered.size();
   const auto initialized =
-      context != nullptr && EVP_PKEY_verify_init(context) == 1 &&
+      context != nullptr && EVP_PKEY_verify_recover_init(context) == 1 &&
       EVP_PKEY_CTX_set_rsa_padding(context, RSA_PKCS1_PADDING) == 1;
-  const auto verified =
+  const auto recovered_signature =
       hashed && initialized &&
-      EVP_PKEY_verify(context, signature.data(), signature.size(),
-                      digest.data(), digest_size) == 1;
+      EVP_PKEY_verify_recover(context, recovered.data(), &recovered_size,
+                              signature.data(), signature.size()) == 1;
   EVP_PKEY_CTX_free(context);
   EVP_PKEY_free(key);
-  return verified;
+  if (!recovered_signature) {
+    return false;
+  }
+  if (recovered_size == digest_size &&
+      std::equal(digest.begin(), digest.begin() + digest_size,
+                 recovered.begin())) {
+    return true;
+  }
+  constexpr std::array<std::uint8_t, 15> kSha1DigestInfoPrefix{
+      0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2b, 0x0e,
+      0x03, 0x02, 0x1a, 0x05, 0x00, 0x04, 0x14};
+  return recovered_size == kSha1DigestInfoPrefix.size() + digest_size &&
+         std::equal(kSha1DigestInfoPrefix.begin(), kSha1DigestInfoPrefix.end(),
+                    recovered.begin()) &&
+         std::equal(digest.begin(), digest.begin() + digest_size,
+                    recovered.begin() + kSha1DigestInfoPrefix.size());
 }
 
 void Decoder::push(const std::span<const std::uint8_t> bytes) {
