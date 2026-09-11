@@ -236,8 +236,15 @@ bool PhoneLink::send_control(const std::span<const std::uint8_t> payload) {
   ++sent_sequence_;
   PendingMessage message;
   message.sequence = sent_sequence_;
-  message.frame =
-      encode_packet(payload, sent_sequence_, kControlAck, kControlSessionId);
+  const Header header{static_cast<std::uint16_t>(payload.size() + 10),
+                      kControlAck, sent_sequence_, last_received_sequence_,
+                      peer_control_session_id_};
+  if (log_ != nullptr) {
+    const auto summary = packet_summary("tx", header, payload);
+    log_(summary.c_str());
+  }
+  message.frame = encode_packet(payload, sent_sequence_, kControlAck,
+                                peer_control_session_id_);
   message.deadline = std::chrono::steady_clock::now() +
                      std::chrono::milliseconds(lsp_.retransmission_timeout);
   message.retries = 0;
@@ -398,6 +405,12 @@ void PhoneLink::handle_packet(const Header &header,
       negotiated.ack_timeout =
           std::max(negotiated.ack_timeout, std::uint16_t{50});
       lsp_ = negotiated;
+      if (const auto control_session = std::find_if(
+              lsp_.sessions.begin(), lsp_.sessions.end(),
+              [](const Session &session) { return session.type == 0; });
+          control_session != lsp_.sessions.end()) {
+        peer_control_session_id_ = control_session->id;
+      }
       last_sequence_valid_ = true;
       last_received_sequence_ = header.sequence;
       send_syn(now, true);

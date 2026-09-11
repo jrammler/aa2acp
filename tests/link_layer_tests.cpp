@@ -50,7 +50,9 @@ void test_negotiation() {
   link.receive(aa2acp::iap2::kMarker, now);
   assert(writes.size() == 2);
 
-  const auto lsp = aa2acp::iap2::encode_lsp(Lsp{});
+  auto peer_lsp = Lsp{};
+  peer_lsp.sessions[0].id = 1;
+  const auto lsp = aa2acp::iap2::encode_lsp(peer_lsp);
   const auto syn_header =
       aa2acp::iap2::encode_header({static_cast<std::uint16_t>(lsp.size() + 10),
                                    aa2acp::iap2::kControlSyn, 3, 100, 0});
@@ -70,6 +72,13 @@ void test_negotiation() {
       aa2acp::iap2::encode_header({9, aa2acp::iap2::kControlAck, 4, 100, 0});
   link.receive(ack, now);
   assert(link.state() == State::Normal);
+
+  assert(link.send_control(
+      aa2acp::iap2::csm::encode(aa2acp::iap2::csm::kStartIdentification)));
+  const auto control_header =
+      aa2acp::iap2::decode_header(std::span(writes.back()).first<9>());
+  assert(control_header.has_value());
+  assert(control_header->session_id == 1);
 }
 
 void test_csm_codec() {
