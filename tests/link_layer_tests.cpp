@@ -36,10 +36,16 @@ void test_lsp_round_trip() {
 
 void test_negotiation() {
   std::vector<std::vector<std::uint8_t>> writes;
-  PhoneLink link([&writes](const std::span<const std::uint8_t> bytes) {
-    writes.emplace_back(bytes.begin(), bytes.end());
-    return true;
-  });
+  std::vector<std::uint8_t> received_control;
+  PhoneLink link(
+      [&writes](const std::span<const std::uint8_t> bytes) {
+        writes.emplace_back(bytes.begin(), bytes.end());
+        return true;
+      },
+      {},
+      [&received_control](const std::span<const std::uint8_t> bytes) {
+        received_control.assign(bytes.begin(), bytes.end());
+      });
   const auto now = std::chrono::steady_clock::now();
   link.start(now);
   assert(writes.size() == 2);
@@ -79,6 +85,19 @@ void test_negotiation() {
       aa2acp::iap2::decode_header(std::span(writes.back()).first<9>());
   assert(control_header.has_value());
   assert(control_header->session_id == 1);
+
+  const auto identification =
+      aa2acp::iap2::csm::encode(aa2acp::iap2::csm::kIdentificationInformation);
+  const auto identification_header = aa2acp::iap2::encode_header(
+      {static_cast<std::uint16_t>(identification.size() + 10),
+       aa2acp::iap2::kControlAck, 4, 101, 1});
+  std::vector<std::uint8_t> identification_packet(identification_header.begin(),
+                                                  identification_header.end());
+  identification_packet.insert(identification_packet.end(),
+                               identification.begin(), identification.end());
+  identification_packet.push_back(aa2acp::iap2::checksum(identification));
+  link.receive(identification_packet, now);
+  assert(received_control == identification);
 }
 
 void test_csm_codec() {

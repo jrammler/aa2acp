@@ -469,7 +469,7 @@ void PhoneLink::handle_packet(const Header &header,
     }
     last_sequence_valid_ = true;
     last_received_sequence_ = header.sequence;
-    if (header.session_id == kControlSessionId && control_data_) {
+    if (header.session_id == peer_control_session_id_ && control_data_) {
       control_data_(payload);
     }
     send_ack();
