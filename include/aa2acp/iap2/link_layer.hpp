@@ -82,7 +82,8 @@ private:
   };
 
   void send_marker();
-  void send_syn(std::chrono::steady_clock::time_point now);
+  void send_syn(std::chrono::steady_clock::time_point now,
+                bool acknowledge_peer = false);
   void send_ack();
   std::vector<std::uint8_t> encode_packet(std::span<const std::uint8_t> payload,
                                           std::uint8_t sequence,

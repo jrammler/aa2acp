@@ -58,7 +58,13 @@ void test_negotiation() {
   accessory_syn.insert(accessory_syn.end(), lsp.begin(), lsp.end());
   accessory_syn.push_back(aa2acp::iap2::checksum(lsp));
   link.receive(accessory_syn, now);
-  assert(writes.size() == 3); // Our ACK of the accessory SYN.
+  assert(writes.size() == 3); // Our SYN|ACK response to the accessory SYN.
+  const auto response =
+      aa2acp::iap2::decode_header(std::span(writes[2]).first<9>());
+  assert(response.has_value());
+  assert(response->control ==
+         (aa2acp::iap2::kControlSyn | aa2acp::iap2::kControlAck));
+  assert(response->acknowledgement == 3);
 
   const auto ack =
       aa2acp::iap2::encode_header({9, aa2acp::iap2::kControlAck, 4, 100, 0});

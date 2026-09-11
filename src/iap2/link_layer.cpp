@@ -224,7 +224,8 @@ bool PhoneLink::send_control(const std::span<const std::uint8_t> payload) {
 
 void PhoneLink::send_marker() { (void)send_(kMarker); }
 
-void PhoneLink::send_syn(const std::chrono::steady_clock::time_point now) {
+void PhoneLink::send_syn(const std::chrono::steady_clock::time_point now,
+                         const bool acknowledge_peer) {
   if (state_ != State::Negotiate) {
     return;
   }
@@ -235,7 +236,9 @@ void PhoneLink::send_syn(const std::chrono::steady_clock::time_point now) {
     syn_outstanding_ = true;
   }
   // Retransmissions repeat the identical SYN frame per the iAP2 spec.
-  write_packet(payload, syn_sequence_, kControlSyn);
+  write_packet(payload, syn_sequence_,
+               static_cast<std::uint8_t>(kControlSyn |
+                                         (acknowledge_peer ? kControlAck : 0)));
   next_syn_ = now + std::chrono::milliseconds(500);
 }
 
@@ -362,7 +365,7 @@ void PhoneLink::handle_packet(const Header &header,
       lsp_ = negotiated;
       last_sequence_valid_ = true;
       last_received_sequence_ = header.sequence;
-      send_ack();
+      send_syn(now, true);
       if (state_ == State::Negotiate) {
         // Both peers must acknowledge the other's SYN. Keep retransmitting
         // ours until the peer acknowledges it before starting control traffic.
