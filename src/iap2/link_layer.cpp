@@ -364,10 +364,9 @@ void PhoneLink::handle_packet(const Header &header,
       syn_outstanding_ = false;
       send_ack();
       if (state_ == State::Negotiate) {
-        // The accessory's SYN completes negotiation even if its ACK for our
-        // own SYN has not arrived yet.
-        state_ = State::Normal;
-        log("iAP2: link established (NORMAL)");
+        // Both peers must acknowledge the other's SYN. Keep retransmitting
+        // ours until the peer acknowledges it before starting control traffic.
+        log("iAP2: received accessory SYN; awaiting ACK of our SYN");
       }
       return;
     }
