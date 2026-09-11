@@ -35,6 +35,8 @@
   image, with declarative USB permissions for arbitrary Android phones.
 - [ ] Soak-test first pairing, existing pairing, unplug, replug, daemon
   shutdown, restart, and retained state.
+- [ ] Support MFi authentication protocol major 3, including a 32-byte
+  challenge path while retaining the verified 20-byte major-2 path.
 - [ ] Add wireless Android Auto with a dedicated second Wi-Fi radio.
 - [ ] Package the daemon as a minimal Raspberry Pi image with ignition/power
   handling and persistent state.
