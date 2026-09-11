@@ -39,7 +39,7 @@ private:
 
   csm::Decoder decoder_;
   PhoneLink *link_{};
-  std::array<std::uint8_t, 32> challenge_{};
+  std::array<std::uint8_t, 20> challenge_{};
   std::vector<std::uint8_t> certificate_;
   Stage stage_{Stage::Idle};
 };
