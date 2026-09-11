@@ -111,8 +111,9 @@ void PhoneLink::start(const std::chrono::steady_clock::time_point now) {
     return;
   }
   send_marker();
-  next_marker_ = now + std::chrono::seconds(1);
-  log("iAP2: sent initial marker; waiting for accessory marker");
+  state_ = State::Negotiate;
+  send_syn(now);
+  log("iAP2: sent initial marker and LSP SYN");
 }
 
 void PhoneLink::receive(const std::span<const std::uint8_t> bytes,

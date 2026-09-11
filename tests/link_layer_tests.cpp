@@ -42,12 +42,12 @@ void test_negotiation() {
   });
   const auto now = std::chrono::steady_clock::now();
   link.start(now);
-  assert(writes.size() == 1);
+  assert(writes.size() == 2);
   assert(writes[0] == std::vector<std::uint8_t>(aa2acp::iap2::kMarker.begin(),
                                                 aa2acp::iap2::kMarker.end()));
+  assert(link.state() == State::Negotiate);
 
   link.receive(aa2acp::iap2::kMarker, now);
-  assert(link.state() == State::Negotiate);
   assert(writes.size() == 2);
 
   const auto lsp = aa2acp::iap2::encode_lsp(Lsp{});
