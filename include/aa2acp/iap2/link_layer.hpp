@@ -28,12 +28,12 @@ struct Session {
 };
 
 struct Lsp {
-  std::uint8_t max_outgoing{30};
+  std::uint8_t max_outgoing{4};
   std::uint16_t max_len{65535};
-  std::uint16_t retransmission_timeout{4000};
-  std::uint16_t ack_timeout{500};
-  std::uint8_t max_retransmissions{4};
-  std::uint8_t max_ack{3};
+  std::uint16_t retransmission_timeout{0};
+  std::uint16_t ack_timeout{0};
+  std::uint8_t max_retransmissions{0};
+  std::uint8_t max_ack{0};
   std::vector<Session> sessions{
       {kControlSessionId, 0, 2}, {11, 2, 1}, {12, 1, 2}};
 };
