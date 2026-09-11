@@ -338,8 +338,11 @@ void PhoneLink::handle_packet(const Header &header,
 
   if ((header.control & kControlSyn) != 0) {
     if (state_ == State::Normal) {
-      // Renegotiation mid-session would invalidate the established flow.
-      log("iAP2: ignoring SYN while link is established");
+      // The peer may retransmit its LSP SYN when the first acknowledgement
+      // was lost. Keep the established parameters, but acknowledge it so the
+      // peer can advance to control traffic.
+      send_ack();
+      log("iAP2: acknowledged SYN while link is established");
       return;
     }
     if (const auto received_lsp = decode_lsp(payload)) {
