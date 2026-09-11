@@ -226,67 +226,6 @@ private:
 
 } // namespace
 
-// Runs the iAP2 marker-detection phase on an open BlueZ profile socket for
-// up to five seconds. Returns true only when the accessory marker is
-// recognized (state advanced past Detect).
-bool probe_iap2_detect(const int socket_fd, const std::string &address,
-                       const std::string_view transport) {
-  aa2acp::iap2::PhoneLink link(
-      [socket_fd](const std::span<const std::uint8_t> bytes) {
-        return send_all(socket_fd, bytes);
-      },
-      [](const char *message) {
-        if (aa2acp::bridge::debug_logging_enabled())
-          aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
-              << message << '\n';
-      },
-      [](const std::span<const std::uint8_t>) {});
-  const auto start = std::chrono::steady_clock::now();
-  constexpr auto kDetectWindow = std::chrono::seconds(5);
-  link.start(start);
-  std::array<std::uint8_t, 1024> buffer{};
-  while (std::chrono::steady_clock::now() - start < kDetectWindow) {
-    if (shutdown_requested()) {
-      return false;
-    }
-    pollfd descriptor{socket_fd, POLLIN, 0};
-    const auto result = poll(&descriptor, 1, 100);
-    if (result < 0) {
-      continue; // EINTR etc.; re-check shutdown above
-    }
-    if ((descriptor.revents & (POLLHUP | POLLERR)) != 0 &&
-        (descriptor.revents & POLLIN) == 0) {
-      aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
-          << "Bluetooth: " << transport << " error/hangup during detection\n";
-      return false;
-    }
-    if (result > 0 && (descriptor.revents & POLLIN) != 0) {
-      const auto count = recv(socket_fd, buffer.data(), buffer.size(), 0);
-      if (count <= 0) {
-        aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
-            << "Bluetooth: " << transport
-            << " closed by accessory during detection\n";
-        return false;
-      }
-      link.receive(std::span(buffer).first(static_cast<std::size_t>(count)),
-                   std::chrono::steady_clock::now());
-    }
-    link.tick(std::chrono::steady_clock::now());
-    // Only a real state advance counts as success; State::Dead means the
-    // link layer gave up and this channel must not be selected.
-    if (link.state() == aa2acp::iap2::State::Dead) {
-      return false;
-    }
-    if (link.state() != aa2acp::iap2::State::Detect) {
-      return true;
-    }
-  }
-  aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
-      << "Bluetooth: no iAP2 response on " << transport << " to " << address
-      << '\n';
-  return false;
-}
-
 int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
   // bridge-daemon captures this process through a pipe. Keep protocol progress
   // visible in the daemon log instead of waiting for process exit to flush it.
@@ -428,12 +367,8 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
     return 1;
   }
   const int socket_fd = bluez_connection->fd();
-  if (!probe_iap2_detect(socket_fd, address, "BlueZ iAP2 profile")) {
-    bluez_connection->close();
-    return 1;
-  }
   aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
-      << "Bluetooth: iAP2 marker exchange succeeded on BlueZ profile\n";
+      << "Bluetooth: iAP2 profile connected; starting link negotiation\n";
   aa2acp::iap2::BootstrapSession session;
   aa2acp::iap2::CarPlayProbe carplay_probe(address);
   aa2acp::iap2::PhoneLink link(
