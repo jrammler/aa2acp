@@ -1,4 +1,5 @@
 #include "aa2acp/iap2/csm.hpp"
+#include "aa2acp/bridge/logging.hpp"
 
 #include <openssl/evp.h>
 #include <openssl/rsa.h>
@@ -101,21 +102,31 @@ bool verify_mfi_v2_signature(
   EVP_PKEY_CTX_free(context);
   EVP_PKEY_free(key);
   if (!recovered_signature) {
+    if (aa2acp::bridge::debug_logging_enabled()) {
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+          << "CSM: MFi 2 RSA signature recovery failed\n";
+    }
     return false;
   }
-  if (recovered_size == digest_size &&
-      std::equal(digest.begin(), digest.begin() + digest_size,
-                 recovered.begin())) {
-    return true;
-  }
+  const auto raw_sha1 = recovered_size == digest_size &&
+                        std::equal(digest.begin(), digest.begin() + digest_size,
+                                   recovered.begin());
   constexpr std::array<std::uint8_t, 15> kSha1DigestInfoPrefix{
       0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2b, 0x0e,
       0x03, 0x02, 0x1a, 0x05, 0x00, 0x04, 0x14};
-  return recovered_size == kSha1DigestInfoPrefix.size() + digest_size &&
-         std::equal(kSha1DigestInfoPrefix.begin(), kSha1DigestInfoPrefix.end(),
-                    recovered.begin()) &&
-         std::equal(digest.begin(), digest.begin() + digest_size,
-                    recovered.begin() + kSha1DigestInfoPrefix.size());
+  const auto sha1_digest_info =
+      recovered_size == kSha1DigestInfoPrefix.size() + digest_size &&
+      std::equal(kSha1DigestInfoPrefix.begin(), kSha1DigestInfoPrefix.end(),
+                 recovered.begin()) &&
+      std::equal(digest.begin(), digest.begin() + digest_size,
+                 recovered.begin() + kSha1DigestInfoPrefix.size());
+  if (aa2acp::bridge::debug_logging_enabled()) {
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+        << "CSM: MFi 2 RSA recovery yielded " << recovered_size
+        << " byte(s); raw SHA-1=" << raw_sha1
+        << ", SHA-1 DigestInfo=" << sha1_digest_info << '\n';
+  }
+  return raw_sha1 || sha1_digest_info;
 }
 
 void Decoder::push(const std::span<const std::uint8_t> bytes) {
