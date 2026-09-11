@@ -1,9 +1,11 @@
 #include "aa2acp/iap2/csm.hpp"
 
 #include <openssl/evp.h>
+#include <openssl/rsa.h>
 #include <openssl/x509.h>
 
 #include <algorithm>
+#include <array>
 
 namespace aa2acp::iap2::csm {
 namespace {
@@ -77,18 +79,24 @@ bool verify_mfi_v2_signature(
   if (key == nullptr) {
     return false;
   }
-  EVP_MD_CTX *context = EVP_MD_CTX_new();
-  if (context == nullptr) {
+  if (EVP_PKEY_base_id(key) != EVP_PKEY_RSA) {
     EVP_PKEY_free(key);
     return false;
   }
+  std::array<std::uint8_t, EVP_MAX_MD_SIZE> digest{};
+  unsigned int digest_size = 0;
+  const auto hashed =
+      EVP_Digest(challenge.data(), challenge.size(), digest.data(),
+                 &digest_size, EVP_sha1(), nullptr) == 1;
+  EVP_PKEY_CTX *context = EVP_PKEY_CTX_new(key, nullptr);
   const auto initialized =
-      EVP_DigestVerifyInit(context, nullptr, EVP_sha1(), nullptr, key) == 1;
+      context != nullptr && EVP_PKEY_verify_init(context) == 1 &&
+      EVP_PKEY_CTX_set_rsa_padding(context, RSA_PKCS1_PADDING) == 1;
   const auto verified =
-      initialized &&
-      EVP_DigestVerify(context, signature.data(), signature.size(),
-                       challenge.data(), challenge.size()) == 1;
-  EVP_MD_CTX_free(context);
+      hashed && initialized &&
+      EVP_PKEY_verify(context, signature.data(), signature.size(),
+                      digest.data(), digest_size) == 1;
+  EVP_PKEY_CTX_free(context);
   EVP_PKEY_free(key);
   return verified;
 }
