@@ -361,7 +361,6 @@ void PhoneLink::handle_packet(const Header &header,
       lsp_ = negotiated;
       last_sequence_valid_ = true;
       last_received_sequence_ = header.sequence;
-      syn_outstanding_ = false;
       send_ack();
       if (state_ == State::Negotiate) {
         // Both peers must acknowledge the other's SYN. Keep retransmitting
