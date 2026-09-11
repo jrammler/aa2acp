@@ -62,9 +62,10 @@ first_bytes_parameter(const std::span<const std::uint8_t> payload,
   return std::nullopt;
 }
 
-bool verify_ecdsa_sha256(const std::span<const std::uint8_t> challenge,
-                         const std::span<const std::uint8_t> signature,
-                         const std::span<const std::uint8_t> certificate_der) {
+bool verify_mfi_v2_signature(
+    const std::span<const std::uint8_t> challenge,
+    const std::span<const std::uint8_t> signature,
+    const std::span<const std::uint8_t> certificate_der) {
   const auto *certificate_ptr = certificate_der.data();
   X509 *certificate = d2i_X509(nullptr, &certificate_ptr,
                                static_cast<long>(certificate_der.size()));
@@ -82,7 +83,7 @@ bool verify_ecdsa_sha256(const std::span<const std::uint8_t> challenge,
     return false;
   }
   const auto initialized =
-      EVP_DigestVerifyInit(context, nullptr, EVP_sha256(), nullptr, key) == 1;
+      EVP_DigestVerifyInit(context, nullptr, EVP_sha1(), nullptr, key) == 1;
   const auto verified =
       initialized &&
       EVP_DigestVerify(context, signature.data(), signature.size(),

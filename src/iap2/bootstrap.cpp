@@ -87,7 +87,7 @@ void BootstrapSession::handle(const csm::Message &message) {
     } else if (message.id == csm::kAuthenticationResponse) {
       const auto signature = csm::first_bytes_parameter(message.payload, 0);
       if (!signature ||
-          !csm::verify_ecdsa_sha256(challenge_, *signature, certificate_)) {
+          !csm::verify_mfi_v2_signature(challenge_, *signature, certificate_)) {
         fail("authentication signature validation failed");
         return;
       }

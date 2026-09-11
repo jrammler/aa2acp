@@ -33,9 +33,9 @@ encode_bytes_parameter(std::uint16_t id, std::uint16_t parameter_id,
 std::optional<std::vector<std::uint8_t>>
 first_bytes_parameter(std::span<const std::uint8_t> payload,
                       std::uint16_t parameter_id);
-bool verify_ecdsa_sha256(std::span<const std::uint8_t> challenge,
-                         std::span<const std::uint8_t> signature,
-                         std::span<const std::uint8_t> certificate_der);
+bool verify_mfi_v2_signature(std::span<const std::uint8_t> challenge,
+                             std::span<const std::uint8_t> signature,
+                             std::span<const std::uint8_t> certificate_der);
 
 // Incrementally parses complete CSM messages from an iAP2 control-session
 // stream.
