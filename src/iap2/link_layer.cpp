@@ -22,6 +22,30 @@ void write_u16(std::span<std::uint8_t> bytes, const std::size_t offset,
   bytes[offset + 1] = static_cast<std::uint8_t>(value & 0xffU);
 }
 
+std::string packet_summary(const char *direction, const Header &header,
+                           const std::span<const std::uint8_t> payload) {
+  char message[128];
+  const auto csm =
+      payload.size() >= 6 && payload[0] == 0x40 && payload[1] == 0x40
+          ? static_cast<unsigned>(read_u16(payload, 4))
+          : 0U;
+  if (csm != 0U) {
+    std::snprintf(message, sizeof(message),
+                  "iAP2: %s frame ctrl=0x%02x seq=%u ack=%u session=%u "
+                  "payload=%zu csm=0x%04x",
+                  direction, header.control, header.sequence,
+                  header.acknowledgement, header.session_id, payload.size(),
+                  csm);
+  } else {
+    std::snprintf(message, sizeof(message),
+                  "iAP2: %s frame ctrl=0x%02x seq=%u ack=%u session=%u "
+                  "payload=%zu",
+                  direction, header.control, header.sequence,
+                  header.acknowledgement, header.session_id, payload.size());
+  }
+  return message;
+}
+
 } // namespace
 
 std::uint8_t checksum(const std::span<const std::uint8_t> bytes) {
@@ -262,6 +286,13 @@ void PhoneLink::write_packet(const std::span<const std::uint8_t> payload,
                              const std::uint8_t sequence,
                              const std::uint8_t control,
                              const std::uint8_t session_id) {
+  const Header header{
+      static_cast<std::uint16_t>(payload.empty() ? 9 : payload.size() + 10),
+      control, sequence, last_received_sequence_, session_id};
+  if (log_ != nullptr) {
+    const auto summary = packet_summary("tx", header, payload);
+    log_(summary.c_str());
+  }
   (void)send_(encode_packet(payload, sequence, control, session_id));
 }
 
@@ -324,6 +355,10 @@ void PhoneLink::process_packets(
 void PhoneLink::handle_packet(const Header &header,
                               const std::span<const std::uint8_t> payload,
                               const std::chrono::steady_clock::time_point now) {
+  if (log_ != nullptr) {
+    const auto summary = packet_summary("rx", header, payload);
+    log_(summary.c_str());
+  }
   if ((header.control & kControlRst) != 0) {
     state_ = State::Dead;
     pending_.clear();
