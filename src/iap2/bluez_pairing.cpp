@@ -203,7 +203,7 @@ discover_endpoint(const std::string_view mac) {
   // local address instead.
   bdaddr_t local{};
   // bluetoothd starts its own generic SDP browse after pairing. Some head
-  // units, including the BMW, reject a concurrent SDP connection; give that
+  // units reject a concurrent SDP connection; give that
   // browse time to finish, then retry our targeted query on a fresh session.
   constexpr int kSdpAttempts = 4;
   sdp_session_t *session = nullptr;
@@ -1047,7 +1047,7 @@ bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
   bool found = wait_for_device(discovery_seconds);
 
   // BlueZ inquiries occasionally stall or start producing results only
-  // after several cycles (observed with BMW head units that need waking).
+  // after several cycles (observed with head units that need waking).
   // A manual scan from the UI always worked because it simply kept going
   // longer - so instead of failing, restart the inquiry once and try again.
   if (!found) {
@@ -1203,19 +1203,21 @@ connect_bluez_iap2(const std::string_view mac, const int timeout_seconds,
     return std::nullopt;
   }
 
-  // The BMW may connect to the advertised iAP2 Device service itself after
-  // pairing. Give that standard server path a short opportunity before the
-  // deliberately retained outbound-accessory experiment below.
+  // The head unit may connect to the advertised iAP2 Device service itself
+  // after pairing. It takes roughly a minute after accepting the pairing code
+  // to do so; keep dispatching the Profile1.NewConnection call during that
+  // window before trying the deliberately retained outbound-accessory
+  // experiment.
   if (device_profile != nullptr) {
     const auto inbound_deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        std::chrono::steady_clock::now() + std::chrono::seconds(60);
     while (device_profile->socket_fd < 0 &&
            std::chrono::steady_clock::now() < inbound_deadline) {
       dbus_connection_read_write_dispatch(connection, 100);
     }
     if (device_profile->socket_fd >= 0) {
       write_log(log, aa2acp::bridge::LogLevel::info,
-                "BMW connected to the advertised iAP2 device service");
+                "head unit connected to the advertised iAP2 device service");
       return BluezIap2Connection(std::move(device_profile));
     }
   }
