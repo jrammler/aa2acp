@@ -2,6 +2,7 @@
 #include "aa2acp/bridge/logging.hpp"
 
 #include <openssl/evp.h>
+#include <openssl/pkcs7.h>
 #include <openssl/rsa.h>
 #include <openssl/x509.h>
 
@@ -70,22 +71,35 @@ bool verify_mfi_v2_signature(
     const std::span<const std::uint8_t> signature,
     const std::span<const std::uint8_t> certificate_der) {
   const auto *certificate_ptr = certificate_der.data();
-  X509 *certificate = d2i_X509(nullptr, &certificate_ptr,
-                               static_cast<long>(certificate_der.size()));
-  if (certificate == nullptr) {
+  PKCS7 *certificate_bundle = d2i_PKCS7(
+      nullptr, &certificate_ptr, static_cast<long>(certificate_der.size()));
+  if (certificate_bundle == nullptr) {
     if (aa2acp::bridge::debug_logging_enabled()) {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
-          << "CSM: MFi 2 certificate parsing failed for "
+          << "CSM: MFi 2 PKCS#7 certificate parsing failed for "
           << certificate_der.size() << " byte(s)\n";
     }
     return false;
   }
-  EVP_PKEY *key = X509_get_pubkey(certificate);
-  X509_free(certificate);
+  STACK_OF(X509) *signers = PKCS7_get0_signers(certificate_bundle, nullptr, 0);
+  if (signers == nullptr || sk_X509_num(signers) != 1) {
+    if (aa2acp::bridge::debug_logging_enabled()) {
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+          << "CSM: MFi 2 PKCS#7 certificate has "
+          << (signers == nullptr ? 0 : sk_X509_num(signers))
+          << " signer certificate(s)\n";
+    }
+    sk_X509_free(signers);
+    PKCS7_free(certificate_bundle);
+    return false;
+  }
+  EVP_PKEY *key = X509_get_pubkey(sk_X509_value(signers, 0));
+  sk_X509_free(signers);
+  PKCS7_free(certificate_bundle);
   if (key == nullptr) {
     if (aa2acp::bridge::debug_logging_enabled()) {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
-          << "CSM: MFi 2 certificate has no public key\n";
+          << "CSM: MFi 2 signer certificate has no public key\n";
     }
     return false;
   }
