@@ -112,11 +112,6 @@ bool verify_mfi_v2_signature(
     EVP_PKEY_free(key);
     return false;
   }
-  std::array<std::uint8_t, EVP_MAX_MD_SIZE> digest{};
-  unsigned int digest_size = 0;
-  const auto hashed =
-      EVP_Digest(challenge.data(), challenge.size(), digest.data(),
-                 &digest_size, EVP_sha1(), nullptr) == 1;
   EVP_PKEY_CTX *context = EVP_PKEY_CTX_new(key, nullptr);
   std::array<std::uint8_t, EVP_MAX_MD_SIZE + 16> recovered{};
   std::size_t recovered_size = recovered.size();
@@ -124,7 +119,7 @@ bool verify_mfi_v2_signature(
       context != nullptr && EVP_PKEY_verify_recover_init(context) == 1 &&
       EVP_PKEY_CTX_set_rsa_padding(context, RSA_PKCS1_PADDING) == 1;
   const auto recovered_signature =
-      hashed && initialized &&
+      initialized &&
       EVP_PKEY_verify_recover(context, recovered.data(), &recovered_size,
                               signature.data(), signature.size()) == 1;
   EVP_PKEY_CTX_free(context);
@@ -136,25 +131,25 @@ bool verify_mfi_v2_signature(
     }
     return false;
   }
-  const auto raw_sha1 = recovered_size == digest_size &&
-                        std::equal(digest.begin(), digest.begin() + digest_size,
-                                   recovered.begin());
+  const auto raw_challenge =
+      recovered_size == challenge.size() &&
+      std::equal(challenge.begin(), challenge.end(), recovered.begin());
   constexpr std::array<std::uint8_t, 15> kSha1DigestInfoPrefix{
       0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2b, 0x0e,
       0x03, 0x02, 0x1a, 0x05, 0x00, 0x04, 0x14};
   const auto sha1_digest_info =
-      recovered_size == kSha1DigestInfoPrefix.size() + digest_size &&
+      recovered_size == kSha1DigestInfoPrefix.size() + challenge.size() &&
       std::equal(kSha1DigestInfoPrefix.begin(), kSha1DigestInfoPrefix.end(),
                  recovered.begin()) &&
-      std::equal(digest.begin(), digest.begin() + digest_size,
+      std::equal(challenge.begin(), challenge.end(),
                  recovered.begin() + kSha1DigestInfoPrefix.size());
   if (aa2acp::bridge::debug_logging_enabled()) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
         << "CSM: MFi 2 RSA recovery yielded " << recovered_size
-        << " byte(s); raw SHA-1=" << raw_sha1
+        << " byte(s); raw challenge=" << raw_challenge
         << ", SHA-1 DigestInfo=" << sha1_digest_info << '\n';
   }
-  return raw_sha1 || sha1_digest_info;
+  return raw_challenge || sha1_digest_info;
 }
 
 void Decoder::push(const std::span<const std::uint8_t> bytes) {
