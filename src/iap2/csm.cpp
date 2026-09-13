@@ -81,20 +81,20 @@ bool verify_mfi_v2_signature(
     }
     return false;
   }
-  STACK_OF(X509) *signers = PKCS7_get0_signers(certificate_bundle, nullptr, 0);
-  if (signers == nullptr || sk_X509_num(signers) != 1) {
+  const auto *certificates = PKCS7_type_is_signed(certificate_bundle)
+                                 ? certificate_bundle->d.sign->cert
+                                 : nullptr;
+  if (certificates == nullptr || sk_X509_num(certificates) != 1) {
     if (aa2acp::bridge::debug_logging_enabled()) {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
-          << "CSM: MFi 2 PKCS#7 certificate has "
-          << (signers == nullptr ? 0 : sk_X509_num(signers))
-          << " signer certificate(s)\n";
+          << "CSM: MFi 2 PKCS#7 bundle has "
+          << (certificates == nullptr ? 0 : sk_X509_num(certificates))
+          << " certificate(s)\n";
     }
-    sk_X509_free(signers);
     PKCS7_free(certificate_bundle);
     return false;
   }
-  EVP_PKEY *key = X509_get_pubkey(sk_X509_value(signers, 0));
-  sk_X509_free(signers);
+  EVP_PKEY *key = X509_get_pubkey(sk_X509_value(certificates, 0));
   PKCS7_free(certificate_bundle);
   if (key == nullptr) {
     if (aa2acp::bridge::debug_logging_enabled()) {
