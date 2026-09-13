@@ -369,8 +369,15 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
   const int socket_fd = bluez_connection->fd();
   aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
       << "Bluetooth: iAP2 profile connected; starting link negotiation\n";
+  const auto local_bluetooth_address =
+      aa2acp::iap2::local_bluez_adapter_address();
+  if (!local_bluetooth_address) {
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Bluetooth: unable to read local adapter address\n";
+    return 1;
+  }
   aa2acp::iap2::BootstrapSession session;
-  aa2acp::iap2::CarPlayProbe carplay_probe(address);
+  aa2acp::iap2::CarPlayProbe carplay_probe(*local_bluetooth_address);
   aa2acp::iap2::PhoneLink link(
       [socket_fd](const std::span<const std::uint8_t> bytes) {
         return send_all(socket_fd, bytes);

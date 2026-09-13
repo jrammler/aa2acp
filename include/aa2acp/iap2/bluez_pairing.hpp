@@ -5,6 +5,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
 
 namespace aa2acp::iap2 {
@@ -17,6 +18,10 @@ using PairingLogFunction =
 // in BlueZ; it does not open iAP2.
 bool ensure_bluez_pairing(std::string_view mac, int timeout_seconds,
                           const PairingLogFunction &log = {});
+
+// Returns BlueZ's local adapter address for use as a wireless transport
+// identifier in an iAP2 CarPlayAvailability message.
+std::optional<std::string> local_bluez_adapter_address();
 
 // A connected iAP2 transport obtained through BlueZ's Profile1 API. BlueZ
 // discovers the remote service and owns the profile until close() is called.

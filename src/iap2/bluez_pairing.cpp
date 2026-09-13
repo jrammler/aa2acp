@@ -952,6 +952,49 @@ bool device_visible(const std::string_view mac) {
 
 } // namespace
 
+std::optional<std::string> local_bluez_adapter_address() {
+  DBusError error;
+  dbus_error_init(&error);
+  DBusConnection *connection = dbus_bus_get(DBUS_BUS_SYSTEM, &error);
+  if (connection == nullptr) {
+    dbus_error_free(&error);
+    return std::nullopt;
+  }
+  DBusMessage *call = new_call(kAdapterPath, kPropertiesInterface, "Get");
+  const char *interface = kAdapterInterface;
+  const char *property = "Address";
+  const bool appended =
+      call != nullptr &&
+      dbus_message_append_args(call, DBUS_TYPE_STRING, &interface,
+                               DBUS_TYPE_STRING, &property, DBUS_TYPE_INVALID);
+  DBusMessage *reply = appended ? dbus_connection_send_with_reply_and_block(
+                                      connection, call, 5000, &error)
+                                : nullptr;
+  if (call != nullptr) {
+    dbus_message_unref(call);
+  }
+  std::optional<std::string> address;
+  DBusMessageIter value;
+  DBusMessageIter variant;
+  if (reply != nullptr && dbus_message_iter_init(reply, &value) &&
+      dbus_message_iter_get_arg_type(&value) == DBUS_TYPE_VARIANT) {
+    dbus_message_iter_recurse(&value, &variant);
+    if (dbus_message_iter_get_arg_type(&variant) == DBUS_TYPE_STRING) {
+      const char *raw_address = nullptr;
+      dbus_message_iter_get_basic(&variant, &raw_address);
+      if (raw_address != nullptr) {
+        address = raw_address;
+      }
+    }
+  }
+  if (reply != nullptr) {
+    dbus_message_unref(reply);
+  }
+  dbus_error_free(&error);
+  dbus_connection_unref(connection);
+  return address;
+}
+
 bool ensure_bluez_pairing(const std::string_view mac, const int timeout_seconds,
                           const PairingLogFunction &log) {
   DBusError error;
