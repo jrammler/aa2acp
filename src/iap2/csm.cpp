@@ -73,14 +73,28 @@ bool verify_mfi_v2_signature(
   X509 *certificate = d2i_X509(nullptr, &certificate_ptr,
                                static_cast<long>(certificate_der.size()));
   if (certificate == nullptr) {
+    if (aa2acp::bridge::debug_logging_enabled()) {
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+          << "CSM: MFi 2 certificate parsing failed for "
+          << certificate_der.size() << " byte(s)\n";
+    }
     return false;
   }
   EVP_PKEY *key = X509_get_pubkey(certificate);
   X509_free(certificate);
   if (key == nullptr) {
+    if (aa2acp::bridge::debug_logging_enabled()) {
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+          << "CSM: MFi 2 certificate has no public key\n";
+    }
     return false;
   }
   if (EVP_PKEY_base_id(key) != EVP_PKEY_RSA) {
+    if (aa2acp::bridge::debug_logging_enabled()) {
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+          << "CSM: MFi 2 certificate public-key type is "
+          << EVP_PKEY_base_id(key) << ", not RSA\n";
+    }
     EVP_PKEY_free(key);
     return false;
   }
