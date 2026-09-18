@@ -408,16 +408,17 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
             return false;
           }
           wifi_cleanup.mark_joined();
-          const auto gateway =
-              aa2acp::iap2::ipv4_gateway_for_interface(wifi_interface);
-          if (!gateway) {
+          const auto endpoint =
+              aa2acp::iap2::accessory_ipv4_endpoint_for_interface(
+                  wifi_interface);
+          if (!endpoint) {
             aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
-                << "Wi-Fi: no IPv4 gateway after joining accessory AP\n";
+                << "Wi-Fi: no IPv4 endpoint after joining accessory AP\n";
             return false;
           }
-          carplay_probe.set_airplay_endpoint(*gateway, 7000);
+          carplay_probe.set_airplay_endpoint(*endpoint, 7000);
           aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
-              << "Wi-Fi: using accessory gateway " << *gateway
+              << "Wi-Fi: using accessory endpoint " << *endpoint
               << ":7000 for AirPlay\n";
           return true;
         });

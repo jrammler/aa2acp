@@ -247,7 +247,7 @@ bool join_with_networkmanager(const AccessoryWifiConfiguration &configuration,
 }
 
 std::optional<std::string>
-ipv4_gateway_for_interface(const std::string &interface_name) {
+accessory_ipv4_endpoint_for_interface(const std::string &interface_name) {
   std::ifstream routes("/proc/net/route");
   std::string line;
   std::getline(routes, line);
@@ -272,7 +272,33 @@ ipv4_gateway_for_interface(const std::string &interface_name) {
       return text.data();
     }
   }
-  return std::nullopt;
+
+  ifaddrs *addresses{};
+  if (getifaddrs(&addresses) != 0) {
+    return std::nullopt;
+  }
+  std::optional<std::string> endpoint;
+  for (auto *entry = addresses; entry != nullptr; entry = entry->ifa_next) {
+    if (entry->ifa_addr == nullptr || entry->ifa_netmask == nullptr ||
+        entry->ifa_addr->sa_family != AF_INET ||
+        interface_name != entry->ifa_name) {
+      continue;
+    }
+    const auto *address =
+        reinterpret_cast<const sockaddr_in *>(entry->ifa_addr);
+    const auto *netmask =
+        reinterpret_cast<const sockaddr_in *>(entry->ifa_netmask);
+    in_addr first_host{};
+    first_host.s_addr =
+        (address->sin_addr.s_addr & netmask->sin_addr.s_addr) | htonl(1);
+    std::array<char, INET_ADDRSTRLEN> text{};
+    if (inet_ntop(AF_INET, &first_host, text.data(), text.size()) != nullptr) {
+      endpoint = text.data();
+      break;
+    }
+  }
+  freeifaddrs(addresses);
+  return endpoint;
 }
 
 bool leave_with_networkmanager(const std::string &interface_name) {

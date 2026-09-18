@@ -18,8 +18,11 @@ struct AccessoryWifiConfiguration {
 // without changing Ethernet connectivity on the development host.
 bool join_with_networkmanager(const AccessoryWifiConfiguration &configuration,
                               const std::string &interface_name);
+// Returns the accessory endpoint for a Wi-Fi handoff. Prefer an advertised
+// default gateway; some head units omit it, so fall back to the subnet's first
+// host until mDNS endpoint discovery is available.
 std::optional<std::string>
-ipv4_gateway_for_interface(const std::string &interface_name);
+accessory_ipv4_endpoint_for_interface(const std::string &interface_name);
 bool leave_with_networkmanager(const std::string &interface_name);
 
 // Keep the local management UI reachable while CarPlay is idle. The AP profile
