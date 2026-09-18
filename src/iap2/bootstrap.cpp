@@ -10,6 +10,19 @@
 namespace aa2acp::iap2 {
 namespace {
 
+std::string message_list(const std::span<const std::uint8_t> value) {
+  std::ostringstream output;
+  for (std::size_t offset = 0; offset + 1 < value.size(); offset += 2) {
+    if (offset != 0) {
+      output << ", ";
+    }
+    const auto id = static_cast<std::uint16_t>(
+        (static_cast<std::uint16_t>(value[offset]) << 8U) | value[offset + 1]);
+    output << "0x" << std::hex << id << std::dec;
+  }
+  return output.str();
+}
+
 std::string parameter_summary(const std::span<const std::uint8_t> payload) {
   std::ostringstream output;
   std::size_t offset = 0;
@@ -80,6 +93,21 @@ void BootstrapSession::handle(const csm::Message &message) {
         aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
             << "CSM: IdentificationInformation parameters: "
             << parameter_summary(message.payload) << '\n';
+        const auto messages_sent =
+            csm::first_bytes_parameter(message.payload, 6);
+        const auto messages_received =
+            csm::first_bytes_parameter(message.payload, 7);
+        const auto wireless_component =
+            csm::first_bytes_parameter(message.payload, 24);
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+            << "CSM: head unit sends ["
+            << (messages_sent ? message_list(*messages_sent) : "")
+            << "] and receives ["
+            << (messages_received ? message_list(*messages_received) : "")
+            << "]; wireless component {"
+            << (wireless_component ? parameter_summary(*wireless_component)
+                                   : "")
+            << "}\n";
       }
       send_empty(csm::kIdentificationAccepted);
       send_empty(csm::kRequestAuthenticationCertificate);
