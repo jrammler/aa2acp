@@ -91,6 +91,19 @@ void CarPlayProbe::begin() {
     fail("not attached to iAP2 link");
     return;
   }
+  if (request_wifi_) {
+    if (!link_->send_control(csm::encode(kRequestAccessoryWifiConfiguration))) {
+      fail("unable to request accessory Wi-Fi configuration");
+      return;
+    }
+    awaiting_wifi_configuration_ = true;
+    started_ = true;
+    if (aa2acp::bridge::debug_logging_enabled()) {
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+          << "CSM: requested accessory Wi-Fi configuration\n";
+    }
+    return;
+  }
   if (bluetooth_identifier_.empty()) {
     fail("wireless CarPlay requires a Bluetooth transport identifier");
     return;
