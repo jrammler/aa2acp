@@ -992,6 +992,12 @@ std::optional<std::string> local_bluez_adapter_address() {
   }
   dbus_error_free(&error);
   dbus_connection_unref(connection);
+  if (address) {
+    std::transform(address->begin(), address->end(), address->begin(),
+                   [](const unsigned char character) {
+                     return static_cast<char>(std::tolower(character));
+                   });
+  }
   return address;
 }
 

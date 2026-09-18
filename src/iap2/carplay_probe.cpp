@@ -91,13 +91,13 @@ void CarPlayProbe::begin() {
     fail("not attached to iAP2 link");
     return;
   }
-  const auto wired = attributes(true, "usb-001");
-  std::vector<std::uint8_t> payload;
-  append_parameter(payload, 0, wired);
-  if (!bluetooth_identifier_.empty()) {
-    const auto wireless = attributes(true, bluetooth_identifier_);
-    append_parameter(payload, 1, wireless);
+  if (bluetooth_identifier_.empty()) {
+    fail("wireless CarPlay requires a Bluetooth transport identifier");
+    return;
   }
+  const auto wireless = attributes(true, bluetooth_identifier_);
+  std::vector<std::uint8_t> payload;
+  append_parameter(payload, 1, wireless);
   if (!link_->send_control(csm::encode(kCarPlayAvailability, payload))) {
     fail("unable to send CarPlayAvailability");
     return;
@@ -105,8 +105,7 @@ void CarPlayProbe::begin() {
   started_ = true;
   if (aa2acp::bridge::debug_logging_enabled()) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
-        << "CSM: sent CarPlayAvailability (wired"
-        << (bluetooth_identifier_.empty() ? ")\n" : " + wireless)\n");
+        << "CSM: sent CarPlayAvailability (wireless)\n";
   }
 }
 
