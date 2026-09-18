@@ -195,6 +195,30 @@ dictionary_of(const std::optional<aa2acp::airplay::PlistValue> &value) {
                : nullptr;
 }
 
+std::string plist_dictionary_summary(
+    const aa2acp::airplay::PlistValue::Dictionary &dictionary) {
+  std::ostringstream summary;
+  for (const auto &[key, value] : dictionary) {
+    summary << ' ' << key << '=';
+    if (const auto *number = std::get_if<std::uint64_t>(&value.data))
+      summary << *number;
+    else if (const auto *text = std::get_if<std::string>(&value.data))
+      summary << '"' << *text << '"';
+    else if (const auto *array =
+                 std::get_if<aa2acp::airplay::PlistValue::Array>(&value.data))
+      summary << "array(" << array->size() << ')';
+    else if (const auto *bytes =
+                 std::get_if<aa2acp::airplay::Bytes>(&value.data))
+      summary << "bytes(" << bytes->size() << ')';
+    else if (std::holds_alternative<aa2acp::airplay::PlistValue::Dictionary>(
+                 value.data))
+      summary << "dictionary";
+    else
+      summary << "scalar";
+  }
+  return summary.str();
+}
+
 std::optional<std::uint64_t>
 integer_at(const aa2acp::airplay::PlistValue::Dictionary &dictionary,
            const std::string_view key) {
@@ -830,10 +854,12 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     close(socket_fd);
     return 1;
   }
-  if (aa2acp::bridge::debug_logging_enabled())
-    aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
-        << "AirPlay: encrypted /info capabilities received\n";
   const auto *info = dictionary_of(info_plist);
+  if (aa2acp::bridge::debug_logging_enabled()) {
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+        << "AirPlay: encrypted /info capabilities received:"
+        << plist_dictionary_summary(*info) << '\n';
+  }
   const auto carplay_capabilities =
       info ? aa2acp::airplay::head_unit_capabilities(*info,
                                                      options.head_unit_mac)
@@ -1031,6 +1057,11 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
                    {"streamConnectionID",
                     aa2acp::airplay::PlistValue(screen_stream_id.data())}}}},
       });
+  if (aa2acp::bridge::debug_logging_enabled()) {
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+        << "AirPlay: screen SETUP request: type=110 streamConnectionID="
+        << screen_stream_id << '\n';
+  }
   const auto screen_cseq = next_cseq++;
   const auto screen_response =
       send_encrypted(socket_fd, control, encrypted_read_buffer,

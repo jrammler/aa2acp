@@ -214,7 +214,7 @@ endif()
 
 option(AA2ACP_INSTALL_SYSTEMD "Install systemd units with the package" ON)
 
-install(TARGETS aa2acp RUNTIME DESTINATION bin)
+install(TARGETS aa2acp aa2acp-airplay-pair-setup-probe RUNTIME DESTINATION bin)
 # Directory install so the full soname chain (libX.so -> .so.N) ships;
 # install(FILES) would copy only dangling symlinks.
 install(DIRECTORY "${AASDK_LIB_DIR}/" DESTINATION lib/aa2acp
