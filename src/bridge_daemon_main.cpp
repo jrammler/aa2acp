@@ -611,9 +611,21 @@ int main(int argc, char **argv) {
       aa2acp::bridge::load_config(config_path)
           .value_or(aa2acp::bridge::Config{
               "", "", "", "", aa2acp::bridge::default_airplay_pairing_store()});
-  if (config.airplay_pairing_store.empty())
+  const auto state_directory = aa2acp::bridge::default_state_directory();
+  const auto state_prefix = state_directory.string() + "/";
+  if (config.airplay_pairing_store.empty() ||
+      !config.airplay_pairing_store.string().starts_with(state_prefix)) {
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+        << "Bridge daemon: migrating AirPlay pairing store into "
+        << state_directory << '\n';
     config.airplay_pairing_store =
         aa2acp::bridge::default_airplay_pairing_store();
+    if (!aa2acp::bridge::save_config(config_path, config)) {
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Bridge daemon: unable to persist AirPlay pairing store "
+             "migration\n";
+    }
+  }
   std::mutex config_mutex;
   refresh_bluetooth_inventory(management_state);
   refresh_wifi_inventory(management_state);

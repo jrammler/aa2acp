@@ -14,8 +14,9 @@ struct Config {
   // The same radio hosts this WPA2 management AP while the bridge is idle.
   std::string management_hotspot_ssid;
   std::string management_hotspot_passphrase;
-  // Empty selects the daemon's deterministic state-directory default. This is
-  // intentionally an advanced override, not a normal UI setting.
+  // Empty selects the daemon's deterministic state-directory default. An
+  // override must remain under that directory so it is writable by the
+  // restricted daemon service.
   std::filesystem::path airplay_pairing_store;
 };
 
