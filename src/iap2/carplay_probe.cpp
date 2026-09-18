@@ -86,6 +86,12 @@ void CarPlayProbe::set_wifi_join_handler(
   request_wifi_ = true;
 }
 
+void CarPlayProbe::set_airplay_endpoint(std::string host,
+                                        const std::uint32_t port) {
+  airplay_host_ = std::move(host);
+  airplay_port_ = port;
+}
+
 void CarPlayProbe::begin() {
   if (link_ == nullptr) {
     fail("not attached to iAP2 link");
@@ -197,8 +203,11 @@ void CarPlayProbe::handle(const csm::Message &message) {
       }
       if (aa2acp::bridge::debug_logging_enabled())
         aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
-            << "CSM: sent WirelessCarPlayUpdate(status=1); "
-               "awaiting wireless session\n";
+            << "CSM: sent WirelessCarPlayUpdate(status=1)\n";
+      if (!airplay_host_.empty() && airplay_port_ != 0) {
+        done_ = true;
+        return;
+      }
       return;
     }
     done_ = true;

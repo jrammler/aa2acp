@@ -5,6 +5,7 @@
 #include "aa2acp/iap2/bootstrap.hpp"
 #include "aa2acp/iap2/carplay_probe.hpp"
 #include "aa2acp/iap2/link_layer.hpp"
+#include "aa2acp/iap2/network_manager.hpp"
 
 #include <csignal>
 #include <poll.h>
@@ -400,13 +401,25 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
   carplay_probe.request_wifi_configuration(wifi_config);
   if (join_wifi) {
     carplay_probe.set_wifi_join_handler(
-        [&wifi_interface, &wifi_cleanup](
+        [&wifi_interface, &wifi_cleanup, &carplay_probe](
             const aa2acp::iap2::AccessoryWifiConfiguration &configuration) {
-          const auto joined = aa2acp::iap2::join_with_networkmanager(
-              configuration, wifi_interface);
-          if (joined)
-            wifi_cleanup.mark_joined();
-          return joined;
+          if (!aa2acp::iap2::join_with_networkmanager(configuration,
+                                                      wifi_interface)) {
+            return false;
+          }
+          wifi_cleanup.mark_joined();
+          const auto gateway =
+              aa2acp::iap2::ipv4_gateway_for_interface(wifi_interface);
+          if (!gateway) {
+            aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+                << "Wi-Fi: no IPv4 gateway after joining accessory AP\n";
+            return false;
+          }
+          carplay_probe.set_airplay_endpoint(*gateway, 7000);
+          aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+              << "Wi-Fi: using accessory gateway " << *gateway
+              << ":7000 for AirPlay\n";
+          return true;
         });
   }
   const auto deadline =
@@ -449,11 +462,8 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
     return 128 + SIGTERM;
   }
   if (bridge && carplay_probe.done()) {
-    // In a Bluetooth-originated wireless CarPlay session, the StartSession
-    // device identifier is the head unit's BT identity, not an IP address.
-    // AirPlay moves to its advertised AP gateway after WirelessCarPlayUpdate.
-    const std::string host = "10.10.0.1";
-    if (carplay_probe.airplay_port() == 0) {
+    const std::string &host = carplay_probe.airplay_host();
+    if (host.empty() || carplay_probe.airplay_port() == 0) {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
           << "CarPlayStartSession did not provide an AirPlay port\n";
       return 1;

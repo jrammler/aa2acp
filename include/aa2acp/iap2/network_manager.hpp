@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace aa2acp::iap2 {
@@ -17,6 +18,8 @@ struct AccessoryWifiConfiguration {
 // without changing Ethernet connectivity on the development host.
 bool join_with_networkmanager(const AccessoryWifiConfiguration &configuration,
                               const std::string &interface_name);
+std::optional<std::string>
+ipv4_gateway_for_interface(const std::string &interface_name);
 bool leave_with_networkmanager(const std::string &interface_name);
 
 // Keep the local management UI reachable while CarPlay is idle. The AP profile

@@ -24,6 +24,7 @@ public:
   void request_wifi_configuration(bool enabled = true);
   void set_wifi_join_handler(
       std::function<bool(const AccessoryWifiConfiguration &)> handler);
+  void set_airplay_endpoint(std::string host, std::uint32_t port);
   void begin();
   void receive(std::span<const std::uint8_t> bytes);
 

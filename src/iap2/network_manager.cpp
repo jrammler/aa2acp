@@ -13,8 +13,10 @@
 
 #include <array>
 #include <chrono>
+#include <fstream>
 #include <iostream>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -242,6 +244,35 @@ bool join_with_networkmanager(const AccessoryWifiConfiguration &configuration,
          run_nmcli({"nmcli", "--wait", "30", "connection", "up", "id",
                     configuration.ssid, "ifname", interface_name},
                    false, true);
+}
+
+std::optional<std::string>
+ipv4_gateway_for_interface(const std::string &interface_name) {
+  std::ifstream routes("/proc/net/route");
+  std::string line;
+  std::getline(routes, line);
+  while (std::getline(routes, line)) {
+    std::istringstream fields(line);
+    std::string interface;
+    std::string destination;
+    std::string gateway;
+    std::string flags;
+    if (!(fields >> interface >> destination >> gateway >> flags) ||
+        interface != interface_name || destination != "00000000") {
+      continue;
+    }
+    const auto route_flags = std::stoul(flags, nullptr, 16);
+    if ((route_flags & 0x2U) == 0) {
+      continue;
+    }
+    in_addr address{};
+    address.s_addr = static_cast<in_addr_t>(std::stoul(gateway, nullptr, 16));
+    std::array<char, INET_ADDRSTRLEN> text{};
+    if (inet_ntop(AF_INET, &address, text.data(), text.size()) != nullptr) {
+      return text.data();
+    }
+  }
+  return std::nullopt;
 }
 
 bool leave_with_networkmanager(const std::string &interface_name) {

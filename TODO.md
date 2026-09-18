@@ -38,6 +38,8 @@
 - [ ] Support the CarPlayAvailability/CarPlayStartSession wireless handoff
   variant alongside the direct Wi-Fi-configuration handoff, selected from the
   head unit's advertised iAP2 control-message lists.
+- [ ] Discover the direct Wi-Fi handoff AirPlay endpoint using mDNS instead of
+  assuming the DHCP gateway and a fixed port.
 - [ ] Support MFi authentication protocol major 3, including its 32-byte
   challenge and SHA-256 signature-verification path while retaining the
   verified 20-byte SHA-1 major-2 path.
