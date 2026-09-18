@@ -35,6 +35,9 @@
   image, with declarative USB permissions for arbitrary Android phones.
 - [ ] Soak-test first pairing, existing pairing, unplug, replug, daemon
   shutdown, restart, and retained state.
+- [ ] Support the CarPlayAvailability/CarPlayStartSession wireless handoff
+  variant alongside the direct Wi-Fi-configuration handoff, selected from the
+  head unit's advertised iAP2 control-message lists.
 - [ ] Support MFi authentication protocol major 3, including its 32-byte
   challenge and SHA-256 signature-verification path while retaining the
   verified 20-byte SHA-1 major-2 path.
