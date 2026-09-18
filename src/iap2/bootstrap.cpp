@@ -5,8 +5,35 @@
 
 #include <iostream>
 #include <random>
+#include <sstream>
 
 namespace aa2acp::iap2 {
+namespace {
+
+std::string parameter_summary(const std::span<const std::uint8_t> payload) {
+  std::ostringstream output;
+  std::size_t offset = 0;
+  while (offset + 4 <= payload.size()) {
+    const auto length = static_cast<std::uint16_t>(
+        (static_cast<std::uint16_t>(payload[offset]) << 8U) |
+        payload[offset + 1]);
+    const auto id = static_cast<std::uint16_t>(
+        (static_cast<std::uint16_t>(payload[offset + 2]) << 8U) |
+        payload[offset + 3]);
+    if (length < 4 || offset + length > payload.size()) {
+      output << "invalid@" << offset;
+      break;
+    }
+    if (offset != 0) {
+      output << ", ";
+    }
+    output << "0x" << std::hex << id << std::dec << ':' << length - 4;
+    offset += length;
+  }
+  return output.str();
+}
+
+} // namespace
 
 void BootstrapSession::attach(PhoneLink &link) { link_ = &link; }
 
@@ -49,6 +76,11 @@ void BootstrapSession::handle(const csm::Message &message) {
     if (message.id == csm::kIdentificationRejected) {
       fail("identification rejected");
     } else if (message.id == csm::kIdentificationInformation) {
+      if (aa2acp::bridge::debug_logging_enabled()) {
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+            << "CSM: IdentificationInformation parameters: "
+            << parameter_summary(message.payload) << '\n';
+      }
       send_empty(csm::kIdentificationAccepted);
       send_empty(csm::kRequestAuthenticationCertificate);
       stage_ = Stage::AwaitCertificate;
