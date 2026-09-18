@@ -11,6 +11,7 @@
 namespace aa2acp::airplay {
 
 using Bytes = std::vector<std::uint8_t>;
+using RequestHeaders = std::vector<std::pair<std::string, std::string>>;
 
 struct Response {
   int status{};
@@ -20,7 +21,8 @@ struct Response {
 
 Bytes encode_request(std::string_view method, std::string_view path, int cseq,
                      std::span<const std::uint8_t> body,
-                     std::string_view content_type = {});
+                     std::string_view content_type = {},
+                     const RequestHeaders &additional_headers = {});
 std::optional<std::size_t>
 complete_response_size(std::span<const std::uint8_t> bytes);
 std::optional<Response> parse_response(std::span<const std::uint8_t> bytes);

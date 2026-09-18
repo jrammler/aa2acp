@@ -17,6 +17,14 @@ int main() {
   const std::string request_text(request.begin(), request.end());
   assert(request_text.find("POST /pair-setup RTSP/1.0") == 0);
   assert(request_text.find("Content-Length: 2") != std::string::npos);
+  const auto apple_request = aa2acp::airplay::encode_request(
+      "POST", "/pair-setup", 1, request_body, "application/pairing+tlv8",
+      {{"X-Apple-HKP", "0"}, {"User-Agent", "AirPlay/950.7.1"}});
+  const std::string apple_request_text(apple_request.begin(),
+                                       apple_request.end());
+  assert(apple_request_text.find("X-Apple-HKP: 0") != std::string::npos);
+  assert(apple_request_text.find("User-Agent: AA2ACP/0.1") ==
+         std::string::npos);
 
   const std::string raw =
       "RTSP/1.0 200 OK\r\nContent-Length: 3\r\nCSeq: 1\r\n\r\nabc";

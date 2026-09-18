@@ -24,6 +24,23 @@
 
 namespace {
 
+aa2acp::airplay::RequestHeaders pairing_headers(const int hkp) {
+  constexpr auto kAppleEpoch = std::chrono::seconds(978307200);
+  const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+                       std::chrono::system_clock::now().time_since_epoch()) -
+                   kAppleEpoch;
+  aa2acp::airplay::RequestHeaders headers{
+      {"X-Apple-AbsoluteTime", std::to_string(now.count())},
+      {"X-Apple-HKP", std::to_string(hkp)},
+      {"X-Apple-Client-Name", "User"},
+      {"User-Agent", "AirPlay/950.7.1"},
+  };
+  if (hkp == 2) {
+    headers.emplace_back("X-Apple-PD", "1");
+  }
+  return headers;
+}
+
 std::optional<std::string> random_controller_id() {
   std::array<unsigned char, 16> bytes{};
   if (RAND_bytes(bytes.data(), static_cast<int>(bytes.size())) != 1)
@@ -342,10 +359,13 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
             << "AirPlay: loaded persistent pairing identity\n";
     }
   }
+  const auto pair_setup_headers = pairing_headers(0);
+  const auto pair_verify_headers = pairing_headers(2);
   if (pairing.controller.private_key.empty()) {
     const auto m1 = aa2acp::airplay::encode_tlv8({{0x06, {1}}, {0x00, {0}}});
     const auto request = aa2acp::airplay::encode_request(
-        "POST", "/pair-setup", 1, m1, "application/pairing+tlv8");
+        "POST", "/pair-setup", 1, m1, "application/pairing+tlv8",
+        pair_setup_headers);
     if (!send_all(socket_fd, request)) {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
           << "Unable to send Pair-Setup M1\n";
@@ -403,7 +423,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     const auto m3 = aa2acp::airplay::encode_tlv8(
         {{0x06, {3}}, {0x03, srp.public_key()}, {0x04, srp.client_proof()}});
     const auto m3_request = aa2acp::airplay::encode_request(
-        "POST", "/pair-setup", 2, m3, "application/pairing+tlv8");
+        "POST", "/pair-setup", 2, m3, "application/pairing+tlv8",
+        pair_setup_headers);
     if (!send_all(socket_fd, m3_request)) {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
           << "Unable to send Pair-Setup M3\n";
@@ -497,7 +518,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     const auto m5 =
         aa2acp::airplay::encode_tlv8({{0x06, {5}}, {0x05, *encrypted}});
     const auto m5_request = aa2acp::airplay::encode_request(
-        "POST", "/pair-setup", 3, m5, "application/pairing+tlv8");
+        "POST", "/pair-setup", 3, m5, "application/pairing+tlv8",
+        pair_setup_headers);
     if (!send_all(socket_fd, m5_request)) {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
           << "Unable to send Pair-Setup M5\n";
@@ -598,7 +620,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   const auto verify_m1 = aa2acp::airplay::encode_tlv8(
       {{0x06, {1}}, {0x03, ephemeral->public_key}});
   const auto verify_m1_request = aa2acp::airplay::encode_request(
-      "POST", "/pair-verify", 4, verify_m1, "application/pairing+tlv8");
+      "POST", "/pair-verify", 4, verify_m1, "application/pairing+tlv8",
+      pair_verify_headers);
   if (!send_all(socket_fd, verify_m1_request)) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
         << "Unable to send Pair-Verify M1\n";
@@ -715,7 +738,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   const auto verify_m3 =
       aa2acp::airplay::encode_tlv8({{0x06, {3}}, {0x05, *verify_m3_encrypted}});
   const auto verify_m3_request = aa2acp::airplay::encode_request(
-      "POST", "/pair-verify", 5, verify_m3, "application/pairing+tlv8");
+      "POST", "/pair-verify", 5, verify_m3, "application/pairing+tlv8",
+      pair_verify_headers);
   if (!send_all(socket_fd, verify_m3_request)) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
         << "Unable to send Pair-Verify M3\n";

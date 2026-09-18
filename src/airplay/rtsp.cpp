@@ -29,10 +29,20 @@ std::string trim(std::string_view value) {
 
 Bytes encode_request(const std::string_view method, const std::string_view path,
                      const int cseq, const std::span<const std::uint8_t> body,
-                     const std::string_view content_type) {
+                     const std::string_view content_type,
+                     const RequestHeaders &additional_headers) {
   std::string headers = std::string(method) + " " + std::string(path) +
-                        " RTSP/1.0\r\n" + "User-Agent: AA2ACP/0.1\r\n" +
-                        "CSeq: " + std::to_string(cseq) + "\r\n";
+                        " RTSP/1.0\r\n" + "CSeq: " + std::to_string(cseq) +
+                        "\r\n";
+  const auto has_user_agent = std::any_of(
+      additional_headers.begin(), additional_headers.end(),
+      [](const auto &header) { return lower(header.first) == "user-agent"; });
+  if (!has_user_agent) {
+    headers += "User-Agent: AA2ACP/0.1\r\n";
+  }
+  for (const auto &[name, value] : additional_headers) {
+    headers += name + ": " + value + "\r\n";
+  }
   if (!content_type.empty()) {
     headers += "Content-Type: " + std::string(content_type) + "\r\n";
   }
