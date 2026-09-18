@@ -197,7 +197,9 @@ void CarPlayProbe::handle(const csm::Message &message) {
       }
       if (aa2acp::bridge::debug_logging_enabled())
         aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
-            << "CSM: sent WirelessCarPlayUpdate(status=1)\n";
+            << "CSM: sent WirelessCarPlayUpdate(status=1); "
+               "awaiting wireless session\n";
+      return;
     }
     done_ = true;
   }
