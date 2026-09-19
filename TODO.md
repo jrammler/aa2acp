@@ -48,10 +48,14 @@
   protocol logging, locally redacts identifiers, credentials, addresses, and
   pairing material, then exports an issue-ready support bundle for
   head-unit-specific interoperability reports.
-- [ ] Capture real-head-unit sessions outside the repository, derive sanitized
-  protocol-profile fixtures, and replay them in integration tests so support
-  for new iAP2, Wi-Fi-handoff, and AirPlay variants cannot regress profiles
-  already verified.
+- [ ] Build head-unit interoperability regression coverage: retain raw car
+  captures outside the repository; derive sanitized protocol fixtures that
+  assert parsing and normalized outgoing messages; inject transport, clock,
+  Bluetooth, Wi-Fi, and AirPlay dependencies for deterministic pairing,
+  reconnect, handoff, timeout, and failure-path state-machine tests; and run
+  those tests against anonymized capability profiles (iAP2 messages, Wi-Fi
+  handoff, AirPlay capabilities, and negotiated formats) for every verified
+  behavior.
 - [ ] Support MFi authentication protocol major 3, including its 32-byte
   challenge and SHA-256 signature-verification path while retaining the
   verified 20-byte SHA-1 major-2 path.
