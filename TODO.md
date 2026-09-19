@@ -48,6 +48,10 @@
   protocol logging, locally redacts identifiers, credentials, addresses, and
   pairing material, then exports an issue-ready support bundle for
   head-unit-specific interoperability reports.
+- [ ] Capture real-head-unit sessions outside the repository, derive sanitized
+  protocol-profile fixtures, and replay them in integration tests so support
+  for new iAP2, Wi-Fi-handoff, and AirPlay variants cannot regress profiles
+  already verified.
 - [ ] Support MFi authentication protocol major 3, including its 32-byte
   challenge and SHA-256 signature-verification path while retaining the
   verified 20-byte SHA-1 major-2 path.
