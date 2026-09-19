@@ -40,6 +40,10 @@
   head unit's advertised iAP2 control-message lists.
 - [ ] Discover the direct Wi-Fi handoff AirPlay endpoint using mDNS instead of
   assuming the DHCP gateway and a fixed port.
+- [ ] Provide a management-UI preflight diagnostic that enables structured
+  protocol logging, locally redacts identifiers, credentials, addresses, and
+  pairing material, then exports an issue-ready support bundle for
+  head-unit-specific interoperability reports.
 - [ ] Support MFi authentication protocol major 3, including its 32-byte
   challenge and SHA-256 signature-verification path while retaining the
   verified 20-byte SHA-1 major-2 path.
