@@ -41,6 +41,17 @@ aa2acp::airplay::RequestHeaders pairing_headers(const int hkp) {
   return headers;
 }
 
+std::optional<std::uint64_t> random_stream_connection_id() {
+  std::array<unsigned char, 8> bytes{};
+  if (RAND_bytes(bytes.data(), static_cast<int>(bytes.size())) != 1)
+    return std::nullopt;
+  std::uint64_t id{};
+  for (const auto byte : bytes) {
+    id = (id << 8) | byte;
+  }
+  return id == 0 ? std::nullopt : std::optional(id);
+}
+
 std::optional<std::string> random_controller_id() {
   std::array<unsigned char, 16> bytes{};
   if (RAND_bytes(bytes.data(), static_cast<int>(bytes.size())) != 1)
@@ -1046,8 +1057,13 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
       carplay_capabilities && carplay_capabilities->system_pcm_16k_mono,
       "system", "alert", "AB4C4DF6-AE7F-48F5-A36B-546EEAAEF4B5");
 
-  constexpr std::string_view screen_stream_id =
-      "3A5B6C7D-8E9F-4012-A345-B678C901D234";
+  const auto screen_stream_id = random_stream_connection_id();
+  if (!screen_stream_id) {
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Unable to generate a screen stream connection ID\n";
+    close(socket_fd);
+    return 1;
+  }
   const auto screen_body =
       aa2acp::airplay::encode_bplist(aa2acp::airplay::PlistValue::Dictionary{
           {"streams",
@@ -1055,12 +1071,12 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
                aa2acp::airplay::PlistValue::Dictionary{
                    {"type", aa2acp::airplay::PlistValue(std::uint64_t{110})},
                    {"streamConnectionID",
-                    aa2acp::airplay::PlistValue(screen_stream_id.data())}}}},
+                    aa2acp::airplay::PlistValue(*screen_stream_id)}}}},
       });
   if (aa2acp::bridge::debug_logging_enabled()) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
         << "AirPlay: screen SETUP request: type=110 streamConnectionID="
-        << screen_stream_id << '\n';
+        << *screen_stream_id << '\n';
   }
   const auto screen_cseq = next_cseq++;
   const auto screen_response =
@@ -1317,7 +1333,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     initial_access_units.push_back(std::move(*access_unit));
   }
   const auto stream_key = aa2acp::airplay::hkdf_sha512(
-      *shared, std::string("DataStream-Salt") + std::string(screen_stream_id),
+      *shared,
+      std::string("DataStream-Salt") + std::to_string(*screen_stream_id),
       "DataStream-Output-Encryption-Key", 32);
   const auto data_socket = connect_tcp(host, std::to_string(screen_port_value));
   if (stream_key.size() != 32 || data_socket < 0) {
