@@ -57,7 +57,6 @@
 
 ## Boundaries
 
-The bridge currently has verified wired Android Auto to wireless CarPlay H.264
-video with LIVI. The development MFi implementation and LIVI test setup are
-external test infrastructure, not part of this repository or a production
-certification story.
+The bridge is experimental and not a production certification story. Real
+head units vary in their iAP2 and AirPlay behavior; compatibility work is
+tracked above.

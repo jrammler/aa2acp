@@ -12,32 +12,27 @@ Android phone ── Android Auto ──> AA2ACP ── CarPlay ──> car head
 The bridge owns Bluetooth pairing, the CarPlay Wi-Fi handover, persistent
 AirPlay pairing, and the media/control translation.
 
-> **Work in progress:** AA2ACP does not yet connect to a real car head unit.
-> Bluetooth discovery and pairing with real cars are still in progress. The
-> wired Android Auto → wireless CarPlay path has been verified end to end with
-> [LIVI](https://github.com/f-io/LIVI). Audio, physical controls, wireless
-> Android Auto, production authentication, and appliance packaging are also
-> still in progress.
+> **Work in progress:** AA2ACP is experimental. Real-head-unit testing has
+> verified Bluetooth iAP2, MFi authentication, Wi-Fi handoff, and encrypted
+> AirPlay pairing/control setup. Screen-stream compatibility, Android Auto
+> media forwarding, audio, physical controls, wireless Android Auto,
+> production authentication, and appliance packaging remain in progress.
 
 ## Current state
 
-The following functionality has been verified with
-[LIVI](https://github.com/f-io/LIVI):
+The following functionality has been verified:
 
 - AOAP USB and Android Auto TLS/control session;
-- Bluetooth iAP2, pairing, MFi test authentication, and CarPlay Wi-Fi handover;
-- encrypted AirPlay control and H.264 video forwarding;
+- Bluetooth iAP2 pairing, MFi authentication, and CarPlay Wi-Fi handover;
+- encrypted AirPlay pairing, verification, control, and initial session setup;
 - lossless H.264 SPS metadata normalization for decoder compatibility;
-- head-unit-bound capabilities caching, including a 30-second cold-start
-  negotiation window before Android Auto video setup;
 - persisted configuration/pairing state, rotating logs, and clean disconnect
   handling.
 
-Media and guidance audio forwarding are verified with LIVI; system-audio
-forwarding is implemented but not yet exercised with a phone-side trigger.
-Call audio and physical-control forwarding are not implemented yet. See
-[TODO.md](TODO.md) for the active task list and
-[TESTING.md](TESTING.md) for the end-to-end runbook and diagnostics.
+Screen-stream compatibility is under active real-head-unit testing. Media,
+guidance, system, and call audio forwarding, plus physical-control forwarding,
+are not yet verified end to end. See [TODO.md](TODO.md) for the active task
+list and [TESTING.md](TESTING.md) for the runbook and diagnostics.
 
 ## Installation
 

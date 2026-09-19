@@ -6,24 +6,17 @@ assumes a running daemon (deb service or a locally built binary).
 
 ## Verified state
 
-AA2ACP has been tested end to end with a wired Android Auto phone and
-[LIVI](https://github.com/f-io/LIVI), a CarPlay-capable head unit for
-development:
+Real-head-unit testing has verified the wireless connection bootstrap:
 
-1. An Android phone connects over USB and starts Android Auto.
-2. AA2ACP receives the phone's H.264 video stream through AOAP/AASDK.
-3. AA2ACP pairs or reuses its BlueZ bond with the configured head unit,
-   completes iAP2/CSM and the CarPlay Wi-Fi handover, then establishes AirPlay.
-4. The Android Auto H.264 stream is visible on the head unit.
-5. Unplugging the Android phone stops the CarPlay session and returns the head
-   unit to its normal screen.
+1. AA2ACP pairs with the configured head unit over Bluetooth.
+2. It completes iAP2/CSM and MFi authentication.
+3. It joins the head unit's CarPlay Wi-Fi network.
+4. It completes encrypted AirPlay pairing, verification, and initial session
+   setup.
 
-Media and guidance-audio forwarding are verified; system audio awaits a
-phone-side test trigger. Call audio and input/control forwarding are not
-implemented. The active work is in [TODO.md](TODO.md).
-
-LIVI's development-only authentication configuration is external to this
-repository and is not a production certification setup.
+Screen-stream setup and Android Auto H.264 forwarding remain under active
+compatibility testing. Audio, input/control, and call-audio forwarding are not
+yet verified end to end. The active work is in [TODO.md](TODO.md).
 
 ## Runbook
 

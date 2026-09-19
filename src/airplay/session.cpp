@@ -931,9 +931,9 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   aa2acp::airplay::Bytes audio_key;
   if (options.next_media_audio && carplay_capabilities &&
       carplay_capabilities->media_pcm_48k_stereo) {
-    // Android Auto delivers media as 48 kHz stereo S16LE. LIVI accepts this
-    // direct LPCM stream, so retain it for the first audio milestone instead
-    // of adding an encoder and its latency to the bridge.
+    // Android Auto delivers media as 48 kHz stereo S16LE. Preserve this direct
+    // LPCM stream for the first audio milestone instead of adding an encoder
+    // and its latency to the bridge.
     const auto audio_body =
         aa2acp::airplay::encode_bplist(aa2acp::airplay::PlistValue::Dictionary{
             {"streams",
