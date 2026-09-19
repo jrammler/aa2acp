@@ -84,6 +84,8 @@ struct PendingManagementHotspotUpdate {
 std::optional<PendingManagementHotspotUpdate> pending_management_hotspot_update;
 
 constexpr char kDefaultManagementHotspotPassphrase[] = "changeme";
+constexpr char kDisplayPreflightVideo[] =
+    "/usr/share/aa2acp/display-preflight.h264";
 
 std::string management_hotspot_ssid(const std::string &interface_name) {
   std::ifstream stream("/sys/class/net/" + interface_name + "/address");
@@ -199,7 +201,8 @@ int run_carplay_session(const aa2acp::bridge::Config &config,
                         const std::string &media_audio_socket = {},
                         const std::string &guidance_audio_socket = {},
                         const std::string &system_audio_socket = {},
-                        const bool preflight = false) {
+                        const bool preflight = false,
+                        const std::string &video_path = {}) {
   if (config.head_unit_mac.empty()) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
         << "Bridge daemon: configure a head-unit MAC first\n";
@@ -224,6 +227,10 @@ int run_carplay_session(const aa2acp::bridge::Config &config,
       "60"};
   if (preflight)
     arguments.push_back("--preflight");
+  if (!video_path.empty()) {
+    arguments.push_back("--video");
+    arguments.push_back(video_path);
+  }
   if (!video_socket.empty()) {
     arguments.push_back("--video-socket");
     arguments.push_back(video_socket);
@@ -271,7 +278,8 @@ int run_carplay_session(const aa2acp::bridge::Config &config,
 
 void run_carplay_preflight(const aa2acp::bridge::Config config,
                            ManagementState &management,
-                           const std::stop_token stop) {
+                           const std::stop_token stop,
+                           const bool display_test = false) {
   // Single writer helper: every preflight transition goes through here so
   // state, detail and revision stay consistent.
   const auto set_preflight =
@@ -287,14 +295,16 @@ void run_carplay_preflight(const aa2acp::bridge::Config config,
   std::atomic<pid_t> active_child{-1};
   std::atomic_bool phone_disconnected{false};
   aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
-      << "Management: starting CarPlay preflight for " << config.head_unit_mac
-      << '\n';
-  const auto result = run_carplay_session(config, stop, phone_disconnected,
-                                          active_child, {}, {}, {}, {}, true);
+      << "Management: starting " << (display_test ? "display " : "")
+      << "CarPlay preflight for " << config.head_unit_mac << '\n';
+  const auto result = run_carplay_session(
+      config, stop, phone_disconnected, active_child, {}, {}, {}, {}, true,
+      display_test ? kDisplayPreflightVideo : "");
   set_preflight(result == 0
                     ? aa2acp::bridge::management::PreflightState::succeeded
                     : aa2acp::bridge::management::PreflightState::failed,
-                result == 0 ? "ready; capabilities cached"
+                result == 0 ? (display_test ? "display test completed"
+                                            : "ready; capabilities cached")
                             : "failed (see daemon log for details)");
   aa2acp::bridge::log(result == 0 ? aa2acp::bridge::LogLevel::info
                                   : aa2acp::bridge::LogLevel::warning)
@@ -904,6 +914,8 @@ int main(int argc, char **argv) {
       respond(403, "text/plain",
               "Change the default management hotspot password first\n");
     } else if (request.starts_with("POST /carplay-prepare ")) {
+      const bool display_test =
+          form_field(body, "display_test").value_or("") == "1";
       const auto selected_config = [&] {
         std::lock_guard lock(config_mutex);
         return config;
@@ -918,7 +930,8 @@ int main(int argc, char **argv) {
             !management_state.snapshot.bluetooth_scan_running) {
           management_state.snapshot.preflight_state =
               aa2acp::bridge::management::PreflightState::discovering;
-          management_state.snapshot.preflight_detail = "queued";
+          management_state.snapshot.preflight_detail =
+              display_test ? "display test queued" : "queued";
           ++management_state.snapshot.preflight_revision;
           start_preflight = true;
         }
@@ -930,9 +943,10 @@ int main(int argc, char **argv) {
         // joinable jthread calls std::terminate.
         if (carplay_preflight_worker.joinable())
           carplay_preflight_worker.join();
-        carplay_preflight_worker =
-            std::jthread([selected_config](const std::stop_token stop) {
-              run_carplay_preflight(selected_config, management_state, stop);
+        carplay_preflight_worker = std::jthread(
+            [selected_config, display_test](const std::stop_token stop) {
+              run_carplay_preflight(selected_config, management_state, stop,
+                                    display_test);
             });
         respond(303, "text/plain", "", "Location: /\r\n");
       } else {

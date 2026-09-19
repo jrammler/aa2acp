@@ -361,15 +361,21 @@ std::string render_page(const Config &config, const Snapshot &snapshot,
 #ifdef AA2ACP_VERSION
   output += "<p class=hint>AA2ACP v" AA2ACP_VERSION "</p>";
 #endif
-  if (!config.head_unit_mac.empty() && !config.wifi_interface.empty())
+  if (!config.head_unit_mac.empty() && !config.wifi_interface.empty()) {
+    const auto disabled =
+        std::string(aa2acp::bridge::management::preflight_active(
+                        snapshot.preflight_state) ||
+                            snapshot.bluetooth_scan_running
+                        ? "disabled"
+                        : "");
     output += "<form method=post action=\"/carplay-prepare\">" + csrf_input +
-              "<button type=submit " +
-              std::string(aa2acp::bridge::management::preflight_active(
-                              snapshot.preflight_state) ||
-                                  snapshot.bluetooth_scan_running
-                              ? "disabled"
-                              : "") +
+              "<button type=submit " + disabled +
               ">Prepare/Test CarPlay</button></form>";
+    output +=
+        "<form method=post action=\"/carplay-prepare\">" + csrf_input +
+        "<input type=hidden name=display_test value=1><button type=submit " +
+        disabled + ">Test CarPlay display (gentle motion)</button></form>";
+  }
   if (!config.head_unit_mac.empty())
     output +=
         "<form method=post action=\"/bluetooth-forget\" onsubmit=\"return "

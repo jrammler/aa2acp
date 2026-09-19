@@ -3,9 +3,9 @@
 ## Video and display
 
 - [ ] Add a management-UI display preflight that establishes the encrypted
-  screen stream and sends a non-flashing, static H.264 test card without
-  requiring an Android Auto phone, reporting each transport and rendering
-  milestone.
+  screen stream and sends a non-flashing color test card with optional,
+  low-motion AA2ACP text (and a static reduce-motion mode), without requiring
+  an Android Auto phone; report each transport and rendering milestone.
 - [x] Prepare CarPlay as Android Auto connects, then discover and cache its
   head-unit capabilities before replying to Android Auto service discovery. The cache
   is bound to the configured head unit and is invalidated when that device
