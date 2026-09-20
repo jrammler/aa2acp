@@ -62,6 +62,23 @@ daemon itself configures through NetworkManager shared mode (DHCP included).
 Connect a phone or laptop to the hotspot and open `http://10.42.0.1:8080`
 (or the hotspot gateway address if it was configured differently).
 
+### Command-line preflight
+
+`scripts/carplay-preflight.sh` starts and monitors the same management-UI
+CarPlay preflight. It reports relevant daemon milestones when given an SSH
+destination and automatically confirms the Pi side of a Bluetooth numeric
+comparison; still compare and confirm the code on the head unit.
+
+```bash
+AA2ACP_UI_URL=http://10.42.0.1:8080 \
+AA2ACP_PI_HOST=pi@aa2acp-pi.local \
+./scripts/carplay-preflight.sh --fresh
+```
+
+`--fresh` clears the configured head unit's local Bluetooth bond, AirPlay
+pairing, and cached capabilities before starting. It keeps the configured
+head unit and Wi-Fi interface.
+
 - **First start:** the bridge picks the first usable Wi-Fi adapter and starts
   a hotspot named `AA2ACP-<MAC suffix>-1` with the default password
   `changeme`. The UI permits no other action until you replace that password.
