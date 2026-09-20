@@ -9,6 +9,7 @@
 #include "aa2acp/bridge/logging.hpp"
 
 #include <netdb.h>
+#include <netinet/in.h>
 #include <openssl/rand.h>
 #include <poll.h>
 #include <sys/socket.h>
@@ -245,6 +246,77 @@ send_encrypted(const int socket_fd, aa2acp::airplay::ControlCipher &cipher,
               ? " stopped before a response\n"
               : " timed out waiting for response\n");
   return std::nullopt;
+}
+
+std::uint64_t ntp_timestamp() {
+  constexpr std::uint64_t kNtpUnixEpochOffset = 2208988800ULL;
+  const auto now = std::chrono::system_clock::now().time_since_epoch();
+  const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(now);
+  const auto remainder = now - seconds;
+  const auto fraction =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(remainder).count();
+  return ((static_cast<std::uint64_t>(seconds.count()) + kNtpUnixEpochOffset)
+          << 32) |
+         ((static_cast<std::uint64_t>(fraction) << 32) / 1000000000ULL);
+}
+
+void write_ntp_timestamp(std::uint8_t *destination, const std::uint64_t value) {
+  for (int index = 0; index < 8; ++index)
+    destination[index] = static_cast<std::uint8_t>(value >> (56 - index * 8));
+}
+
+int bind_timing_socket(std::uint16_t &port) {
+  const auto socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
+  if (socket_fd < 0)
+    return -1;
+  sockaddr_in address{};
+  address.sin_family = AF_INET;
+  address.sin_addr.s_addr = htonl(INADDR_ANY);
+  if (bind(socket_fd, reinterpret_cast<const sockaddr *>(&address),
+           sizeof(address)) != 0) {
+    close(socket_fd);
+    return -1;
+  }
+  socklen_t address_size = sizeof(address);
+  if (getsockname(socket_fd, reinterpret_cast<sockaddr *>(&address),
+                  &address_size) != 0) {
+    close(socket_fd);
+    return -1;
+  }
+  port = ntohs(address.sin_port);
+  return socket_fd;
+}
+
+void service_timing_channel(const int socket_fd, const std::stop_token stop) {
+  bool logged_request = false;
+  std::array<std::uint8_t, 64> request{};
+  while (!stop.stop_requested()) {
+    pollfd descriptor{socket_fd, POLLIN, 0};
+    if (poll(&descriptor, 1, 100) <= 0)
+      continue;
+    sockaddr_storage peer{};
+    socklen_t peer_size = sizeof(peer);
+    const auto count =
+        recvfrom(socket_fd, request.data(), request.size(), 0,
+                 reinterpret_cast<sockaddr *>(&peer), &peer_size);
+    if (count < 32 || request[1] != 210)
+      continue;
+    std::array<std::uint8_t, 32> response{};
+    response[0] = 0x80;
+    response[1] = 211;
+    response[3] = 7;
+    std::copy_n(request.begin() + 24, 8, response.begin() + 8);
+    write_ntp_timestamp(response.data() + 16, ntp_timestamp());
+    write_ntp_timestamp(response.data() + 24, ntp_timestamp());
+    if (sendto(socket_fd, response.data(), response.size(), 0,
+               reinterpret_cast<const sockaddr *>(&peer), peer_size) >= 0 &&
+        !logged_request) {
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+          << "AirPlay: timing sync request answered\n";
+      logged_request = true;
+    }
+  }
+  close(socket_fd);
 }
 
 void service_event_channel(const int socket_fd, aa2acp::airplay::Bytes read_key,
@@ -1006,10 +1078,22 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     }
   }
 
+  std::uint16_t local_timing_port{};
+  const auto timing_socket = bind_timing_socket(local_timing_port);
+  if (timing_socket < 0) {
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "AirPlay: unable to bind timing socket: " << std::strerror(errno)
+        << '\n';
+    close(socket_fd);
+    return 1;
+  }
+  std::jthread timing_channel([timing_socket](const std::stop_token stop) {
+    service_timing_channel(timing_socket, stop);
+  });
   const auto session_body =
       aa2acp::airplay::encode_bplist(aa2acp::airplay::PlistValue::Dictionary{
-          {"timingPort", aa2acp::airplay::PlistValue(std::uint64_t{0})},
-          {"timingProtocol", aa2acp::airplay::PlistValue("None")},
+          {"timingPort", aa2acp::airplay::PlistValue(
+                             static_cast<std::uint64_t>(local_timing_port))},
           {"name", aa2acp::airplay::PlistValue("AA2ACP")},
           {"deviceID", aa2acp::airplay::PlistValue(pairing.controller_id)},
           {"model", aa2acp::airplay::PlistValue("RaspberryPi")},
