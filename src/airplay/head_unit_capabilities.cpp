@@ -22,8 +22,12 @@ integer_at(const PlistValue::Dictionary &dictionary,
 }
 
 bool valid(const HeadUnitCapabilities &profile) {
-  return !profile.head_unit_mac.empty() && profile.width_pixels > 0 &&
-         profile.height_pixels > 0 && profile.max_fps > 0 &&
+  const bool has_display = profile.width_pixels > 0 &&
+                           profile.height_pixels > 0 && profile.max_fps > 0;
+  const bool has_audio = profile.media_pcm_48k_stereo ||
+                         profile.guidance_pcm_16k_mono ||
+                         profile.system_pcm_16k_mono;
+  return !profile.head_unit_mac.empty() && (has_display || has_audio) &&
          profile.head_unit_mac.find_first_of("\r\n=") == std::string::npos;
 }
 
@@ -66,32 +70,37 @@ bool supports_pcm(const PlistValue::Dictionary &info,
 std::optional<HeadUnitCapabilities>
 head_unit_capabilities(const PlistValue::Dictionary &info,
                        std::string head_unit_mac) {
+  HeadUnitCapabilities profile{std::move(head_unit_mac),
+                               0,
+                               0,
+                               0,
+                               supports_pcm(info, "media", 0x8000),
+                               supports_pcm(info, "default", 0x10),
+                               supports_pcm(info, "alert", 0x10)};
   const auto displays = info.find("displays");
-  if (displays == info.end())
-    return std::nullopt;
-  const auto *array = std::get_if<PlistValue::Array>(&displays->second.data);
-  if (array == nullptr)
-    return std::nullopt;
-  for (const auto &display : *array) {
-    const auto *dictionary = std::get_if<PlistValue::Dictionary>(&display.data);
-    if (dictionary == nullptr || integer_at(*dictionary, "type") != 110)
-      continue;
-    const auto width = integer_at(*dictionary, "widthPixels");
-    const auto height = integer_at(*dictionary, "heightPixels");
-    const auto fps = integer_at(*dictionary, "maxFPS");
-    if (!width || !height || !fps || *width > UINT32_MAX ||
-        *height > UINT32_MAX || *fps > UINT32_MAX)
-      return std::nullopt;
-    HeadUnitCapabilities profile{std::move(head_unit_mac),
-                                 static_cast<std::uint32_t>(*width),
-                                 static_cast<std::uint32_t>(*height),
-                                 static_cast<std::uint32_t>(*fps),
-                                 supports_pcm(info, "media", 0x8000),
-                                 supports_pcm(info, "default", 0x10),
-                                 supports_pcm(info, "alert", 0x10)};
-    return valid(profile) ? std::optional(std::move(profile)) : std::nullopt;
+  const auto *array =
+      displays == info.end()
+          ? nullptr
+          : std::get_if<PlistValue::Array>(&displays->second.data);
+  if (array != nullptr) {
+    for (const auto &display : *array) {
+      const auto *dictionary =
+          std::get_if<PlistValue::Dictionary>(&display.data);
+      if (dictionary == nullptr || integer_at(*dictionary, "type") != 110)
+        continue;
+      const auto width = integer_at(*dictionary, "widthPixels");
+      const auto height = integer_at(*dictionary, "heightPixels");
+      const auto fps = integer_at(*dictionary, "maxFPS");
+      if (!width || !height || !fps || *width > UINT32_MAX ||
+          *height > UINT32_MAX || *fps > UINT32_MAX)
+        return std::nullopt;
+      profile.width_pixels = static_cast<std::uint32_t>(*width);
+      profile.height_pixels = static_cast<std::uint32_t>(*height);
+      profile.max_fps = static_cast<std::uint32_t>(*fps);
+      break;
+    }
   }
-  return std::nullopt;
+  return valid(profile) ? std::optional(std::move(profile)) : std::nullopt;
 }
 
 std::optional<HeadUnitCapabilities>

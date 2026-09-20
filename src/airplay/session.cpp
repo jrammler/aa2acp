@@ -22,6 +22,7 @@
 #include <chrono>
 #include <cstring>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -402,6 +403,20 @@ void service_event_channel(const int socket_fd, aa2acp::airplay::Bytes read_key,
       }
       if (frame->empty())
         break;
+      if (aa2acp::bridge::debug_logging_enabled()) {
+        std::ostringstream dump;
+        dump << "AirPlay: event channel decrypted " << frame->size()
+             << " byte(s):";
+        constexpr std::size_t kMaximumEventDumpBytes = 64;
+        for (const auto byte : std::span(*frame).first(
+                 std::min(frame->size(), kMaximumEventDumpBytes)))
+          dump << ' ' << std::hex << std::setw(2) << std::setfill('0')
+               << static_cast<unsigned int>(byte);
+        if (frame->size() > kMaximumEventDumpBytes)
+          dump << " ...";
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+            << dump.str() << '\n';
+      }
       plaintext.insert(plaintext.end(), frame->begin(), frame->end());
       const std::string request(plaintext.begin(), plaintext.end());
       const auto header_end = request.find("\r\n\r\n");
@@ -416,6 +431,10 @@ void service_event_channel(const int socket_fd, aa2acp::airplay::Bytes read_key,
         if (line.starts_with("CSeq:"))
           cseq = line.substr(5);
       }
+      if (aa2acp::bridge::debug_logging_enabled())
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+            << "AirPlay: event channel request "
+            << request.substr(0, header_end) << '\n';
       std::string response =
           "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nAudio-Latency: 0\r\n";
       if (!cseq.empty())
