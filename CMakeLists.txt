@@ -103,6 +103,10 @@ add_library(bridge_media_forwarders src/bridge/media_forwarders.cpp)
 target_include_directories(bridge_media_forwarders PUBLIC include)
 target_compile_options(bridge_media_forwarders PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
+add_library(bridge_management_listener src/bridge/management_listener.cpp)
+target_include_directories(bridge_management_listener PUBLIC include)
+target_compile_options(bridge_management_listener PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
 add_library(bridge_carplay_ipc src/bridge/carplay_ipc.cpp)
 target_include_directories(bridge_carplay_ipc PUBLIC include)
 target_link_libraries(bridge_carplay_ipc PUBLIC bridge_daemon_log)
@@ -182,8 +186,10 @@ cmake_path(GET AASDK_SHARED_LIBRARY PARENT_PATH AASDK_LIB_DIR)
 cmake_path(GET AAP_PROTOBUF_SHARED_LIBRARY PARENT_PATH AAP_PROTOBUF_LIB_DIR)
 
 add_executable(aa2acp src/bridge_daemon_main.cpp)
-target_compile_definitions(aa2acp PRIVATE AA2ACP_VERSION="${AA2ACP_VERSION}")
-target_link_libraries(aa2acp PRIVATE bridge_config bridge_daemon_log bridge_media_forwarders bridge_carplay_ipc bridge_management_ui bridge_carplay_worker bluez_inventory android_auto_usb h264_normalizer airplay_rtsp iap2_link iap2_bluetooth_worker)
+target_compile_definitions(
+  aa2acp PRIVATE AA2ACP_VERSION="${AA2ACP_VERSION}"
+                 AA2ACP_DISPLAY_PREFLIGHT_VIDEO="${CMAKE_INSTALL_PREFIX}/share/aa2acp/display-preflight.h264")
+target_link_libraries(aa2acp PRIVATE bridge_config bridge_daemon_log bridge_media_forwarders bridge_management_listener bridge_carplay_ipc bridge_management_ui bridge_carplay_worker bluez_inventory android_auto_usb h264_normalizer airplay_rtsp iap2_link iap2_bluetooth_worker)
 set_property(TARGET aa2acp PROPERTY INSTALL_RPATH "/usr/lib/aa2acp")
 target_compile_options(aa2acp PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
@@ -216,6 +222,14 @@ if(BUILD_TESTING)
   target_link_libraries(carplay-ipc-tests PRIVATE bridge_carplay_ipc)
   target_compile_options(carplay-ipc-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
   add_test(NAME carplay-ipc-tests COMMAND carplay-ipc-tests)
+  add_executable(media-forwarders-tests tests/media_forwarders_tests.cpp)
+  target_link_libraries(media-forwarders-tests PRIVATE bridge_media_forwarders)
+  target_compile_options(media-forwarders-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+  add_test(NAME media-forwarders-tests COMMAND media-forwarders-tests)
+  add_executable(management-listener-tests tests/management_listener_tests.cpp)
+  target_link_libraries(management-listener-tests PRIVATE bridge_management_listener)
+  target_compile_options(management-listener-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+  add_test(NAME management-listener-tests COMMAND management-listener-tests)
   add_test(NAME no-direct-stream-logs
            COMMAND ${CMAKE_COMMAND} -DPROJECT_SOURCE_DIR=${PROJECT_SOURCE_DIR}
                    -P ${PROJECT_SOURCE_DIR}/tests/no_direct_stream_logs.cmake)

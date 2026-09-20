@@ -4,6 +4,7 @@
 #include <fstream>
 #include <string_view>
 #include <sys/stat.h>
+#include <unistd.h>
 
 namespace aa2acp::airplay {
 namespace {
@@ -156,24 +157,32 @@ bool save_head_unit_capabilities(const std::filesystem::path &path,
   std::filesystem::create_directories(path.parent_path(), error);
   if (error)
     return false;
-  const auto temporary = path.string() + ".tmp";
+  std::string temporary = path.string() + ".tmp.XXXXXX";
+  const auto fd = ::mkstemp(temporary.data());
+  if (fd < 0)
+    return false;
+  ::close(fd);
+  bool ok = false;
   {
     std::ofstream stream(temporary, std::ios::trunc);
-    if (!stream)
-      return false;
-    stream << kMagic << '\n'
-           << "head_unit_mac=" << profile.head_unit_mac << '\n'
-           << "width_pixels=" << profile.width_pixels << '\n'
-           << "height_pixels=" << profile.height_pixels << '\n'
-           << "max_fps=" << profile.max_fps << '\n'
-           << "media_pcm_48k_stereo=" << profile.media_pcm_48k_stereo << '\n'
-           << "guidance_pcm_16k_mono=" << profile.guidance_pcm_16k_mono << '\n'
-           << "system_pcm_16k_mono=" << profile.system_pcm_16k_mono << '\n';
-    if (!stream)
-      return false;
+    if (stream) {
+      stream << kMagic << '\n'
+             << "head_unit_mac=" << profile.head_unit_mac << '\n'
+             << "width_pixels=" << profile.width_pixels << '\n'
+             << "height_pixels=" << profile.height_pixels << '\n'
+             << "max_fps=" << profile.max_fps << '\n'
+             << "media_pcm_48k_stereo=" << profile.media_pcm_48k_stereo << '\n'
+             << "guidance_pcm_16k_mono=" << profile.guidance_pcm_16k_mono
+             << '\n'
+             << "system_pcm_16k_mono=" << profile.system_pcm_16k_mono << '\n';
+      ok = static_cast<bool>(stream);
+    }
   }
-  return chmod(temporary.c_str(), S_IRUSR | S_IWUSR) == 0 &&
-         std::rename(temporary.c_str(), path.c_str()) == 0;
+  ok = ok && chmod(temporary.c_str(), S_IRUSR | S_IWUSR) == 0 &&
+       std::rename(temporary.c_str(), path.c_str()) == 0;
+  if (!ok)
+    std::filesystem::remove(temporary);
+  return ok;
 }
 
 } // namespace aa2acp::airplay

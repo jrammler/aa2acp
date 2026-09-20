@@ -8,6 +8,7 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <limits>
 #include <memory>
 
 namespace aa2acp::bridge {
@@ -57,6 +58,12 @@ H264Normalizer::normalize(const std::span<const std::uint8_t> access_unit,
   if (context_ == nullptr || context_->filter == nullptr) {
     if (error != nullptr)
       *error = "unable to initialize FFmpeg h264_metadata filter";
+    return {};
+  }
+  if (access_unit.size() >
+      static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+    if (error != nullptr)
+      *error = "Android Auto H.264 access unit is too large";
     return {};
   }
   AVPacket *packet = av_packet_alloc();

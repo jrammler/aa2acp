@@ -17,12 +17,23 @@
 namespace aa2acp::bridge {
 
 CarPlayWorker::CarPlayWorker() {
-  int control[2];
-  int output[2];
-  if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, control) != 0 ||
-      pipe2(output, O_CLOEXEC) != 0)
+  int control[2]{-1, -1};
+  int output[2]{-1, -1};
+  if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, control) != 0)
     return;
+  if (pipe2(output, O_CLOEXEC) != 0) {
+    close(control[0]);
+    close(control[1]);
+    return;
+  }
   pid_ = fork();
+  if (pid_ < 0) {
+    close(control[0]);
+    close(control[1]);
+    close(output[0]);
+    close(output[1]);
+    return;
+  }
   if (pid_ == 0) {
     setpgid(0, 0);
     close(control[0]);

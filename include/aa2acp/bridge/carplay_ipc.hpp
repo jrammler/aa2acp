@@ -63,6 +63,7 @@ private:
   std::mutex mutex_;
   std::condition_variable frames_ready_;
   std::deque<std::vector<std::uint8_t>> frames_;
+  std::size_t queued_bytes_{};
   std::jthread worker_;
 };
 

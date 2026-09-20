@@ -51,16 +51,18 @@ sudo apt install ./aa2acp.deb
 ```
 
 The package's post-install script creates the `aa2acp` system user and group,
-enables the `aa2acp.service` systemd unit automatically, and restarts the
-service on package upgrades. The service runs as the `aa2acp` system account
-with its state in `/var/lib/aa2acp`.
+enables and starts the `aa2acp.service` systemd unit automatically, and
+restarts the service on package upgrades. The service runs as the `aa2acp`
+system account with its state in `/var/lib/aa2acp`.
 
 ## Usage
 
 AA2ACP serves its management UI on a WPA2-protected Wi-Fi hotspot that the
 daemon itself configures through NetworkManager shared mode (DHCP included).
 Connect a phone or laptop to the hotspot and open `http://10.42.0.1:8080`
-(or the hotspot gateway address if it was configured differently).
+(or the hotspot gateway address if it was configured differently). The
+listener is bound to the configured Wi-Fi interface address, not to unrelated
+Ethernet or upstream interfaces.
 
 ### Command-line preflight
 

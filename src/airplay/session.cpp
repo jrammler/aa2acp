@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cerrno>
 #include <charconv>
 #include <chrono>
@@ -25,6 +26,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -78,30 +80,6 @@ std::optional<std::string> random_controller_id() {
   return result;
 }
 
-int connect_tcp(const std::string &host, const std::string &port) {
-  addrinfo hints{};
-  hints.ai_socktype = SOCK_STREAM;
-  addrinfo *addresses = nullptr;
-  if (getaddrinfo(host.c_str(), port.c_str(), &hints, &addresses) != 0) {
-    return -1;
-  }
-  int socket_fd = -1;
-  for (auto *address = addresses; address != nullptr;
-       address = address->ai_next) {
-    socket_fd =
-        socket(address->ai_family, address->ai_socktype, address->ai_protocol);
-    if (socket_fd >= 0 &&
-        connect(socket_fd, address->ai_addr, address->ai_addrlen) == 0) {
-      break;
-    }
-    if (socket_fd >= 0)
-      close(socket_fd);
-    socket_fd = -1;
-  }
-  freeaddrinfo(addresses);
-  return socket_fd;
-}
-
 int connect_tcp_with_timeout(const std::string &host, const std::string &port,
                              const std::chrono::milliseconds timeout,
                              std::string *error) {
@@ -115,8 +93,16 @@ int connect_tcp_with_timeout(const std::string &host, const std::string &port,
   }
   int socket_fd = -1;
   std::string last_error = "connection failed";
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
   for (auto *address = addresses; address != nullptr;
        address = address->ai_next) {
+    const auto remaining =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now());
+    if (remaining <= std::chrono::milliseconds::zero()) {
+      last_error = "connection timed out";
+      break;
+    }
     socket_fd =
         socket(address->ai_family, address->ai_socktype, address->ai_protocol);
     if (socket_fd < 0) {
@@ -138,7 +124,10 @@ int connect_tcp_with_timeout(const std::string &host, const std::string &port,
       continue;
     }
     pollfd descriptor{socket_fd, POLLOUT, 0};
-    const auto ready = poll(&descriptor, 1, static_cast<int>(timeout.count()));
+    const auto ready =
+        poll(&descriptor, 1,
+             static_cast<int>(std::min<std::int64_t>(
+                 remaining.count(), std::numeric_limits<int>::max())));
     int socket_error = ready > 0 ? 0 : ETIMEDOUT;
     socklen_t socket_error_size = sizeof(socket_error);
     if (ready > 0 && getsockopt(socket_fd, SOL_SOCKET, SO_ERROR, &socket_error,
@@ -178,15 +167,43 @@ int connect_udp(const std::string &host, const std::string &port) {
   return socket_fd;
 }
 
-bool send_all(const int socket_fd, const std::span<const std::uint8_t> bytes) {
-  for (std::size_t offset = 0; offset < bytes.size();) {
-    const auto count = send(socket_fd, bytes.data() + offset,
-                            bytes.size() - offset, MSG_NOSIGNAL);
-    if (count <= 0)
+bool send_all(
+    const int socket_fd, const std::span<const std::uint8_t> bytes,
+    const std::function<bool()> &stop_requested = std::function<bool()>{}) {
+  constexpr auto kWriteDeadline = std::chrono::seconds(10);
+  const auto deadline = std::chrono::steady_clock::now() + kWriteDeadline;
+  std::size_t offset{};
+  while (offset < bytes.size() && (!stop_requested || !stop_requested())) {
+    const auto remaining =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now());
+    if (remaining <= std::chrono::milliseconds::zero())
       return false;
-    offset += static_cast<std::size_t>(count);
+    pollfd descriptor{socket_fd, POLLOUT, 0};
+    const auto timeout = static_cast<int>(std::min<std::int64_t>(
+        100, std::max<std::int64_t>(1, remaining.count())));
+    const auto ready = poll(&descriptor, 1, timeout);
+    if (ready < 0) {
+      if (errno == EINTR)
+        continue;
+      return false;
+    }
+    if (ready == 0)
+      continue;
+    if ((descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0)
+      return false;
+    const auto count = send(socket_fd, bytes.data() + offset,
+                            bytes.size() - offset, MSG_NOSIGNAL | MSG_DONTWAIT);
+    if (count > 0) {
+      offset += static_cast<std::size_t>(count);
+      continue;
+    }
+    if (count < 0 &&
+        (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK))
+      continue;
+    return false;
   }
-  return true;
+  return offset == bytes.size();
 }
 
 std::optional<aa2acp::airplay::Response>
@@ -203,7 +220,7 @@ send_encrypted(const int socket_fd, aa2acp::airplay::ControlCipher &cipher,
         << "AirPlay: " << operation << " could not be encrypted\n";
     return std::nullopt;
   }
-  if (!send_all(socket_fd, *encrypted)) {
+  if (!send_all(socket_fd, *encrypted, stop_requested)) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
         << "AirPlay: " << operation << " send failed: " << std::strerror(errno)
         << '\n';
@@ -236,8 +253,21 @@ send_encrypted(const int socket_fd, aa2acp::airplay::ControlCipher &cipher,
       }
       const auto complete =
           aa2acp::airplay::complete_response_size(response_plaintext);
-      if (!complete)
+      if (!complete) {
+        constexpr std::array<std::uint8_t, 4> kHeaderEnd{'\r', '\n', '\r',
+                                                         '\n'};
+        const auto headers_complete =
+            std::search(response_plaintext.begin(), response_plaintext.end(),
+                        kHeaderEnd.begin(),
+                        kHeaderEnd.end()) != response_plaintext.end();
+        if (response_plaintext.size() > 64 * 1024 && !headers_complete) {
+          aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+              << "AirPlay: " << operation
+              << " response headers exceeded 64 KiB\n";
+          return std::nullopt;
+        }
         continue;
+      }
       auto parsed = aa2acp::airplay::parse_response(response_plaintext);
       if (!parsed) {
         aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
@@ -322,7 +352,7 @@ void write_ntp_timestamp(std::uint8_t *destination, const std::uint64_t value) {
     destination[index] = static_cast<std::uint8_t>(value >> (56 - index * 8));
 }
 
-int bind_timing_socket(std::uint16_t &port) {
+int bind_udp_socket(std::uint16_t &port) {
   const auto socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
   if (socket_fd < 0)
     return -1;
@@ -390,27 +420,18 @@ void log_event_plist(const std::span<const std::uint8_t> body) {
   for (const auto &[key, value] : *dictionary) {
     summary << ' ' << key;
     if (const auto *text = std::get_if<std::string>(&value.data))
-      summary << '=' << '"' << *text << '"';
+      summary << "=string(" << text->size() << ')';
     else if (const auto *bytes =
                  std::get_if<aa2acp::airplay::Bytes>(&value.data))
-      summary << "[" << bytes->size() << " bytes]";
-  }
-  if (const auto uuid = dictionary->find("uuid"); uuid != dictionary->end())
-    if (const auto *text = std::get_if<std::string>(&uuid->second.data))
-      summary << " uuid=" << *text;
-  if (const auto report = dictionary->find("hidReport");
-      report != dictionary->end()) {
-    if (const auto *bytes =
-            std::get_if<aa2acp::airplay::Bytes>(&report->second.data)) {
-      summary << " hidReport=";
-      constexpr std::size_t kMaximumReportBytes = 64;
-      for (const auto byte : std::span(*bytes).first(
-               std::min(bytes->size(), kMaximumReportBytes)))
-        summary << ' ' << std::hex << std::setw(2) << std::setfill('0')
-                << static_cast<unsigned int>(byte);
-      if (bytes->size() > kMaximumReportBytes)
-        summary << " ...";
-    }
+      summary << "=bytes(" << bytes->size() << ')';
+    else if (const auto *array =
+                 std::get_if<aa2acp::airplay::PlistValue::Array>(&value.data))
+      summary << "=array(" << array->size() << ')';
+    else if (std::holds_alternative<aa2acp::airplay::PlistValue::Dictionary>(
+                 value.data))
+      summary << "=dictionary";
+    else
+      summary << "=scalar";
   }
   aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug) << summary.str() << '\n';
 }
@@ -433,8 +454,23 @@ void service_event_channel(
     const auto count = recv(socket_fd, buffer.data(), buffer.size(), 0);
     if (count <= 0)
       break;
+    constexpr std::size_t kMaximumEncryptedEventBuffer = 2 * 1024 * 1024;
+    if (static_cast<std::size_t>(count) >
+        kMaximumEncryptedEventBuffer -
+            std::min(encrypted_buffer.size(), kMaximumEncryptedEventBuffer)) {
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+          << "AirPlay: encrypted event channel buffer exceeded 2 MiB\n";
+      close(socket_fd);
+      return;
+    }
     encrypted_buffer.insert(encrypted_buffer.end(), buffer.begin(),
                             buffer.begin() + count);
+    if (encrypted_buffer.size() > kMaximumEncryptedEventBuffer) {
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+          << "AirPlay: encrypted event channel buffer exceeded 2 MiB\n";
+      close(socket_fd);
+      return;
+    }
     while (true) {
       const auto frame = cipher.decrypt_one(encrypted_buffer);
       if (!frame) {
@@ -445,56 +481,96 @@ void service_event_channel(
       }
       if (frame->empty())
         break;
-      if (aa2acp::bridge::debug_logging_enabled()) {
-        std::ostringstream dump;
-        dump << "AirPlay: event channel decrypted " << frame->size()
-             << " byte(s):";
-        constexpr std::size_t kMaximumEventDumpBytes = 64;
-        for (const auto byte : std::span(*frame).first(
-                 std::min(frame->size(), kMaximumEventDumpBytes)))
-          dump << ' ' << std::hex << std::setw(2) << std::setfill('0')
-               << static_cast<unsigned int>(byte);
-        if (frame->size() > kMaximumEventDumpBytes)
-          dump << " ...";
+      if (aa2acp::bridge::debug_logging_enabled())
         aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
-            << dump.str() << '\n';
+            << "AirPlay: event channel decrypted " << frame->size()
+            << " byte(s)\n";
+      constexpr std::size_t kMaximumEventBytes = 1024 * 1024;
+      constexpr std::size_t kMaximumEventHeaders = 64 * 1024;
+      if (frame->size() >
+          kMaximumEventBytes - std::min(plaintext.size(), kMaximumEventBytes)) {
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+            << "AirPlay: event channel plaintext exceeded 1 MiB\n";
+        close(socket_fd);
+        return;
       }
       plaintext.insert(plaintext.end(), frame->begin(), frame->end());
       const std::string request(plaintext.begin(), plaintext.end());
       const auto header_end = request.find("\r\n\r\n");
-      if (header_end == std::string::npos)
+      if (header_end == std::string::npos) {
+        if (plaintext.size() > kMaximumEventHeaders) {
+          aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+              << "AirPlay: event channel headers exceeded 64 KiB\n";
+          close(socket_fd);
+          return;
+        }
         continue;
+      }
+      if (header_end > kMaximumEventHeaders) {
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+            << "AirPlay: event channel headers exceeded 64 KiB\n";
+        close(socket_fd);
+        return;
+      }
       std::istringstream lines(request.substr(0, header_end));
       std::string line;
       std::string cseq;
       std::size_t body_size{};
+      bool content_length_seen = false;
+      bool malformed = false;
+      const auto trim = [](std::string value) {
+        const auto first = value.find_first_not_of(" \t");
+        if (first == std::string::npos)
+          return std::string{};
+        const auto last = value.find_last_not_of(" \t");
+        return value.substr(first, last - first + 1);
+      };
       while (std::getline(lines, line)) {
         if (line.ends_with('\r'))
           line.pop_back();
-        if (line.starts_with("CSeq:"))
-          cseq = line.substr(5);
-        if (line.starts_with("Content-Length:")) {
-          auto value = line.substr(std::string("Content-Length:").size());
-          value.erase(0, value.find_first_not_of(' '));
-          const auto [end, error] = std::from_chars(
-              value.data(), value.data() + value.size(), body_size);
-          if (error != std::errc{} || end != value.data() + value.size()) {
-            aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
-                << "AirPlay: event channel request has invalid "
-                   "Content-Length\n";
-            close(socket_fd);
-            return;
+        const auto separator = line.find(':');
+        if (separator == std::string::npos)
+          continue;
+        std::string name = line.substr(0, separator);
+        std::transform(name.begin(), name.end(), name.begin(),
+                       [](const unsigned char value) {
+                         return static_cast<char>(std::tolower(value));
+                       });
+        const auto value = trim(line.substr(separator + 1));
+        if (name == "cseq")
+          cseq = value;
+        else if (name == "content-length") {
+          if (content_length_seen) {
+            malformed = true;
+            break;
           }
+          content_length_seen = true;
+          std::uint64_t parsed{};
+          const auto [end, error] = std::from_chars(
+              value.data(), value.data() + value.size(), parsed);
+          if (error != std::errc{} || end != value.data() + value.size() ||
+              parsed > kMaximumEventBytes) {
+            malformed = true;
+            break;
+          }
+          body_size = static_cast<std::size_t>(parsed);
         }
       }
-      const auto request_size = header_end + 4 + body_size;
+      const auto body_start = header_end + 4;
+      if (!content_length_seen || malformed || body_size > kMaximumEventBytes ||
+          body_start > kMaximumEventBytes - body_size) {
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+            << "AirPlay: malformed or oversized event-channel request\n";
+        close(socket_fd);
+        return;
+      }
+      const auto request_size = body_start + body_size;
       if (plaintext.size() < request_size)
         continue;
       if (aa2acp::bridge::debug_logging_enabled())
         aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
-            << "AirPlay: event channel request "
-            << request.substr(0, header_end) << " (body=" << body_size
-            << " byte(s))\n";
+            << "AirPlay: event channel request received (headers=" << header_end
+            << ", body=" << body_size << " byte(s))\n";
       if (aa2acp::bridge::debug_logging_enabled() && body_size != 0)
         log_event_plist(
             std::span(plaintext).subspan(header_end + 4, body_size));
@@ -507,7 +583,8 @@ void service_event_channel(
       response += "\r\n";
       const auto encrypted = cipher.encrypt(
           aa2acp::airplay::Bytes(response.begin(), response.end()));
-      if (!encrypted || !send_all(socket_fd, *encrypted)) {
+      if (!encrypted || !send_all(socket_fd, *encrypted,
+                                  [&stop] { return stop.stop_requested(); })) {
         aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
             << "AirPlay: event channel response failed\n";
         close(socket_fd);
@@ -536,7 +613,7 @@ std::string plist_dictionary_summary(
     if (const auto *number = std::get_if<std::uint64_t>(&value.data))
       summary << *number;
     else if (const auto *text = std::get_if<std::string>(&value.data))
-      summary << '"' << *text << '"';
+      summary << "string(" << text->size() << ')';
     else if (const auto *array =
                  std::get_if<aa2acp::airplay::PlistValue::Array>(&value.data))
       summary << "array(" << array->size() << ')';
@@ -638,6 +715,74 @@ h264_nalus(const std::span<const std::uint8_t> input) {
   return result;
 }
 
+std::optional<std::uint32_t>
+first_mb_in_slice(const aa2acp::airplay::Bytes &nalu) {
+  if (nalu.size() < 2)
+    return std::nullopt;
+  std::vector<std::uint8_t> rbsp;
+  rbsp.reserve(nalu.size() - 1);
+  for (std::size_t index = 1; index < nalu.size(); ++index) {
+    if (index + 2 < nalu.size() && nalu[index] == 0 && nalu[index + 1] == 0 &&
+        nalu[index + 2] == 3) {
+      rbsp.push_back(0);
+      rbsp.push_back(0);
+      ++index;
+      continue;
+    }
+    rbsp.push_back(nalu[index]);
+  }
+  std::size_t bit_offset{};
+  std::size_t zero_bits{};
+  while (bit_offset < rbsp.size() * 8 &&
+         ((rbsp[bit_offset / 8] >> (7 - (bit_offset % 8))) & 1U) == 0) {
+    ++zero_bits;
+    ++bit_offset;
+    if (zero_bits > 31)
+      return std::nullopt;
+  }
+  if (bit_offset >= rbsp.size() * 8)
+    return std::nullopt;
+  ++bit_offset;
+  std::uint32_t suffix{};
+  for (std::size_t index = 0; index < zero_bits; ++index) {
+    if (bit_offset >= rbsp.size() * 8)
+      return std::nullopt;
+    suffix = static_cast<std::uint32_t>(suffix << 1U);
+    suffix |= (rbsp[bit_offset / 8] >> (7 - (bit_offset % 8))) & 1U;
+    ++bit_offset;
+  }
+  return (static_cast<std::uint32_t>(1) << zero_bits) - 1U + suffix;
+}
+
+std::vector<std::vector<aa2acp::airplay::Bytes>>
+h264_access_units(const std::vector<aa2acp::airplay::Bytes> &nalus) {
+  std::vector<std::vector<aa2acp::airplay::Bytes>> result;
+  std::vector<aa2acp::airplay::Bytes> current;
+  bool has_vcl = false;
+  const auto flush = [&] {
+    if (!current.empty())
+      result.push_back(std::move(current));
+    current.clear();
+    has_vcl = false;
+  };
+  for (const auto &nalu : nalus) {
+    if (nalu.empty())
+      continue;
+    const auto type = nalu[0] & 0x1f;
+    if (type == 9 || ((type == 7 || type == 8) && has_vcl))
+      flush();
+    if (type >= 1 && type <= 5) {
+      const auto first_mb = first_mb_in_slice(nalu);
+      if (has_vcl && (!first_mb || *first_mb == 0))
+        flush();
+      has_vcl = true;
+    }
+    current.push_back(nalu);
+  }
+  flush();
+  return result;
+}
+
 std::optional<aa2acp::airplay::Bytes>
 avcc_config(const std::vector<aa2acp::airplay::Bytes> &nalus) {
   const auto sps =
@@ -685,10 +830,14 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   const std::string &video_path = options.video_path;
   const std::string &pairing_store = options.pairing_store;
   const int timeout_seconds = options.timeout_seconds;
-  int socket_fd = connect_tcp(host, port);
+  std::string control_connect_error;
+  int socket_fd = connect_tcp_with_timeout(
+      host, port, std::chrono::seconds(timeout_seconds),
+      &control_connect_error);
   if (socket_fd < 0) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
-        << "Unable to connect to AirPlay " << host << ':' << port << '\n';
+        << "Unable to connect to AirPlay " << host << ':' << port << ": "
+        << control_connect_error << '\n';
     return 1;
   }
   struct SocketGuard {
@@ -1218,7 +1367,7 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   }
 
   std::uint16_t local_timing_port{};
-  const auto timing_socket = bind_timing_socket(local_timing_port);
+  const auto timing_socket = bind_udp_socket(local_timing_port);
   if (timing_socket < 0) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
         << "AirPlay: unable to bind timing socket: " << std::strerror(errno)
@@ -1266,12 +1415,17 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
       *shared, "Events-Salt", "Events-Write-Encryption-Key", 32);
   const auto event_write_key = aa2acp::airplay::hkdf_sha512(
       *shared, "Events-Salt", "Events-Read-Encryption-Key", 32);
-  const auto event_socket = connect_tcp(
-      host, std::to_string(static_cast<std::uint16_t>(*event_port)));
+  std::string event_connect_error;
+  const auto event_socket = connect_tcp_with_timeout(
+      host, std::to_string(static_cast<std::uint16_t>(*event_port)),
+      std::chrono::seconds(timeout_seconds), &event_connect_error);
   if (event_socket < 0 || event_read_key.size() != 32 ||
       event_write_key.size() != 32) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
-        << "AirPlay: unable to establish encrypted event channel\n";
+        << "AirPlay: unable to establish encrypted event channel"
+        << (event_connect_error.empty() ? std::string{}
+                                        : ": " + event_connect_error)
+        << '\n';
     if (event_socket >= 0)
       close(event_socket);
     close(socket_fd);
@@ -1284,17 +1438,153 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
                               event_received, stop);
       });
   std::uint32_t next_cseq = 8;
+  bool teardown_attempted = false;
+  const auto send_teardown = [&] {
+    if (teardown_attempted || socket_fd < 0)
+      return;
+    teardown_attempted = true;
+    const auto cseq = next_cseq++;
+    const auto response = send_encrypted(
+        socket_fd, control, encrypted_read_buffer,
+        aa2acp::airplay::encode_request("TEARDOWN", "rtsp://127.0.0.1/stream",
+                                        cseq, {}, "application/octet-stream"),
+        cseq, timeout_seconds, options.stop_requested, "TEARDOWN");
+    if (!response || response->status != 200)
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+          << "AirPlay: TEARDOWN was not accepted\n";
+  };
+  const std::function<void()> teardown_callback = send_teardown;
+  struct TeardownGuard {
+    const std::function<void()> &send;
+    ~TeardownGuard() { send(); }
+  } teardown_guard{teardown_callback};
   if (aa2acp::bridge::debug_logging_enabled())
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
         << "AirPlay: session SETUP connected encrypted event channel on port "
         << *event_port << '\n';
 
-  constexpr std::string_view main_audio_stream_id =
-      "8B4C4DF6-AE7F-48F5-A36B-546EEAAEF4B5";
+  // CarPlay microphone uplink uses the type-100 input data stream. The
+  // accessory receives encrypted RTP on the local port advertised in SETUP;
+  // the stream id remains an unsigned integer for the HKDF salt.
+  std::jthread microphone_receiver;
+  if (options.microphone_received) {
+    std::uint16_t microphone_local_port{};
+    const auto microphone_socket = bind_udp_socket(microphone_local_port);
+    const auto microphone_stream_id = random_stream_connection_id();
+    if (microphone_socket >= 0 && microphone_stream_id) {
+      const auto microphone_body = aa2acp::airplay::encode_bplist(
+          aa2acp::airplay::PlistValue::Dictionary{
+              {"streams",
+               aa2acp::airplay::PlistValue::Array{
+                   aa2acp::airplay::PlistValue::Dictionary{
+                       {"type",
+                        aa2acp::airplay::PlistValue(std::uint64_t{100})},
+                       {"audioType", aa2acp::airplay::PlistValue("default")},
+                       {"audioFormat",
+                        aa2acp::airplay::PlistValue(std::uint64_t{0x10})},
+                       {"input", aa2acp::airplay::PlistValue(true)},
+                       {"dataPort",
+                        aa2acp::airplay::PlistValue(
+                            static_cast<std::uint64_t>(microphone_local_port))},
+                       {"streamConnectionID", aa2acp::airplay::PlistValue(
+                                                  *microphone_stream_id)}}}}});
+      const auto microphone_cseq = next_cseq++;
+      const auto microphone_response = send_encrypted(
+          socket_fd, control, encrypted_read_buffer,
+          aa2acp::airplay::encode_request("SETUP", "rtsp://127.0.0.1/stream",
+                                          microphone_cseq, microphone_body,
+                                          "application/x-apple-binary-plist"),
+          microphone_cseq, timeout_seconds, options.stop_requested,
+          "microphone SETUP");
+      const auto microphone_plist =
+          microphone_response
+              ? aa2acp::airplay::decode_bplist(microphone_response->body)
+              : std::nullopt;
+      const auto microphone_info = dictionary_of(microphone_plist);
+      const auto *microphone_streams =
+          microphone_info && microphone_info->contains("streams")
+              ? std::get_if<aa2acp::airplay::PlistValue::Array>(
+                    &microphone_info->at("streams").data)
+              : nullptr;
+      const auto *microphone_stream =
+          microphone_streams && !microphone_streams->empty()
+              ? std::get_if<aa2acp::airplay::PlistValue::Dictionary>(
+                    &microphone_streams->front().data)
+              : nullptr;
+      const auto microphone_data_port =
+          microphone_stream ? integer_at(*microphone_stream, "dataPort")
+                            : std::nullopt;
+      const auto microphone_key = aa2acp::airplay::hkdf_sha512(
+          *shared,
+          std::string("DataStream-Salt") +
+              std::to_string(*microphone_stream_id),
+          "DataStream-Input-Encryption-Key", 32);
+      if (microphone_response && microphone_response->status == 200 &&
+          microphone_info && microphone_key.size() == 32) {
+        if (aa2acp::bridge::debug_logging_enabled())
+          aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+              << "AirPlay: microphone SETUP accepted (local data port "
+              << microphone_local_port
+              << (microphone_data_port
+                      ? ", response data port " +
+                            std::to_string(*microphone_data_port)
+                      : ", no response data port")
+              << ")\n";
+        microphone_receiver = std::jthread([socket_fd = microphone_socket,
+                                            key = microphone_key,
+                                            callback =
+                                                options.microphone_received](
+                                               const std::stop_token stop) {
+          std::array<std::uint8_t, 64 * 1024> packet{};
+          while (!stop.stop_requested()) {
+            pollfd descriptor{socket_fd, POLLIN, 0};
+            if (poll(&descriptor, 1, 100) <= 0)
+              continue;
+            if ((descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0)
+              break;
+            const auto count = recv(socket_fd, packet.data(), packet.size(), 0);
+            if (count < 12 + 16 + 8)
+              continue;
+            const auto size = static_cast<std::size_t>(count);
+            if ((packet[0] >> 6) != 2 || (packet[1] & 0x7f) != 100)
+              continue;
+            std::array<std::uint8_t, 12> nonce{};
+            std::copy_n(packet.begin() + static_cast<std::ptrdiff_t>(size - 8),
+                        8, nonce.begin() + 4);
+            auto decrypted = aa2acp::airplay::open_with_nonce(
+                key, nonce, std::span(packet).subspan(12, size - 12 - 8),
+                std::span(packet).subspan(4, 8));
+            if (!decrypted)
+              continue;
+            // CarPlay's PCM payload is big-endian; Android Auto's
+            // microphone source expects little-endian S16 samples.
+            if (decrypted->size() % 2 != 0)
+              continue;
+            for (std::size_t index = 0; index < decrypted->size(); index += 2)
+              std::swap((*decrypted)[index], (*decrypted)[index + 1]);
+            callback(*decrypted);
+          }
+          ::close(socket_fd);
+        });
+      } else {
+        close(microphone_socket);
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+            << "AirPlay: microphone SETUP was not accepted; continuing "
+               "without microphone uplink\n";
+      }
+    } else {
+      if (microphone_socket >= 0)
+        close(microphone_socket);
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+          << "AirPlay: unable to bind the microphone data socket\n";
+    }
+  }
+
+  const auto main_audio_stream_id = random_stream_connection_id();
   std::optional<std::uint64_t> audio_port;
   aa2acp::airplay::Bytes audio_key;
   if (options.next_media_audio && carplay_capabilities &&
-      carplay_capabilities->media_pcm_48k_stereo) {
+      carplay_capabilities->media_pcm_48k_stereo && main_audio_stream_id) {
     // Android Auto delivers media as 48 kHz stereo S16LE. Preserve this direct
     // LPCM stream for the first audio milestone instead of adding an encoder
     // and its latency to the bridge.
@@ -1308,8 +1598,7 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
                      {"audioFormat",
                       aa2acp::airplay::PlistValue(std::uint64_t{0x8000})},
                      {"streamConnectionID",
-                      aa2acp::airplay::PlistValue(
-                          main_audio_stream_id.data())}}}},
+                      aa2acp::airplay::PlistValue(*main_audio_stream_id)}}}},
         });
     const auto audio_cseq = next_cseq++;
     const auto audio_response =
@@ -1337,7 +1626,7 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
                      : std::nullopt;
     audio_key = aa2acp::airplay::hkdf_sha512(
         *shared,
-        std::string("DataStream-Salt") + std::string(main_audio_stream_id),
+        std::string("DataStream-Salt") + std::to_string(*main_audio_stream_id),
         "DataStream-Output-Encryption-Key", 32);
     if (!audio_response || audio_response->status != 200 || !audio_port ||
         *audio_port == 0 || *audio_port > UINT16_MAX ||
@@ -1360,9 +1649,12 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   const auto setup_auxiliary_audio =
       [&](const std::function<std::optional<std::vector<std::uint8_t>>()> &next,
           const bool supported, const std::string_view name,
-          const std::string_view audio_type, const std::string_view stream_id)
+          const std::string_view audio_type)
       -> std::optional<AuxiliaryAudioStream> {
     if (!next || !supported)
+      return std::nullopt;
+    const auto stream_id = random_stream_connection_id();
+    if (!stream_id)
       return std::nullopt;
     const auto body =
         aa2acp::airplay::encode_bplist(aa2acp::airplay::PlistValue::Dictionary{
@@ -1375,7 +1667,7 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
                      {"audioFormat",
                       aa2acp::airplay::PlistValue(std::uint64_t{0x10})},
                      {"streamConnectionID",
-                      aa2acp::airplay::PlistValue(std::string(stream_id))}}}}});
+                      aa2acp::airplay::PlistValue(*stream_id)}}}}});
     const auto cseq = next_cseq++;
     const auto response =
         send_encrypted(socket_fd, control, encrypted_read_buffer,
@@ -1397,7 +1689,7 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
             : nullptr;
     const auto port = stream ? integer_at(*stream, "dataPort") : std::nullopt;
     const auto key = aa2acp::airplay::hkdf_sha512(
-        *shared, std::string("DataStream-Salt") + std::string(stream_id),
+        *shared, std::string("DataStream-Salt") + std::to_string(*stream_id),
         "DataStream-Output-Encryption-Key", 32);
     const auto port_value = port.value_or(0);
     if (!response || response->status != 200 || port_value == 0 ||
@@ -1415,11 +1707,11 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   const auto guidance_audio = setup_auxiliary_audio(
       options.next_guidance_audio,
       carplay_capabilities && carplay_capabilities->guidance_pcm_16k_mono,
-      "guidance", "default", "9B4C4DF6-AE7F-48F5-A36B-546EEAAEF4B5");
+      "guidance", "default");
   const auto system_audio = setup_auxiliary_audio(
       options.next_system_audio,
       carplay_capabilities && carplay_capabilities->system_pcm_16k_mono,
-      "system", "alert", "AB4C4DF6-AE7F-48F5-A36B-546EEAAEF4B5");
+      "system", "alert");
 
   const auto screen_stream_id = random_stream_connection_id();
   if (!screen_stream_id) {
@@ -1654,24 +1946,33 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     }
   } stream_stop_guard{options.stop_streams};
   if (video_path.empty() && !options.next_video_frame) {
+    send_teardown();
     close(socket_fd);
     return 0;
   }
 
+  const bool live_video = static_cast<bool>(options.next_video_frame);
   std::vector<aa2acp::airplay::Bytes> nalus;
+  std::vector<std::vector<aa2acp::airplay::Bytes>> static_access_units;
   std::vector<aa2acp::airplay::Bytes> initial_access_units;
-  if (!video_path.empty())
+  if (!live_video && !video_path.empty()) {
     nalus = h264_nalus(video_path);
+    static_access_units = h264_access_units(nalus);
+  }
 
   // A live Android Auto stream starts with an Annex-B codec configuration.
   // Wait for it before opening the AirPlay data channel: CarPlay requires the
   // AVCC configuration to be its first data-stream payload.
+  constexpr std::size_t kMaximumStartupVideoBytes = 16 * 1024 * 1024;
+  constexpr std::size_t kMaximumStartupVideoUnits = 600;
+  std::size_t startup_video_bytes{};
+  bool startup_keyframe = false;
   std::optional<aa2acp::airplay::Bytes> config;
-  while (!config) {
+  while (!config || (live_video && !startup_keyframe)) {
     config = avcc_config(nalus);
     if (config)
       break;
-    if (!options.next_video_frame) {
+    if (!live_video) {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
           << "Unable to parse H.264 SPS/PPS from " << video_path << '\n';
       close(socket_fd);
@@ -1692,9 +1993,32 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
       close(socket_fd);
       return 1;
     }
+    if (initial_access_units.size() >= kMaximumStartupVideoUnits ||
+        access_unit->size() > kMaximumStartupVideoBytes - startup_video_bytes) {
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Android Auto video did not provide H.264 SPS/PPS within the "
+             "startup buffer limit\n";
+      close(socket_fd);
+      return 1;
+    }
+    startup_video_bytes += access_unit->size();
     const auto unit_nalus = h264_nalus(*access_unit);
-    nalus.insert(nalus.end(), unit_nalus.begin(), unit_nalus.end());
-    initial_access_units.push_back(std::move(*access_unit));
+    bool unit_keyframe = false;
+    for (const auto &nalu : unit_nalus) {
+      if (!nalu.empty() && (nalu[0] & 0x1f) == 5) {
+        unit_keyframe = true;
+        break;
+      }
+    }
+    if (!config)
+      nalus.insert(nalus.end(), unit_nalus.begin(), unit_nalus.end());
+    if (unit_keyframe) {
+      startup_keyframe = true;
+      // Keep only the first complete access unit containing an IDR. Earlier
+      // units may be dependent frames and cannot safely start a decoder.
+      initial_access_units.clear();
+      initial_access_units.push_back(std::move(*access_unit));
+    }
   }
   const auto stream_key = aa2acp::airplay::hkdf_sha512(
       *shared,
@@ -1725,8 +2049,8 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   aa2acp::airplay::Bytes config_header(128);
   store_le32(std::span(config_header).first(4), config->size());
   config_header[4] = 1;
-  if (!send_all(data_socket, config_header) ||
-      !send_all(data_socket, *config)) {
+  if (!send_all(data_socket, config_header, options.stop_requested) ||
+      !send_all(data_socket, *config, options.stop_requested)) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
         << "AirPlay: unable to send H.264 video config: "
         << std::strerror(errno) << '\n';
@@ -1761,8 +2085,9 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
         store_le64(std::span(nonce).subspan(4, 8), frame_counter);
         const auto encrypted =
             aa2acp::airplay::seal_with_nonce(stream_key, nonce, frame, header);
-        if (!encrypted || !send_all(data_socket, header) ||
-            !send_all(data_socket, *encrypted))
+        if (!encrypted ||
+            !send_all(data_socket, header, options.stop_requested) ||
+            !send_all(data_socket, *encrypted, options.stop_requested))
           return false;
         ++frame_counter;
         ++sent_frames;
@@ -1773,20 +2098,22 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
               << frame.size() << " bytes)\n";
         return true;
       };
-  for (const auto &nalu : nalus) {
-    if (options.stop_requested && options.stop_requested()) {
-      close(data_socket);
-      close(socket_fd);
-      return 0;
+  if (!live_video) {
+    for (const auto &access_unit : static_access_units) {
+      if (options.stop_requested && options.stop_requested()) {
+        close(data_socket);
+        close(socket_fd);
+        return 0;
+      }
+      if (!send_access_unit(access_unit)) {
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+            << "Unable to send encrypted H.264 frame\n";
+        close(data_socket);
+        close(socket_fd);
+        return 1;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(33));
     }
-    if (!send_access_unit({nalu})) {
-      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
-          << "Unable to send encrypted H.264 frame\n";
-      close(data_socket);
-      close(socket_fd);
-      return 1;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(33));
   }
   for (const auto &access_unit : initial_access_units) {
     if (!send_access_unit(h264_nalus(access_unit))) {
@@ -1813,6 +2140,7 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     std::this_thread::sleep_for(std::chrono::milliseconds(33));
   }
   close(data_socket);
+  send_teardown();
   close(socket_fd);
   if (aa2acp::bridge::debug_logging_enabled())
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)

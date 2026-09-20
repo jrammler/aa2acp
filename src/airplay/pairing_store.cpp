@@ -6,6 +6,8 @@
 #include <unistd.h>
 
 #include <array>
+#include <cerrno>
+#include <cstdlib>
 
 namespace aa2acp::airplay {
 namespace {
@@ -75,15 +77,16 @@ bool save_pairing_record(const std::filesystem::path &path,
     return false;
   // The file contains the Ed25519 private key: create it exclusively with
   // owner-only permissions so it is never briefly world-readable.
-  const auto temporary = path.string() + ".tmp";
-  const int fd =
-      ::open(temporary.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_TRUNC,
-             S_IRUSR | S_IWUSR);
-  if (fd < 0) {
+  std::string temporary = path.string() + ".tmp.XXXXXX";
+  const int fd = ::mkstemp(temporary.data());
+  if (fd < 0 || ::fchmod(fd, S_IRUSR | S_IWUSR) != 0) {
+    if (fd >= 0)
+      ::close(fd);
+    ::unlink(temporary.c_str());
     return false;
   }
   const auto close_and_remove = [&]() {
-    // fd already closed by the caller; only remove the leaked file.
+    // fd already closed by the caller; only remove the temporary file.
     ::unlink(temporary.c_str());
   };
   const auto write_all = [&](const void *data, std::size_t size) {

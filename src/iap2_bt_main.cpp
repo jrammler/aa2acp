@@ -490,28 +490,26 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
             ? std::shared_ptr<aa2acp::bridge::FrameSocketWriter>{}
             : std::make_shared<aa2acp::bridge::FrameSocketWriter>(
                   microphone_socket, "microphone");
-    const auto run_airplay =
-        [&] {
-          const auto stop_streams = std::make_shared<std::atomic_bool>();
-          const auto live_video =
-              video_socket.empty()
-                  ? std::shared_ptr<VideoSocketReader>{}
-                  : std::make_shared<VideoSocketReader>(video_socket);
-          const auto live_audio = audio_socket.empty()
-                                      ? std::shared_ptr<AudioSocketReader>{}
+    const auto run_airplay = [&] {
+      const auto stop_streams = std::make_shared<std::atomic_bool>();
+      const auto live_video =
+          video_socket.empty()
+              ? std::shared_ptr<VideoSocketReader>{}
+              : std::make_shared<VideoSocketReader>(video_socket);
+      const auto live_audio =
+          audio_socket.empty()
+              ? std::shared_ptr<AudioSocketReader>{}
+              : std::make_shared<AudioSocketReader>(audio_socket, stop_streams);
+      const auto live_guidance_audio =
+          guidance_audio_socket.empty()
+              ? std::shared_ptr<AudioSocketReader>{}
+              : std::make_shared<AudioSocketReader>(guidance_audio_socket,
+                                                    stop_streams);
+      const auto live_system_audio =
+          system_audio_socket.empty() ? std::shared_ptr<AudioSocketReader>{}
                                       : std::make_shared<AudioSocketReader>(
-                                            audio_socket, stop_streams);
-          const auto live_guidance_audio =
-              guidance_audio_socket.empty()
-                  ? std::shared_ptr<AudioSocketReader>{}
-                  : std::make_shared<AudioSocketReader>(guidance_audio_socket,
-                                                        stop_streams);
-          const auto live_system_audio =
-              system_audio_socket.empty()
-                  ? std::shared_ptr<AudioSocketReader>{}
-                  : std::make_shared<AudioSocketReader>(system_audio_socket,
-                                                        stop_streams);
-          const aa2acp::airplay::SessionOptions options{
+                                            system_audio_socket, stop_streams);
+      const aa2acp::airplay::SessionOptions options{
           .host = host,
           .port = static_cast<std::uint16_t>(carplay_probe.airplay_port()),
           .timeout_seconds = timeout_seconds,
@@ -540,19 +538,27 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
           .event_received =
               event_writer
                   ? [event_writer](const std::span<const std::uint8_t> bytes) {
-                      event_writer->send(bytes);
+                      if (!event_writer->send(bytes))
+                        aa2acp::bridge::log(
+                            aa2acp::bridge::LogLevel::warning)
+                            << "Bridge: dropping CarPlay event because the "
+                               "IPC queue is full\n";
                     }
                   : std::function<void(std::span<const std::uint8_t>)>{},
           .microphone_received =
               microphone_writer
                   ? [microphone_writer](
                         const std::span<const std::uint8_t> bytes) {
-                      microphone_writer->send(bytes);
+                      if (!microphone_writer->send(bytes))
+                        aa2acp::bridge::log(
+                            aa2acp::bridge::LogLevel::warning)
+                            << "Bridge: dropping CarPlay microphone audio "
+                               "because the IPC queue is full\n";
                     }
                   : std::function<void(std::span<const std::uint8_t>)>{},
       };
-          return aa2acp::airplay::run_session(options);
-        };
+      return aa2acp::airplay::run_session(options);
+    };
     auto result = run_airplay();
     if (result != 0 && !shutdown_requested()) {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)

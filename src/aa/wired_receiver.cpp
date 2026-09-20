@@ -28,6 +28,7 @@
 #include <atomic>
 #include <chrono>
 #include <climits>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -313,8 +314,11 @@ public:
           &request) override {
     microphone_session_id_ = request.open() ? 1 : 0;
     microphone_send_in_flight_ = false;
-    if (!request.open())
-      pending_audio_.clear();
+    pending_audio_.clear();
+    {
+      std::lock_guard lock(ingress_mutex_);
+      ingress_audio_.clear();
+    }
     aap_protobuf::service::media::source::message::MicrophoneResponse response;
     response.set_status(aap_protobuf::shared::STATUS_SUCCESS);
     response.set_session_id(microphone_session_id_);
@@ -335,10 +339,47 @@ public:
   }
 
   void send_audio(std::vector<std::uint8_t> audio) {
-    boost::asio::post(strand_,
-                      [self = shared_from_this(), audio = std::move(audio)] {
-                        self->send_audio_on_strand(std::move(audio));
-                      });
+    if (audio.empty())
+      return;
+    bool schedule = false;
+    {
+      std::lock_guard lock(ingress_mutex_);
+      constexpr std::size_t kMaximumIngressPackets = 2;
+      if (ingress_audio_.size() >= kMaximumIngressPackets)
+        ingress_audio_.pop_front();
+      ingress_audio_.push_back(std::move(audio));
+      if (!ingress_posted_) {
+        ingress_posted_ = true;
+        schedule = true;
+      }
+    }
+    if (schedule)
+      boost::asio::post(strand_,
+                        [self = shared_from_this()] { self->drain_audio(); });
+  }
+  void drain_audio() {
+    std::vector<std::uint8_t> audio;
+    {
+      std::lock_guard lock(ingress_mutex_);
+      if (ingress_audio_.empty()) {
+        ingress_posted_ = false;
+        return;
+      }
+      audio = std::move(ingress_audio_.front());
+      ingress_audio_.pop_front();
+    }
+    send_audio_on_strand(std::move(audio));
+    bool schedule = false;
+    {
+      std::lock_guard lock(ingress_mutex_);
+      if (ingress_audio_.empty())
+        ingress_posted_ = false;
+      else
+        schedule = true;
+    }
+    if (schedule)
+      boost::asio::post(strand_,
+                        [self = shared_from_this()] { self->drain_audio(); });
   }
   void onChannelError(const aasdk::error::Error &error) override {
     fail(error.what());
@@ -380,6 +421,9 @@ private:
   std::int32_t microphone_session_id_{};
   bool microphone_send_in_flight_{};
   std::vector<std::uint8_t> pending_audio_;
+  std::mutex ingress_mutex_;
+  std::deque<std::vector<std::uint8_t>> ingress_audio_;
+  bool ingress_posted_{};
 };
 
 class ControlSession final
@@ -944,27 +988,44 @@ public:
         !report.ParseFromArray(serialized_report.data(),
                                static_cast<int>(serialized_report.size())))
       return false;
-    std::lock_guard lock(mutex_);
-    if (!running_ || stopping_)
-      return false;
-    io_service_.post([this, report = std::move(report)] {
-      if (control_session_)
-        control_session_->send_input_report(std::move(report));
-    });
+    bool schedule = false;
+    {
+      std::lock_guard lock(mutex_);
+      if (!running_ || stopping_)
+        return false;
+      constexpr std::size_t kMaximumInputReports = 32;
+      if (input_reports_.size() >= kMaximumInputReports)
+        input_reports_.pop_front();
+      input_reports_.push_back(std::move(report));
+      if (!input_drain_posted_) {
+        input_drain_posted_ = true;
+        schedule = true;
+      }
+    }
+    if (schedule)
+      io_service_.post([this] { drain_input_reports(); });
     return true;
   }
 
   bool send_microphone_audio(std::span<const std::uint8_t> pcm) {
     if (pcm.empty())
       return false;
-    std::vector<std::uint8_t> copy(pcm.begin(), pcm.end());
-    std::lock_guard lock(mutex_);
-    if (!running_ || stopping_)
-      return false;
-    io_service_.post([this, audio = std::move(copy)] {
-      if (control_session_)
-        control_session_->send_microphone_audio(std::move(audio));
-    });
+    bool schedule = false;
+    {
+      std::lock_guard lock(mutex_);
+      if (!running_ || stopping_)
+        return false;
+      constexpr std::size_t kMaximumMicrophonePackets = 2;
+      if (microphone_audio_.size() >= kMaximumMicrophonePackets)
+        microphone_audio_.pop_front();
+      microphone_audio_.emplace_back(pcm.begin(), pcm.end());
+      if (!microphone_drain_posted_) {
+        microphone_drain_posted_ = true;
+        schedule = true;
+      }
+    }
+    if (schedule)
+      io_service_.post([this] { drain_microphone_audio(); });
     return true;
   }
 
@@ -974,6 +1035,10 @@ public:
       if (!running_)
         return;
       stopping_ = true;
+      input_reports_.clear();
+      microphone_audio_.clear();
+      input_drain_posted_ = false;
+      microphone_drain_posted_ = false;
       usb_hub_->cancel();
       work_guard_.reset();
       io_service_.stop();
@@ -990,6 +1055,56 @@ public:
   }
 
 private:
+  void drain_input_reports() {
+    aap_protobuf::service::inputsource::message::InputReport report;
+    {
+      std::lock_guard lock(mutex_);
+      if (input_reports_.empty()) {
+        input_drain_posted_ = false;
+        return;
+      }
+      report = std::move(input_reports_.front());
+      input_reports_.pop_front();
+    }
+    if (control_session_)
+      control_session_->send_input_report(std::move(report));
+    bool schedule = false;
+    {
+      std::lock_guard lock(mutex_);
+      if (input_reports_.empty())
+        input_drain_posted_ = false;
+      else
+        schedule = true;
+    }
+    if (schedule)
+      io_service_.post([this] { drain_input_reports(); });
+  }
+
+  void drain_microphone_audio() {
+    std::vector<std::uint8_t> audio;
+    {
+      std::lock_guard lock(mutex_);
+      if (microphone_audio_.empty()) {
+        microphone_drain_posted_ = false;
+        return;
+      }
+      audio = std::move(microphone_audio_.front());
+      microphone_audio_.pop_front();
+    }
+    if (control_session_)
+      control_session_->send_microphone_audio(std::move(audio));
+    bool schedule = false;
+    {
+      std::lock_guard lock(mutex_);
+      if (microphone_audio_.empty())
+        microphone_drain_posted_ = false;
+      else
+        schedule = true;
+    }
+    if (schedule)
+      io_service_.post([this] { drain_microphone_audio(); });
+  }
+
   void arm_wait_for_phone() {
     auto promise = aasdk::usb::IUSBHub::Promise::defer(io_service_);
     promise->then(
@@ -1146,6 +1261,11 @@ private:
   std::shared_ptr<aasdk::usb::USBHub> usb_hub_;
   aasdk::usb::DeviceHandle active_handle_;
   std::shared_ptr<ControlSession> control_session_;
+  std::deque<aap_protobuf::service::inputsource::message::InputReport>
+      input_reports_;
+  std::deque<std::vector<std::uint8_t>> microphone_audio_;
+  bool input_drain_posted_{};
+  bool microphone_drain_posted_{};
   std::atomic_bool active_{false};
   std::atomic_uint8_t active_bus_{};
   std::atomic_uint8_t active_address_{};

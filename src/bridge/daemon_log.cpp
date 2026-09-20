@@ -163,8 +163,10 @@ std::optional<std::filesystem::path> next_daemon_log_path() {
         entry.path().filename().string().starts_with("aa2acp-bridge-daemon-"))
       logs.push_back(entry);
   }
+  // Filenames contain the creation timestamp; filesystem mtimes can change
+  // when logs are copied or restored, so they are not a retention ordering.
   std::sort(logs.begin(), logs.end(), [](const auto &left, const auto &right) {
-    return left.last_write_time() > right.last_write_time();
+    return left.path().filename() > right.path().filename();
   });
   for (std::size_t index = 29; index < logs.size(); ++index)
     std::filesystem::remove(logs[index], error);

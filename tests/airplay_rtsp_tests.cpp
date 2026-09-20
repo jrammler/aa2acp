@@ -9,6 +9,7 @@
 #include <cassert>
 #include <filesystem>
 #include <iostream>
+#include <sys/stat.h>
 
 int main() {
   constexpr std::array<std::uint8_t, 2> request_body{1, 2};
@@ -114,6 +115,10 @@ int main() {
   const auto display_path = std::filesystem::temp_directory_path() /
                             "aa2acp-head-unit-capabilities-test";
   assert(aa2acp::airplay::save_head_unit_capabilities(display_path, *display));
+  struct stat display_stat{};
+  assert(stat(display_path.c_str(), &display_stat) == 0);
+  assert((display_stat.st_mode & 0777) == 0600);
+  assert(!std::filesystem::exists(display_path.string() + ".tmp"));
   assert(
       aa2acp::airplay::load_head_unit_capabilities(display_path, "AA:BB:CC"));
   assert(
@@ -143,6 +148,10 @@ int main() {
   const aa2acp::airplay::PairingRecord record{"controller", *identity,
                                               aa2acp::airplay::Bytes(32, 0x11)};
   assert(aa2acp::airplay::save_pairing_record(pairing_path, record));
+  struct stat pairing_stat{};
+  assert(stat(pairing_path.c_str(), &pairing_stat) == 0);
+  assert((pairing_stat.st_mode & 0777) == 0600);
+  assert(!std::filesystem::exists(pairing_path.string() + ".tmp"));
   const auto restored = aa2acp::airplay::load_pairing_record(pairing_path);
   assert(restored && restored->controller_id == record.controller_id &&
          restored->controller.public_key == record.controller.public_key &&

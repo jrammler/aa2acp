@@ -7,6 +7,7 @@
 #include <ifaddrs.h>
 #include <netinet/in.h>
 #include <poll.h>
+#include <signal.h>
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -15,6 +16,7 @@
 #include <chrono>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -27,6 +29,8 @@ namespace aa2acp::iap2 {
 namespace {
 
 constexpr char kManagementProfile[] = "aa2acp-management";
+constexpr auto kNmcliDeadline = std::chrono::seconds(60);
+std::mutex network_manager_mutex;
 
 std::optional<std::string> ipv4_address(const std::string &interface_name) {
   ifaddrs *addresses{};
@@ -96,6 +100,7 @@ bool run_nmcli(std::vector<std::string> arguments,
   // Leaving the car AP must be idempotent, so that state is a success here.
   std::string diagnostics;
   pid_t waited{};
+  bool timed_out = false;
   const auto drain_diagnostics = [&] {
     if (!quiet)
       return;
@@ -109,13 +114,47 @@ bool run_nmcli(std::vector<std::string> arguments,
       break;
     }
   };
+  const auto terminate_and_reap = [&] {
+    (void)kill(child, SIGTERM);
+    const auto terminate_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (std::chrono::steady_clock::now() < terminate_deadline) {
+      waited = waitpid(child, &status, WNOHANG);
+      if (waited == child)
+        return;
+      if (waited < 0 && errno != EINTR)
+        break;
+      if (quiet) {
+        drain_diagnostics();
+        pollfd descriptor{output_pipe[0], POLLIN, 0};
+        (void)poll(&descriptor, 1, 50);
+      } else {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      }
+    }
+    (void)kill(child, SIGKILL);
+    do {
+      waited = waitpid(child, &status, 0);
+    } while (waited < 0 && errno == EINTR);
+  };
   for (;;) {
     drain_diagnostics();
     waited = waitpid(child, &status, WNOHANG);
     if (waited < 0 && errno == EINTR)
       continue;
+    if (waited < 0) {
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+          << "Wi-Fi: waitpid failed for nmcli; terminating child\n";
+      terminate_and_reap();
+      break;
+    }
     if (waited != 0)
       break;
+    if (std::chrono::steady_clock::now() - started >= kNmcliDeadline) {
+      timed_out = true;
+      terminate_and_reap();
+      break;
+    }
     if (quiet) {
       pollfd descriptor{output_pipe[0], POLLIN, 0};
       poll(&descriptor, 1, 50);
@@ -139,7 +178,8 @@ bool run_nmcli(std::vector<std::string> arguments,
         << " ms\n";
   if (!success) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
-        << "Wi-Fi: NetworkManager command failed (exit "
+        << "Wi-Fi: NetworkManager command "
+        << (timed_out ? "timed out" : "failed") << " (exit "
         << (waited >= 0 && WIFEXITED(status)
                 ? std::to_string(WEXITSTATUS(status))
                 : "abnormal termination")
@@ -156,21 +196,20 @@ bool run_nmcli(std::vector<std::string> arguments,
 
 bool join_with_networkmanager(const AccessoryWifiConfiguration &configuration,
                               const std::string &interface_name) {
+  std::lock_guard lock(network_manager_mutex);
   if (configuration.ssid.empty()) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
         << "Wi-Fi: accessory sent an empty SSID\n";
     return false;
   }
   aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
-      << "Wi-Fi: joining SSID '" << configuration.ssid << "' on "
-      << interface_name << " (channel "
-      << static_cast<int>(configuration.channel) << ")\n";
+      << "Wi-Fi: joining configured accessory SSID on " << interface_name
+      << " (channel " << static_cast<int>(configuration.channel) << ")\n";
   // Reuse the saved AP profile first. It avoids a fresh scan race while the
   // head unit is bringing its AP up and is the desired fast-reconnect behaviour
   // after a completed session.
   aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
-      << "Wi-Fi: checking for saved NetworkManager profile for '"
-      << configuration.ssid << "'\n";
+      << "Wi-Fi: checking for a saved NetworkManager accessory profile\n";
   if (run_nmcli({"nmcli", "--wait", "30", "connection", "up", "id",
                  configuration.ssid, "ifname", interface_name},
                 false, true)) {
@@ -302,6 +341,7 @@ accessory_ipv4_endpoint_for_interface(const std::string &interface_name) {
 }
 
 bool leave_with_networkmanager(const std::string &interface_name) {
+  std::lock_guard lock(network_manager_mutex);
   aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
       << "Wi-Fi: disconnecting " << interface_name
       << " while retaining its saved profile\n";
@@ -312,14 +352,15 @@ bool leave_with_networkmanager(const std::string &interface_name) {
 bool start_management_hotspot(const std::string &interface_name,
                               const std::string &ssid,
                               const std::string &passphrase) {
+  std::lock_guard lock(network_manager_mutex);
   if (interface_name.empty() || ssid.empty() || passphrase.size() < 8) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
         << "Wi-Fi: invalid management hotspot configuration\n";
     return false;
   }
   aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
-      << "Wi-Fi: starting management hotspot '" << ssid << "' on "
-      << interface_name << '\n';
+      << "Wi-Fi: starting configured management hotspot on " << interface_name
+      << '\n';
   // Updating is idempotent. A failed modify means this is the first launch.
   if (!run_nmcli({"nmcli",
                   "connection",
@@ -364,6 +405,7 @@ bool start_management_hotspot(const std::string &interface_name,
 }
 
 bool stop_management_hotspot(const std::string &interface_name) {
+  std::lock_guard lock(network_manager_mutex);
   aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
       << "Wi-Fi: stopping management hotspot on " << interface_name << '\n';
   return run_nmcli({"nmcli", "connection", "down", "id", kManagementProfile,

@@ -21,14 +21,24 @@ int main() {
         condition.notify_one();
       });
   assert(receiver.ready());
+  const std::vector<std::uint8_t> expected{0, 1, 2, 0xff, 0x10};
   {
     aa2acp::bridge::FrameSocketWriter writer(path, "test");
-    const std::vector<std::uint8_t> expected{0, 1, 2, 0xff, 0x10};
     assert(writer.send(expected));
     std::unique_lock lock(mutex);
     assert(condition.wait_for(lock, std::chrono::seconds(2),
                               [&] { return received == expected; }));
     assert(!writer.send(std::span<const std::uint8_t>{}));
+    const std::vector<std::uint8_t> oversized(4 * 1024 * 1024 + 1);
+    assert(!writer.send(oversized));
+  }
+  {
+    aa2acp::bridge::FrameSocketWriter writer(path, "test-reconnect");
+    const std::vector<std::uint8_t> replacement{9, 8, 7};
+    assert(writer.send(replacement));
+    std::unique_lock lock(mutex);
+    assert(condition.wait_for(lock, std::chrono::seconds(2),
+                              [&] { return received == replacement; }));
   }
   assert(!std::filesystem::exists(path) || receiver.ready());
 }

@@ -86,9 +86,13 @@ std::optional<Lsp> decode_lsp(const std::span<const std::uint8_t> bytes) {
   if (bytes.size() < 10 || bytes[0] != 1 || ((bytes.size() - 10) % 3) != 0) {
     return std::nullopt;
   }
+  const auto maximum_length = read_u16(bytes, 2);
+  if (maximum_length < 9) {
+    return std::nullopt;
+  }
   Lsp result;
   result.max_outgoing = bytes[1];
-  result.max_len = read_u16(bytes, 2);
+  result.max_len = maximum_length;
   result.retransmission_timeout = read_u16(bytes, 4);
   result.ack_timeout = read_u16(bytes, 6);
   result.max_retransmissions = bytes[8];
@@ -134,7 +138,8 @@ void PhoneLink::start(const std::chrono::steady_clock::time_point now) {
   if (state_ != State::Detect) {
     return;
   }
-  send_marker();
+  if (!send_marker())
+    return;
   state_ = State::Negotiate;
   send_syn(now);
   log("iAP2: sent initial marker and LSP SYN");
@@ -198,7 +203,8 @@ void PhoneLink::tick(const std::chrono::steady_clock::time_point now) {
     return;
   }
   if (state_ == State::Detect && now >= next_marker_) {
-    send_marker();
+    if (!send_marker())
+      return;
     next_marker_ = now + std::chrono::seconds(1);
   }
   if (state_ == State::Negotiate && now >= next_syn_) {
@@ -220,12 +226,18 @@ void PhoneLink::tick(const std::chrono::steady_clock::time_point now) {
     ++message.retries;
     message.deadline =
         now + std::chrono::milliseconds(lsp_.retransmission_timeout);
-    (void)send_(message.frame);
+    if (!send_(message.frame)) {
+      log("iAP2: control retransmission failed; link is dead");
+      state_ = State::Dead;
+      pending_.clear();
+      return;
+    }
   }
 }
 
 bool PhoneLink::send_control(const std::span<const std::uint8_t> payload) {
-  if (state_ != State::Normal || payload.empty()) {
+  if (state_ != State::Normal || payload.empty() || lsp_.max_len < 10 ||
+      payload.size() > static_cast<std::size_t>(lsp_.max_len - 10)) {
     return false;
   }
   // Respect the negotiated window of unacknowledged messages.
@@ -245,15 +257,26 @@ bool PhoneLink::send_control(const std::span<const std::uint8_t> payload) {
   }
   message.frame = encode_packet(payload, sent_sequence_, kControlAck,
                                 peer_control_session_id_);
+  if (message.frame.empty() || !send_(message.frame)) {
+    log("iAP2: control message transport send failed; link is dead");
+    state_ = State::Dead;
+    pending_.clear();
+    return false;
+  }
   message.deadline = std::chrono::steady_clock::now() +
                      std::chrono::milliseconds(lsp_.retransmission_timeout);
   message.retries = 0;
-  (void)send_(message.frame);
   pending_.push_back(std::move(message));
   return true;
 }
 
-void PhoneLink::send_marker() { (void)send_(kMarker); }
+bool PhoneLink::send_marker() {
+  if (send_(kMarker))
+    return true;
+  state_ = State::Dead;
+  log("iAP2: marker transport send failed; link is dead");
+  return false;
+}
 
 void PhoneLink::send_syn(const std::chrono::steady_clock::time_point now,
                          const bool acknowledge_peer) {
@@ -278,6 +301,9 @@ void PhoneLink::send_ack() { write_packet({}, sent_sequence_, kControlAck); }
 std::vector<std::uint8_t> PhoneLink::encode_packet(
     const std::span<const std::uint8_t> payload, const std::uint8_t sequence,
     const std::uint8_t control, const std::uint8_t session_id) {
+  if (!payload.empty() && payload.size() > UINT16_MAX - 10) {
+    return {};
+  }
   const auto header = encode_header(
       {static_cast<std::uint16_t>(payload.empty() ? 9 : payload.size() + 10),
        control, sequence, last_received_sequence_, session_id});
@@ -300,7 +326,11 @@ void PhoneLink::write_packet(const std::span<const std::uint8_t> payload,
     const auto summary = packet_summary("tx", header, payload);
     log_(summary.c_str());
   }
-  (void)send_(encode_packet(payload, sequence, control, session_id));
+  const auto packet = encode_packet(payload, sequence, control, session_id);
+  if (packet.empty() || !send_(packet)) {
+    state_ = State::Dead;
+    log("iAP2: control packet transport send failed");
+  }
 }
 
 // Cumulative acknowledgement over wrapping uint8 sequence numbers: returns
@@ -337,6 +367,12 @@ void PhoneLink::process_packets(
     if (!header) {
       receive_buffer_.erase(receive_buffer_.begin());
       continue;
+    }
+    if (header->length > lsp_.max_len) {
+      log("iAP2: peer exceeded negotiated maximum frame length");
+      state_ = State::Dead;
+      receive_buffer_.clear();
+      return;
     }
     if (receive_buffer_.size() < header->length) {
       return;
@@ -398,8 +434,8 @@ void PhoneLink::handle_packet(const Header &header,
       // defeats the flow-control purpose of max_outgoing.
       negotiated.retransmission_timeout =
           std::max(negotiated.retransmission_timeout, std::uint16_t{100});
-      negotiated.max_outgoing =
-          std::min(negotiated.max_outgoing, std::uint8_t{128});
+      negotiated.max_outgoing = std::clamp(negotiated.max_outgoing,
+                                           std::uint8_t{1}, std::uint8_t{128});
       negotiated.max_retransmissions =
           std::max(negotiated.max_retransmissions, std::uint8_t{1});
       negotiated.ack_timeout =

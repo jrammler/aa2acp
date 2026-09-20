@@ -84,6 +84,8 @@
           '';
           installPhase = ''
             install -Dm755 aa2acp $out/bin/aa2acp
+            install -Dm644 ${./assets/display-preflight.h264} \
+              $out/share/aa2acp/display-preflight.h264
           '';
           meta.mainProgram = "aa2acp";
         };

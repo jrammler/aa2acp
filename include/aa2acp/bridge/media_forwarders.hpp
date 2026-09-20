@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <deque>
 #include <filesystem>
-#include <fstream>
 #include <mutex>
 #include <span>
 #include <stop_token>
@@ -30,6 +29,7 @@ protected:
   using Bytes = std::vector<std::uint8_t>;
 
   static constexpr std::size_t kMaximumQueuedFrames = 600;
+  static constexpr std::size_t kMaximumQueuedBytes = 16 * 1024 * 1024;
 
   MediaSocketForwarder(const std::filesystem::path &path, std::string name);
 
@@ -42,10 +42,12 @@ protected:
   std::mutex mutex_;
   std::condition_variable frames_ready_;
   std::deque<Bytes> frames_;
+  std::size_t queued_bytes_{};
 
   Bytes keyframe_;
 
-  static bool send_frame(int socket_fd, const Bytes &frame);
+  static bool send_frame(int socket_fd, const Bytes &frame,
+                         std::stop_token stop);
 
   const std::string name_;
 
@@ -77,18 +79,21 @@ private:
 class VideoSocketForwarder final : public MediaSocketForwarder {
 public:
   explicit VideoSocketForwarder(const std::filesystem::path &path);
+  ~VideoSocketForwarder();
 
   void push(const std::span<const std::uint8_t> access_unit);
 
 private:
   static std::vector<Bytes> nalus(const Bytes &input);
+  bool write_dump(std::span<const std::uint8_t> bytes);
   bool on_client_connected(int client) override;
   void log_client_connected() override;
 
   std::size_t received_video_count_{};
+  std::size_t dump_bytes_{};
+  int dump_fd_{-1};
   Bytes sps_;
   Bytes pps_;
-  std::ofstream dump_;
 };
 
 // Moves PCM off AASDK's I/O thread without allowing a slow CarPlay consumer

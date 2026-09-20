@@ -14,6 +14,10 @@ ExecStart=/usr/bin/aa2acp --no-file-log
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true
+# Required for SO_BINDTODEVICE on kernels predating Linux 5.7; restrict the
+# service to this single capability so the management UI remains interface-bound.
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/aa2acp

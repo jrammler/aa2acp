@@ -7,10 +7,13 @@
 #include "aa2acp/bridge/daemon_log.hpp"
 #include "aa2acp/bridge/h264_normalizer.hpp"
 #include "aa2acp/bridge/logging.hpp"
+#include "aa2acp/bridge/management_listener.hpp"
 #include "aa2acp/bridge/management_ui.hpp"
 #include "aa2acp/bridge/media_forwarders.hpp"
 #include "aa2acp/iap2/bluetooth_worker.hpp"
 #include "aa2acp/iap2/network_manager.hpp"
+
+#include <aap_protobuf/service/inputsource/message/InputReport.pb.h>
 
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -19,6 +22,7 @@
 #include <signal.h>
 #include <sys/signalfd.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -45,6 +49,8 @@
 #include <mutex>
 #include <optional>
 #include <random>
+#include <span>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -85,9 +91,179 @@ struct PendingManagementHotspotUpdate {
 };
 std::optional<PendingManagementHotspotUpdate> pending_management_hotspot_update;
 
+class SecureDiagnosticDump {
+public:
+  ~SecureDiagnosticDump() {
+    if (fd_ >= 0)
+      close(fd_);
+  }
+
+  bool open(const std::filesystem::path &path) {
+    fd_ = ::open(path.c_str(), O_WRONLY | O_CREAT | O_CLOEXEC | O_NOFOLLOW,
+                 S_IRUSR | S_IWUSR);
+    if (fd_ < 0)
+      return false;
+    struct stat status{};
+    if (fstat(fd_, &status) != 0 || !S_ISREG(status.st_mode) ||
+        status.st_nlink != 1 || status.st_uid != geteuid() ||
+        fchmod(fd_, S_IRUSR | S_IWUSR) != 0 || ftruncate(fd_, 0) != 0) {
+      close(fd_);
+      fd_ = -1;
+      return false;
+    }
+    return true;
+  }
+
+  bool enabled() const { return fd_ >= 0; }
+
+  bool write_frame(const std::span<const std::uint8_t> bytes) {
+    constexpr std::size_t kMaximumBytes = 8 * 1024 * 1024;
+    if (fd_ < 0 || bytes_written_ >= kMaximumBytes - 4 ||
+        bytes.size() > kMaximumBytes - bytes_written_ - 4)
+      return false;
+    const std::array<std::uint8_t, 4> header{
+        static_cast<std::uint8_t>(bytes.size() >> 24),
+        static_cast<std::uint8_t>(bytes.size() >> 16),
+        static_cast<std::uint8_t>(bytes.size() >> 8),
+        static_cast<std::uint8_t>(bytes.size())};
+    if (!write_all(header) || !write_all(bytes)) {
+      disable();
+      return false;
+    }
+    bytes_written_ += header.size() + bytes.size();
+    return true;
+  }
+
+  void disable() {
+    if (fd_ >= 0)
+      close(fd_);
+    fd_ = -1;
+  }
+
+private:
+  bool write_all(const std::span<const std::uint8_t> bytes) {
+    for (std::size_t offset = 0; offset < bytes.size();) {
+      const auto count =
+          ::write(fd_, bytes.data() + offset, bytes.size() - offset);
+      if (count > 0) {
+        offset += static_cast<std::size_t>(count);
+        continue;
+      }
+      if (count < 0 && errno == EINTR)
+        continue;
+      return false;
+    }
+    return true;
+  }
+
+  int fd_{-1};
+  std::size_t bytes_written_{};
+};
+
+std::optional<std::uint64_t>
+plist_integer(const aa2acp::airplay::PlistValue::Dictionary &dictionary,
+              const std::initializer_list<std::string_view> keys) {
+  for (const auto key : keys) {
+    const auto item = dictionary.find(std::string(key));
+    if (item == dictionary.end())
+      continue;
+    if (const auto *value = std::get_if<std::uint64_t>(&item->second.data))
+      return *value;
+  }
+  return std::nullopt;
+}
+
+std::optional<bool>
+plist_boolean(const aa2acp::airplay::PlistValue::Dictionary &dictionary,
+              const std::initializer_list<std::string_view> keys) {
+  for (const auto key : keys) {
+    const auto item = dictionary.find(std::string(key));
+    if (item == dictionary.end())
+      continue;
+    if (const auto *value = std::get_if<bool>(&item->second.data))
+      return *value;
+    if (const auto *value = std::get_if<std::uint64_t>(&item->second.data))
+      return *value != 0;
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string>
+carplay_input_report(const std::span<const std::uint8_t> request) {
+  const std::string text(request.begin(), request.end());
+  const auto header_end = text.find("\r\n\r\n");
+  if (header_end == std::string::npos || header_end + 4 > text.size())
+    return std::nullopt;
+  std::istringstream headers(text.substr(0, header_end));
+  std::string line;
+  std::size_t body_size{};
+  bool content_length_seen = false;
+  while (std::getline(headers, line)) {
+    if (line.ends_with('\r'))
+      line.pop_back();
+    const auto separator = line.find(':');
+    if (separator == std::string::npos)
+      continue;
+    std::string name = line.substr(0, separator);
+    std::transform(name.begin(), name.end(), name.begin(),
+                   [](const unsigned char value) {
+                     return static_cast<char>(std::tolower(value));
+                   });
+    if (name != "content-length")
+      continue;
+    if (content_length_seen)
+      return std::nullopt;
+    const auto value_start = line.find_first_not_of(" \t", separator + 1);
+    const auto value = value_start == std::string::npos
+                           ? std::string_view{}
+                           : std::string_view(line).substr(value_start);
+    std::uint64_t parsed{};
+    const auto [end, error] =
+        std::from_chars(value.data(), value.data() + value.size(), parsed);
+    if (error != std::errc{} || end != value.data() + value.size() ||
+        parsed > 1024 * 1024)
+      return std::nullopt;
+    body_size = static_cast<std::size_t>(parsed);
+    content_length_seen = true;
+  }
+  const auto body_start = header_end + 4;
+  if (!content_length_seen || body_size > text.size() - body_start)
+    return std::nullopt;
+  const auto plist =
+      aa2acp::airplay::decode_bplist(request.subspan(body_start, body_size));
+  if (!plist)
+    return std::nullopt;
+  const auto *dictionary =
+      std::get_if<aa2acp::airplay::PlistValue::Dictionary>(&plist->data);
+  if (dictionary == nullptr)
+    return std::nullopt;
+  const auto keycode = plist_integer(
+      *dictionary, {"androidKeyCode", "android_key_code", "keyCode"});
+  if (!keycode || *keycode > UINT32_MAX)
+    return std::nullopt;
+  const auto down =
+      plist_boolean(*dictionary, {"down", "keyDown", "pressed"}).value_or(true);
+  aap_protobuf::service::inputsource::message::InputReport report;
+  report.set_timestamp(static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+          .count()));
+  auto *key = report.mutable_key_event()->add_keys();
+  key->set_keycode(static_cast<std::uint32_t>(*keycode));
+  key->set_down(down);
+  key->set_metastate(0);
+  std::string serialized;
+  return report.SerializeToString(&serialized) ? std::optional(serialized)
+                                               : std::nullopt;
+}
+
 constexpr char kDefaultManagementHotspotPassphrase[] = "changeme";
+#ifdef AA2ACP_DISPLAY_PREFLIGHT_VIDEO
+constexpr char kDisplayPreflightVideo[] = AA2ACP_DISPLAY_PREFLIGHT_VIDEO;
+#else
 constexpr char kDisplayPreflightVideo[] =
     "/usr/share/aa2acp/display-preflight.h264";
+#endif
 
 std::string management_hotspot_ssid(const std::string &interface_name) {
   std::ifstream stream("/sys/class/net/" + interface_name + "/address");
@@ -514,40 +690,42 @@ int run_wired_android_auto_receiver(
     return value != nullptr && *value ? std::filesystem::path(value)
                                       : std::filesystem::path{};
   }();
-  auto event_dump = std::make_shared<std::ofstream>();
+  std::shared_ptr<SecureDiagnosticDump> event_dump;
   if (!event_dump_path.empty()) {
-    event_dump->open(event_dump_path, std::ios::binary | std::ios::trunc);
-    if (!*event_dump)
+    event_dump = std::make_shared<SecureDiagnosticDump>();
+    if (!event_dump->open(event_dump_path)) {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
-          << "Bridge daemon: unable to dump CarPlay events to "
+          << "Bridge daemon: unable to create owner-only CarPlay event dump "
           << event_dump_path << '\n';
-    else
+      event_dump.reset();
+    } else
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
           << "Bridge daemon: dumping CarPlay events to " << event_dump_path
-          << '\n';
+          << " (owner-only, 8 MiB limit)\n";
   }
   FrameSocketReceiver event_receiver(
       event_socket, "event",
-      [event_dump](const std::span<const std::uint8_t> bytes) {
-        if (event_dump && *event_dump) {
-          const auto size = bytes.size();
-          const std::array<std::uint8_t, 4> header{
-              static_cast<std::uint8_t>(size >> 24),
-              static_cast<std::uint8_t>(size >> 16),
-              static_cast<std::uint8_t>(size >> 8),
-              static_cast<std::uint8_t>(size)};
-          event_dump->write(reinterpret_cast<const char *>(header.data()),
-                            static_cast<std::streamsize>(header.size()));
-          event_dump->write(reinterpret_cast<const char *>(bytes.data()),
-                            static_cast<std::streamsize>(bytes.size()));
-          event_dump->flush();
+      [&receiver, event_dump](const std::span<const std::uint8_t> bytes) {
+        if (event_dump && event_dump->enabled() &&
+            !event_dump->write_frame(bytes)) {
+          if (aa2acp::bridge::debug_logging_enabled())
+            aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+                << "Bridge daemon: CarPlay event diagnostic capture is full "
+                   "or unavailable\n";
+          event_dump->disable();
         }
-        if (aa2acp::bridge::debug_logging_enabled())
+        if (const auto report = carplay_input_report(bytes)) {
+          if (!receiver.send_input_report(std::span(
+                  reinterpret_cast<const std::uint8_t *>(report->data()),
+                  report->size())) &&
+              aa2acp::bridge::debug_logging_enabled())
+            aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+                << "Bridge daemon: discarded mapped CarPlay input report\n";
+        } else if (aa2acp::bridge::debug_logging_enabled()) {
           aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
-              << "Bridge daemon: received CarPlay event message ("
-              << bytes.size()
-              << " bytes); input mapping awaits a sanitized "
-                 "head-unit event capture\n";
+              << "Bridge daemon: CarPlay event had no supported explicit key "
+                 "mapping\n";
+        }
       });
   FrameSocketReceiver microphone_receiver(
       microphone_socket, "microphone",
@@ -730,9 +908,8 @@ int main(int argc, char **argv) {
         << "Bridge daemon: unable to start management hotspot\n";
   else if (management_hotspot_needs_setup(config))
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
-        << "Bridge daemon: management hotspot default password is '"
-        << kDefaultManagementHotspotPassphrase
-        << "'; change it at the management UI before using AA2ACP\n";
+        << "Bridge daemon: management hotspot is using the initial default "
+           "password; change it at the management UI before using AA2ACP\n";
   sigset_t signals;
   sigemptyset(&signals);
   sigaddset(&signals, SIGINT);
@@ -742,17 +919,22 @@ int main(int argc, char **argv) {
         << "Unable to block shutdown signals\n";
     return 1;
   }
-  std::jthread wifi_refresh_worker([](std::stop_token stop_token) {
+  std::mutex wifi_refresh_mutex;
+  std::condition_variable wifi_refresh_wakeup;
+  std::jthread wifi_refresh_worker([&](const std::stop_token stop_token) {
     while (!stop_token.stop_requested()) {
       refresh_wifi_inventory(management_state);
-      for (int count = 0; count < 20 && !stop_token.stop_requested(); ++count)
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+      std::unique_lock lock(wifi_refresh_mutex);
+      wifi_refresh_wakeup.wait_for(lock, std::chrono::seconds(10),
+                                   [&] { return stop_token.stop_requested(); });
     }
   });
   const int signal_fd = signalfd(-1, &signals, SFD_CLOEXEC);
   if (signal_fd < 0) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
         << "Unable to create shutdown signal descriptor\n";
+    wifi_refresh_worker.request_stop();
+    wifi_refresh_wakeup.notify_all();
     return 1;
   }
   std::jthread android_auto_worker(
@@ -767,25 +949,29 @@ int main(int argc, char **argv) {
       });
   std::jthread carplay_preflight_worker;
   std::jthread bluetooth_scan_worker;
-  const int listener = socket(AF_INET, SOCK_STREAM, 0);
-  int enabled = 1;
-  setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &enabled, sizeof(enabled));
-  sockaddr_in address{};
-  address.sin_family = AF_INET;
-  address.sin_port = htons(static_cast<std::uint16_t>(port));
-  address.sin_addr.s_addr = htonl(INADDR_ANY);
-  if (listener < 0 ||
-      bind(listener, reinterpret_cast<sockaddr *>(&address), sizeof(address)) !=
-          0 ||
-      listen(listener, 8) != 0) {
+  // NetworkManager's shared hotspot owns the configured Wi-Fi interface.
+  // Bind both the address and the socket to that interface so the management
+  // UI is not exposed on Ethernet, Bluetooth PAN, or upstream networks.
+  aa2acp::bridge::ManagementListener listener(static_cast<std::uint16_t>(port),
+                                              config.wifi_interface);
+  if (!listener.ready()) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
-        << "Unable to listen on 0.0.0.0:" << port << '\n';
+        << "Unable to listen on the configured management interface:" << port
+        << '\n';
     close(signal_fd);
+    wifi_refresh_worker.request_stop();
+    wifi_refresh_wakeup.notify_all();
     return 1;
   }
+  const auto management_address = listener.address();
+  char management_address_text[INET_ADDRSTRLEN]{};
+  inet_ntop(AF_INET, &management_address, management_address_text,
+            sizeof(management_address_text));
   aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
-      << "Bridge management UI listening on http://0.0.0.0:" << port << '\n';
+      << "Bridge management UI listening on http://" << management_address_text
+      << ':' << port << '\n';
   const auto csrf_token = random_token();
+  std::atomic_bool management_listener_rebind_requested{};
   const auto handle_client = [&](const int client) {
     std::array<char, 4096> buffer{};
     std::string request;
@@ -942,23 +1128,59 @@ int main(int argc, char **argv) {
         update = std::move(pending_management_hotspot_update);
         pending_management_hotspot_update.reset();
       }
-      const auto previous = [&] {
-        std::lock_guard lock(config_mutex);
-        return config;
-      }();
       if (!update) {
         respond(400, "text/plain", "No password update is pending\n");
       } else {
-        auto updated = previous;
-        updated.management_hotspot_passphrase = update->passphrase;
-        updated.management_hotspot_ssid = update->ssid;
-        if (!aa2acp::bridge::save_config(config_path, updated)) {
-          respond(400, "text/plain", "Invalid hotspot password\n");
-        } else {
-          {
-            std::lock_guard lock(config_mutex);
-            config = updated;
+        aa2acp::bridge::Config previous;
+        aa2acp::bridge::Config updated;
+        bool saved = false;
+        bool apply_failed = false;
+        bool rollback_failed = false;
+        {
+          std::lock_guard lock(config_mutex);
+          previous = config;
+          updated = config;
+          updated.management_hotspot_passphrase = update->passphrase;
+          updated.management_hotspot_ssid = update->ssid;
+          const auto restore_previous_hotspot = [&] {
+            for (int attempt = 0; attempt < 2; ++attempt) {
+              if (aa2acp::iap2::start_management_hotspot(
+                      previous.wifi_interface, previous.management_hotspot_ssid,
+                      previous.management_hotspot_passphrase))
+                return true;
+            }
+            return false;
+          };
+          if (!aa2acp::iap2::start_management_hotspot(
+                  updated.wifi_interface, updated.management_hotspot_ssid,
+                  updated.management_hotspot_passphrase)) {
+            apply_failed = true;
+            rollback_failed = !restore_previous_hotspot();
+          } else {
+            saved = aa2acp::bridge::save_config(config_path, updated);
+            if (saved)
+              config = updated;
+            else
+              rollback_failed = !restore_previous_hotspot();
           }
+        }
+        if (!saved) {
+          {
+            std::lock_guard lock(management_hotspot_password_mutex);
+            pending_management_hotspot_update = *update;
+          }
+          if (rollback_failed)
+            aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+                << "Management: unable to restore the previous hotspot "
+                   "after a failed settings update\n";
+          respond(apply_failed || rollback_failed ? 503 : 400, "text/plain",
+                  rollback_failed
+                      ? "Hotspot update failed; runtime state needs recovery\n"
+                  : apply_failed
+                      ? "Unable to apply hotspot settings; configuration "
+                        "unchanged\n"
+                      : "Invalid hotspot password\n");
+        } else {
           {
             std::lock_guard lock(management_state.mutex);
             management_state.snapshot.management_hotspot_password_pending =
@@ -972,9 +1194,6 @@ int main(int argc, char **argv) {
                       html_escape(updated.management_hotspot_ssid) +
                       "</b>, reconnect using the new password, then <a "
                       "href=\"/\">continue</a>.</p>");
-          aa2acp::iap2::start_management_hotspot(
-              updated.wifi_interface, updated.management_hotspot_ssid,
-              updated.management_hotspot_passphrase);
         }
       }
     } else if ([&] {
@@ -1165,26 +1384,67 @@ int main(int argc, char **argv) {
           form_field(body, "management_hotspot_passphrase");
       const auto hotspot_passphrase_confirm =
           form_field(body, "management_hotspot_passphrase_confirm");
-      const auto previous = [&] {
-        std::lock_guard lock(config_mutex);
-        return config;
-      }();
-      const auto mac = selected && !selected->empty() ? *selected
-                       : manual && !manual->empty()   ? *manual
-                                                      : previous.head_unit_mac;
       const auto new_hotspot_password =
           hotspot_passphrase && !hotspot_passphrase->empty();
-      const auto effective_hotspot_passphrase =
-          new_hotspot_password ? *hotspot_passphrase
-                               : previous.management_hotspot_passphrase;
+      aa2acp::bridge::Config previous;
+      aa2acp::bridge::Config updated_config;
+      std::string mac;
+      bool config_saved = false;
+      bool hotspot_apply_failed = false;
+      bool hotspot_rollback_failed = false;
+      bool interface_changed = false;
+      bool hotspot_changed = false;
       if (wifi && hotspot_ssid &&
           (!new_hotspot_password ||
            (hotspot_passphrase_confirm &&
-            *hotspot_passphrase_confirm == *hotspot_passphrase)) &&
-          aa2acp::bridge::save_config(config_path,
-                                      {mac, *wifi, *hotspot_ssid,
-                                       effective_hotspot_passphrase,
-                                       previous.airplay_pairing_store})) {
+            *hotspot_passphrase_confirm == *hotspot_passphrase))) {
+        std::lock_guard lock(config_mutex);
+        previous = config;
+        mac = selected && !selected->empty() ? *selected
+              : manual && !manual->empty()   ? *manual
+                                             : previous.head_unit_mac;
+        const auto effective_hotspot_passphrase =
+            new_hotspot_password ? *hotspot_passphrase
+                                 : previous.management_hotspot_passphrase;
+        updated_config = {mac, *wifi, *hotspot_ssid,
+                          effective_hotspot_passphrase,
+                          previous.airplay_pairing_store};
+        interface_changed =
+            previous.wifi_interface != updated_config.wifi_interface;
+        hotspot_changed = interface_changed ||
+                          previous.management_hotspot_ssid !=
+                              updated_config.management_hotspot_ssid ||
+                          previous.management_hotspot_passphrase !=
+                              updated_config.management_hotspot_passphrase;
+        const auto restore_previous_hotspot = [&] {
+          for (int attempt = 0; attempt < 2; ++attempt) {
+            if (aa2acp::iap2::start_management_hotspot(
+                    previous.wifi_interface, previous.management_hotspot_ssid,
+                    previous.management_hotspot_passphrase))
+              return true;
+          }
+          return false;
+        };
+        const auto hotspot_applied =
+            !hotspot_changed ||
+            aa2acp::iap2::start_management_hotspot(
+                updated_config.wifi_interface,
+                updated_config.management_hotspot_ssid,
+                updated_config.management_hotspot_passphrase);
+        if (!hotspot_applied) {
+          hotspot_apply_failed = hotspot_changed;
+          if (hotspot_changed)
+            hotspot_rollback_failed = !restore_previous_hotspot();
+        } else {
+          config_saved =
+              aa2acp::bridge::save_config(config_path, updated_config);
+          if (config_saved)
+            config = updated_config;
+          else if (hotspot_changed)
+            hotspot_rollback_failed = !restore_previous_hotspot();
+        }
+      }
+      if (config_saved) {
         if (mac != previous.head_unit_mac) {
           std::error_code error;
           const auto capabilities_store =
@@ -1200,14 +1460,23 @@ int main(int argc, char **argv) {
                 << error.message() << '\n';
           }
         }
-        {
-          std::lock_guard lock(config_mutex);
-          config = {mac, *wifi, *hotspot_ssid, effective_hotspot_passphrase,
-                    previous.airplay_pairing_store};
-        }
         aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
             << "Management: saved head unit " << mac << " on " << *wifi << '\n';
         respond(303, "text/plain", "", "Location: /?saved=1\r\n");
+        if (interface_changed)
+          management_listener_rebind_requested.store(true);
+      } else if (hotspot_rollback_failed) {
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+            << "Management: unable to restore the previous hotspot after a "
+               "failed settings update\n";
+        respond(503, "text/plain",
+                "Hotspot update failed; runtime state needs recovery\n");
+      } else if (hotspot_apply_failed) {
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+            << "Management: unable to apply hotspot settings; configuration "
+               "was not changed\n";
+        respond(503, "text/plain",
+                "Unable to apply Wi-Fi settings; configuration unchanged\n");
       } else {
         aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
             << "Management: rejected invalid configuration\n";
@@ -1253,9 +1522,46 @@ int main(int argc, char **argv) {
     });
   }
 
+  const auto rebind_management_listener = [&] {
+    if (!management_listener_rebind_requested.exchange(false))
+      return false;
+    const auto current_config = [&] {
+      std::lock_guard lock(config_mutex);
+      return config;
+    }();
+    if (!listener.rebind(current_config.wifi_interface)) {
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+          << "Management: unable to rebind UI after settings change\n";
+      management_listener_rebind_requested.store(true);
+      return false;
+    }
+    const auto management_address = listener.address();
+    char address_text[INET_ADDRSTRLEN]{};
+    inet_ntop(AF_INET, &management_address, address_text, sizeof(address_text));
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+        << "Bridge management UI rebound to http://" << address_text << ':'
+        << port << '\n';
+    return true;
+  };
+
   for (;;) {
-    pollfd descriptors[]{{listener, POLLIN, 0}, {signal_fd, POLLIN, 0}};
-    if (poll(descriptors, 2, -1) <= 0)
+    const auto current_config = [&] {
+      std::lock_guard lock(config_mutex);
+      return config;
+    }();
+    if (current_config.wifi_interface != listener.interface_name() ||
+        listener.address_changed())
+      management_listener_rebind_requested.store(true);
+    pollfd descriptors[]{{listener.fd(), POLLIN, 0}, {signal_fd, POLLIN, 0}};
+    const auto poll_result = poll(descriptors, 2, 250);
+    if (poll_result < 0) {
+      if (errno == EINTR)
+        continue;
+      break;
+    }
+    if (rebind_management_listener())
+      continue;
+    if (poll_result == 0)
       continue;
     if ((descriptors[1].revents & POLLIN) != 0) {
       signalfd_siginfo signal_info{};
@@ -1269,7 +1575,7 @@ int main(int argc, char **argv) {
     }
     if ((descriptors[0].revents & POLLIN) == 0)
       continue;
-    const int client = accept4(listener, nullptr, nullptr, SOCK_CLOEXEC);
+    const int client = accept4(listener.fd(), nullptr, nullptr, SOCK_CLOEXEC);
     if (client < 0)
       continue;
     {
@@ -1296,7 +1602,8 @@ int main(int argc, char **argv) {
       shutdown(fd, SHUT_RDWR);
   }
   request_workers.clear();
-  close(listener);
+  wifi_refresh_worker.request_stop();
+  wifi_refresh_wakeup.notify_all();
   carplay_preflight_worker.request_stop();
   bluetooth_scan_worker.request_stop();
   if (carplay_preflight_worker.joinable())

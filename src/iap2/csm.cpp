@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
 
 namespace aa2acp::iap2::csm {
 namespace {
@@ -28,7 +29,12 @@ void write_u16(std::span<std::uint8_t> bytes, const std::size_t offset,
 
 std::vector<std::uint8_t> encode(const std::uint16_t id,
                                  const std::span<const std::uint8_t> payload) {
-  std::vector<std::uint8_t> result(6 + payload.size());
+  constexpr auto kHeaderSize = std::size_t{6};
+  if (payload.size() >
+      std::numeric_limits<std::uint16_t>::max() - kHeaderSize) {
+    return {};
+  }
+  std::vector<std::uint8_t> result(kHeaderSize + payload.size());
   write_u16(result, 0, kStart);
   write_u16(result, 2, static_cast<std::uint16_t>(result.size()));
   write_u16(result, 4, id);
@@ -39,7 +45,11 @@ std::vector<std::uint8_t> encode(const std::uint16_t id,
 std::vector<std::uint8_t>
 encode_bytes_parameter(const std::uint16_t id, const std::uint16_t parameter_id,
                        const std::span<const std::uint8_t> value) {
-  std::vector<std::uint8_t> payload(4 + value.size());
+  constexpr auto kParameterHeaderSize = std::size_t{4};
+  if (value.size() > std::numeric_limits<std::uint16_t>::max() - 10) {
+    return {};
+  }
+  std::vector<std::uint8_t> payload(kParameterHeaderSize + value.size());
   write_u16(payload, 0, static_cast<std::uint16_t>(payload.size()));
   write_u16(payload, 2, parameter_id);
   std::copy(value.begin(), value.end(), payload.begin() + 4);
@@ -84,17 +94,26 @@ bool verify_mfi_v2_signature(
   const auto *certificates = PKCS7_type_is_signed(certificate_bundle)
                                  ? certificate_bundle->d.sign->cert
                                  : nullptr;
-  if (certificates == nullptr || sk_X509_num(certificates) != 1) {
+  STACK_OF(X509) *signers =
+      PKCS7_type_is_signed(certificate_bundle)
+          ? PKCS7_get0_signers(certificate_bundle, nullptr, 0)
+          : nullptr;
+  X509 *signer = signers != nullptr && sk_X509_num(signers) > 0
+                     ? sk_X509_value(signers, 0)
+                 : certificates != nullptr && sk_X509_num(certificates) > 0
+                     ? sk_X509_value(certificates, 0)
+                     : nullptr;
+  if (signers != nullptr)
+    sk_X509_free(signers);
+  if (signer == nullptr) {
     if (aa2acp::bridge::debug_logging_enabled()) {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
-          << "CSM: MFi 2 PKCS#7 bundle has "
-          << (certificates == nullptr ? 0 : sk_X509_num(certificates))
-          << " certificate(s)\n";
+          << "CSM: MFi 2 PKCS#7 bundle has no signer certificate\n";
     }
     PKCS7_free(certificate_bundle);
     return false;
   }
-  EVP_PKEY *key = X509_get_pubkey(sk_X509_value(certificates, 0));
+  EVP_PKEY *key = X509_get_pubkey(signer);
   PKCS7_free(certificate_bundle);
   if (key == nullptr) {
     if (aa2acp::bridge::debug_logging_enabled()) {
@@ -153,6 +172,12 @@ bool verify_mfi_v2_signature(
 }
 
 void Decoder::push(const std::span<const std::uint8_t> bytes) {
+  constexpr std::size_t kMaximumBufferSize = 128 * 1024;
+  if (bytes.size() >
+      kMaximumBufferSize - std::min(buffer_.size(), kMaximumBufferSize)) {
+    buffer_.clear();
+    return;
+  }
   buffer_.insert(buffer_.end(), bytes.begin(), bytes.end());
 }
 

@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <vector>
 
 using aa2acp::iap2::Header;
@@ -57,6 +58,7 @@ void test_negotiation() {
   assert(writes.size() == 2);
 
   auto peer_lsp = Lsp{};
+  peer_lsp.max_outgoing = 0;
   peer_lsp.sessions[0].id = 1;
   const auto lsp = aa2acp::iap2::encode_lsp(peer_lsp);
   const auto syn_header =
@@ -101,6 +103,9 @@ void test_negotiation() {
 }
 
 void test_csm_codec() {
+  const std::vector<std::uint8_t> oversized(65 * 1024);
+  assert(aa2acp::iap2::csm::encode(1, oversized).empty());
+  assert(aa2acp::iap2::csm::encode_bytes_parameter(1, 2, oversized).empty());
   const std::array<std::uint8_t, 3> challenge{1, 2, 3};
   const auto encoded = aa2acp::iap2::csm::encode_bytes_parameter(
       aa2acp::iap2::csm::kRequestAuthenticationChallengeResponse, 0, challenge);
@@ -120,10 +125,51 @@ void test_csm_codec() {
          std::vector<std::uint8_t>(challenge.begin(), challenge.end()));
 }
 
+void test_initial_marker_failure_is_dead() {
+  PhoneLink link([](const std::span<const std::uint8_t>) { return false; });
+  link.start(std::chrono::steady_clock::now());
+  assert(link.state() == State::Dead);
+}
+
+void test_send_failure_is_not_queued() {
+  std::vector<std::vector<std::uint8_t>> writes;
+  bool fail_sends = false;
+  PhoneLink link(
+      [&writes, &fail_sends](const std::span<const std::uint8_t> bytes) {
+        if (fail_sends)
+          return false;
+        writes.emplace_back(bytes.begin(), bytes.end());
+        return true;
+      });
+  const auto now = std::chrono::steady_clock::now();
+  link.start(now);
+  link.receive(aa2acp::iap2::kMarker, now);
+  const auto lsp = aa2acp::iap2::encode_lsp(Lsp{});
+  auto syn = std::vector<std::uint8_t>{};
+  const auto header =
+      aa2acp::iap2::encode_header({static_cast<std::uint16_t>(lsp.size() + 10),
+                                   aa2acp::iap2::kControlSyn, 3, 100, 0});
+  syn.assign(header.begin(), header.end());
+  syn.insert(syn.end(), lsp.begin(), lsp.end());
+  syn.push_back(aa2acp::iap2::checksum(lsp));
+  link.receive(syn, now);
+  link.receive(
+      aa2acp::iap2::encode_header({9, aa2acp::iap2::kControlAck, 4, 100, 0}),
+      now);
+  assert(link.state() == State::Normal);
+  fail_sends = true;
+  const std::array<std::uint8_t, 1> payload{1};
+  assert(!link.send_control(payload));
+  assert(link.state() == State::Dead);
+  assert(!link.send_control(payload));
+}
+
 int main() {
   test_header_round_trip();
   test_lsp_round_trip();
   test_negotiation();
   test_csm_codec();
+  test_initial_marker_failure_is_dead();
+  test_send_failure_is_not_queued();
   std::cout << "iap2 link-layer tests passed\n";
 }

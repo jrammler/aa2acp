@@ -1,6 +1,6 @@
 #!/bin/bash
 # Maintainer script for aa2acp deb packages. Written to be safe both on a
-# running system and during offline image assembly (chroot / rpi-image-gen):
+# running system and during offline image assembly (chroot /rpi-image-gen):
 # every runtime-touching action is guarded, everything is idempotent so it
 # can run on every upgrade.
 
@@ -29,6 +29,10 @@ configure)
         if [ -n "$2" ]; then
             # Upgrade (old version in $2): restart into the new binary.
             systemctl try-restart aa2acp.service >/dev/null || true
+        else
+            # A fresh install should be usable immediately, while the
+            # guarded systemd check above keeps offline image assembly safe.
+            systemctl start aa2acp.service >/dev/null || true
         fi
         [ -d /run/udev ] && udevadm control --reload >/dev/null || true
     elif command -v deb-systemd-helper >/dev/null; then

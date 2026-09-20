@@ -81,7 +81,7 @@ private:
     unsigned retries;
   };
 
-  void send_marker();
+  bool send_marker();
   void send_syn(std::chrono::steady_clock::time_point now,
                 bool acknowledge_peer = false);
   void send_ack();

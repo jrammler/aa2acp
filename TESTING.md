@@ -59,11 +59,13 @@ pairing or the Wi-Fi handover.
   is the transport used for CarPlay pairing and SDP; some head units take time
   to become visible.
 - Set `AA2ACP_DUMP_H264=/tmp/android-auto.h264` before launching the daemon to
-  capture the raw Android Auto H.264 elementary stream. Diagnosis only; the
-  file grows quickly.
+  capture the raw Android Auto H.264 elementary stream. The opt-in capture is
+  owner-only and capped at 64 MiB; treat it as sensitive and sanitize before
+  sharing.
 - Set `AA2ACP_DUMP_CARPLAY_EVENTS=/tmp/carplay-events.bin` with debug logging
   to retain length-prefixed decrypted AirPlay event messages for private
-  analysis. Do not commit raw captures; sanitize any resulting fixture first.
+  analysis. The opt-in capture refuses symlinks, is owner-only, and capped at
+  8 MiB. Do not commit raw captures; sanitize any resulting fixture first.
 - The bridge caches CarPlay's head-unit capabilities (main display, supported
   direct-PCM audio routes) in `$XDG_STATE_HOME/aa2acp/head-unit-capabilities`
   and uses a supported cached resolution for Android Auto. A first connection,
