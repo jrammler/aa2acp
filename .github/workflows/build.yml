@@ -97,9 +97,15 @@ jobs:
           # catches missing private libraries/assets without starting systemd
           # in the build container.
           package_root="$(mktemp -d)"
-          trap 'rm -rf "$package_root"' EXIT
+          package_control=""
+          trap 'rm -rf "$package_root" "$package_control"' EXIT
           dpkg-deb --info aa2acp.deb
+          dpkg-deb -f aa2acp.deb Depends | grep -q 'network-manager'
+          dpkg-deb -f aa2acp.deb Depends | grep -q 'bluez'
           dpkg-deb --extract aa2acp.deb "$package_root"
+          package_control="$(mktemp -d)"
+          dpkg-deb --control aa2acp.deb "$package_control"
+          test -x "$package_control/postinst"
           test -x "$package_root/usr/bin/aa2acp"
           test -s "$package_root/usr/share/aa2acp/display-preflight.h264"
           test -e "$package_root/usr/lib/aa2acp/libaasdk.so"
@@ -107,6 +113,7 @@ jobs:
           test -e "$package_root/lib/systemd/system/aa2acp.service"
           test -e "$package_root/lib/udev/rules.d/70-aa2acp-android-auto.rules"
           test -e "$package_root/usr/share/polkit-1/rules.d/49-aa2acp-networkmanager.rules"
+          test -x packaging/deb/postinst
           LD_LIBRARY_PATH="$package_root/usr/lib/aa2acp" \
             ldd "$package_root/usr/bin/aa2acp" | tee package-ldd.txt
           ! grep -q 'not found' package-ldd.txt

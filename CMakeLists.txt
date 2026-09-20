@@ -276,6 +276,7 @@ endif()
 # dpkg-shlibdeps can compute real Depends for the runtime libraries.
 # PRIVATE_DIRS lets shlibdeps scan the bundled private lib dir too.
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "network-manager, bluez, polkitd")
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS_PRIVATE_DIRS
     "${AASDK_LIB_DIR};${AAP_PROTOBUF_LIB_DIR}")
 # Maintainer script: creates the aa2acp group and enables systemd units.

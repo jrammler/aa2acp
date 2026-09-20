@@ -13,9 +13,9 @@ struct AccessoryWifiConfiguration {
   std::uint8_t channel{};
 };
 
-// Development/test backend. The production appliance will replace this with
-// its own network manager, but nmcli lets us validate the iAP2 handover flow
-// without changing Ethernet connectivity on the development host.
+// NetworkManager backend used for both development and the production
+// appliance. It confines Wi-Fi operations to the selected interface and uses
+// bounded nmcli subprocesses so handover failures do not wedge the worker.
 bool join_with_networkmanager(const AccessoryWifiConfiguration &configuration,
                               const std::string &interface_name);
 // Returns the accessory endpoint for a Wi-Fi handoff. Prefer an advertised

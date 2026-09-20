@@ -661,9 +661,8 @@ public:
     }
 
     // Android Auto opens this source as part of its normal projection
-    // negotiation, even though the return path is not bridged yet. Keep the
-    // established advertisement until the bidirectional call-audio work can
-    // replace it with a complete CarPlay microphone path.
+    // negotiation. CarPlay microphone PCM is now forwarded into this channel;
+    // real-head-unit call-audio interoperability remains unverified.
     auto *microphone_service = response.add_channels();
     microphone_service->set_id(
         static_cast<int>(aasdk::messenger::ChannelId::MEDIA_SOURCE_MICROPHONE));

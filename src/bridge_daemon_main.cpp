@@ -930,6 +930,7 @@ int main(int argc, char **argv) {
     }
   }
   std::mutex config_mutex;
+  std::mutex config_transaction_mutex;
   refresh_bluetooth_inventory(management_state);
   refresh_wifi_inventory(management_state);
   if (config.wifi_interface.empty()) {
@@ -1063,12 +1064,13 @@ int main(int argc, char **argv) {
       }
     }
     const auto header_end = request.find("\r\n\r\n");
+    if (header_end == std::string::npos) {
+      finish_client(client);
+      return;
+    }
     bool content_length_valid = true;
-    const auto length =
-        content_length(header_end == std::string::npos
-                           ? std::string_view(request)
-                           : std::string_view(request).substr(0, header_end),
-                       content_length_valid);
+    const auto length = content_length(
+        std::string_view(request).substr(0, header_end), content_length_valid);
     if (!content_length_valid || (length && *length > 16 * 1024)) {
       finish_client(client);
       return;
@@ -1184,6 +1186,7 @@ int main(int argc, char **argv) {
       if (!update) {
         respond(400, "text/plain", "No password update is pending\n");
       } else {
+        std::lock_guard transaction_lock(config_transaction_mutex);
         aa2acp::bridge::Config previous;
         aa2acp::bridge::Config updated;
         bool saved = false;
@@ -1193,28 +1196,30 @@ int main(int argc, char **argv) {
           std::lock_guard lock(config_mutex);
           previous = config;
           updated = config;
-          updated.management_hotspot_passphrase = update->passphrase;
-          updated.management_hotspot_ssid = update->ssid;
-          const auto restore_previous_hotspot = [&] {
-            for (int attempt = 0; attempt < 2; ++attempt) {
-              if (aa2acp::iap2::start_management_hotspot(
-                      previous.wifi_interface, previous.management_hotspot_ssid,
-                      previous.management_hotspot_passphrase))
-                return true;
-            }
-            return false;
-          };
-          if (!aa2acp::iap2::start_management_hotspot(
-                  updated.wifi_interface, updated.management_hotspot_ssid,
-                  updated.management_hotspot_passphrase)) {
-            apply_failed = true;
-            rollback_failed = !restore_previous_hotspot();
+        }
+        updated.management_hotspot_passphrase = update->passphrase;
+        updated.management_hotspot_ssid = update->ssid;
+        const auto restore_previous_hotspot = [&] {
+          for (int attempt = 0; attempt < 2; ++attempt) {
+            if (aa2acp::iap2::start_management_hotspot(
+                    previous.wifi_interface, previous.management_hotspot_ssid,
+                    previous.management_hotspot_passphrase))
+              return true;
+          }
+          return false;
+        };
+        if (!aa2acp::iap2::start_management_hotspot(
+                updated.wifi_interface, updated.management_hotspot_ssid,
+                updated.management_hotspot_passphrase)) {
+          apply_failed = true;
+          rollback_failed = !restore_previous_hotspot();
+        } else {
+          saved = aa2acp::bridge::save_config(config_path, updated);
+          if (saved) {
+            std::lock_guard lock(config_mutex);
+            config = updated;
           } else {
-            saved = aa2acp::bridge::save_config(config_path, updated);
-            if (saved)
-              config = updated;
-            else
-              rollback_failed = !restore_previous_hotspot();
+            rollback_failed = !restore_previous_hotspot();
           }
         }
         if (!saved) {
@@ -1451,8 +1456,11 @@ int main(int argc, char **argv) {
           (!new_hotspot_password ||
            (hotspot_passphrase_confirm &&
             *hotspot_passphrase_confirm == *hotspot_passphrase))) {
-        std::lock_guard lock(config_mutex);
-        previous = config;
+        std::lock_guard transaction_lock(config_transaction_mutex);
+        {
+          std::lock_guard lock(config_mutex);
+          previous = config;
+        }
         mac = selected && !selected->empty() ? *selected
               : manual && !manual->empty()   ? *manual
                                              : previous.head_unit_mac;
@@ -1491,9 +1499,10 @@ int main(int argc, char **argv) {
         } else {
           config_saved =
               aa2acp::bridge::save_config(config_path, updated_config);
-          if (config_saved)
+          if (config_saved) {
+            std::lock_guard lock(config_mutex);
             config = updated_config;
-          else if (hotspot_changed)
+          } else if (hotspot_changed)
             hotspot_rollback_failed = !restore_previous_hotspot();
         }
       }

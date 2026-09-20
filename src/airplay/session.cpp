@@ -33,6 +33,15 @@
 
 namespace {
 
+bool append_limited(std::vector<std::uint8_t> &target,
+                    const std::span<const std::uint8_t> bytes,
+                    const std::size_t limit) {
+  if (target.size() > limit || bytes.size() > limit - target.size())
+    return false;
+  target.insert(target.end(), bytes.begin(), bytes.end());
+  return true;
+}
+
 aa2acp::airplay::RequestHeaders pairing_headers(const int hkp) {
   constexpr auto kAppleEpoch = std::chrono::seconds(978307200);
   const auto now = std::chrono::duration_cast<std::chrono::seconds>(
@@ -947,10 +956,11 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
       const auto count = recv(socket_fd, buffer.data(), buffer.size(), 0);
       if (count <= 0)
         break;
-      response_bytes.insert(response_bytes.end(), buffer.begin(),
-                            buffer.begin() + count);
       constexpr std::size_t kMaxResponseBytes = 1024 * 1024;
-      if (response_bytes.size() > kMaxResponseBytes) {
+      if (!append_limited(
+              response_bytes,
+              std::span(buffer).first(static_cast<std::size_t>(count)),
+              kMaxResponseBytes)) {
         aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
             << "AirPlay: response exceeded 1 MiB without completing\n";
         close(socket_fd);
@@ -1007,10 +1017,11 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
       const auto count = recv(socket_fd, buffer.data(), buffer.size(), 0);
       if (count <= 0)
         break;
-      response_bytes.insert(response_bytes.end(), buffer.begin(),
-                            buffer.begin() + count);
       constexpr std::size_t kMaxResponseBytes = 1024 * 1024;
-      if (response_bytes.size() > kMaxResponseBytes) {
+      if (!append_limited(
+              response_bytes,
+              std::span(buffer).first(static_cast<std::size_t>(count)),
+              kMaxResponseBytes)) {
         aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
             << "AirPlay: response exceeded 1 MiB without completing\n";
         close(socket_fd);
@@ -1102,10 +1113,11 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
       const auto count = recv(socket_fd, buffer.data(), buffer.size(), 0);
       if (count <= 0)
         break;
-      response_bytes.insert(response_bytes.end(), buffer.begin(),
-                            buffer.begin() + count);
       constexpr std::size_t kMaxResponseBytes = 1024 * 1024;
-      if (response_bytes.size() > kMaxResponseBytes) {
+      if (!append_limited(
+              response_bytes,
+              std::span(buffer).first(static_cast<std::size_t>(count)),
+              kMaxResponseBytes)) {
         aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
             << "AirPlay: response exceeded 1 MiB without completing\n";
         close(socket_fd);
@@ -1205,14 +1217,15 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     if (count <= 0)
       break;
     constexpr std::size_t kMaxResponseBytes = 1024 * 1024;
-    if (response_bytes.size() > kMaxResponseBytes) {
+    if (!append_limited(
+            response_bytes,
+            std::span(buffer).first(static_cast<std::size_t>(count)),
+            kMaxResponseBytes)) {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
           << "AirPlay: pair-verify response exceeded 1 MiB\n";
       close(socket_fd);
       return 1;
     }
-    response_bytes.insert(response_bytes.end(), buffer.begin(),
-                          buffer.begin() + count);
   }
   const auto verify_m2_response =
       aa2acp::airplay::parse_response(response_bytes);
@@ -1323,14 +1336,15 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     if (count <= 0)
       break;
     constexpr std::size_t kMaxResponseBytes = 1024 * 1024;
-    if (response_bytes.size() > kMaxResponseBytes) {
+    if (!append_limited(
+            response_bytes,
+            std::span(buffer).first(static_cast<std::size_t>(count)),
+            kMaxResponseBytes)) {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
           << "AirPlay: pair-verify response exceeded 1 MiB\n";
       close(socket_fd);
       return 1;
     }
-    response_bytes.insert(response_bytes.end(), buffer.begin(),
-                          buffer.begin() + count);
   }
   const auto verify_m4_response =
       aa2acp::airplay::parse_response(response_bytes);

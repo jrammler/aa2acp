@@ -147,16 +147,17 @@ void PhoneLink::start(const std::chrono::steady_clock::time_point now) {
 
 void PhoneLink::receive(const std::span<const std::uint8_t> bytes,
                         const std::chrono::steady_clock::time_point now) {
-  receive_buffer_.insert(receive_buffer_.end(), bytes.begin(), bytes.end());
   // A peer sending valid headers with huge lengths (or flooding frames faster
   // than they are consumed) must not grow the buffer without bound.
   constexpr std::size_t kMaxReceiveBuffer = 128 * 1024;
-  if (receive_buffer_.size() > kMaxReceiveBuffer) {
+  if (receive_buffer_.size() > kMaxReceiveBuffer ||
+      bytes.size() > kMaxReceiveBuffer - receive_buffer_.size()) {
     state_ = State::Dead;
     receive_buffer_.clear();
     log("iAP2: receive buffer overflow; link is dead");
     return;
   }
+  receive_buffer_.insert(receive_buffer_.end(), bytes.begin(), bytes.end());
 
   if (state_ == State::Detect) {
     const auto marker =

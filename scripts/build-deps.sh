@@ -40,14 +40,23 @@ CMAKE_FLAGS=(
 
 PATCH_HASH=$(cat "$ROOT"/patches/aasdk/*.patch | sha256sum | cut -d' ' -f1)
 CMAKE_FLAGS_HASH=$(printf '%s\n' "${CMAKE_FLAGS[@]}" | sha256sum | cut -d' ' -f1)
+AASDK_URL_HASH=$(printf '%s' "$AASDK_URL" | sha256sum | cut -d' ' -f1)
 # Include toolchain versions and all dependency build flags in the stamp:
 # protobuf-generated headers and C++ objects must match the compiler/protoc and
 # configuration that aa2acp itself will use.
 TOOLCHAIN=$(protoc --version; cmake --version | head -1; ${CC:-gcc} --version | head -1; ${CXX:-g++} --version | head -1)
 STAMP_FILE="$INSTALL_DIR/.built-stamp"
-STAMP_EXPECTED="rev=$AASDK_REV patches=$PATCH_HASH cmake_flags=$CMAKE_FLAGS_HASH toolchain=$(printf '%s\n' "$TOOLCHAIN" | sha256sum | cut -d' ' -f1)"
+STAMP_EXPECTED="url=$AASDK_URL_HASH rev=$AASDK_REV patches=$PATCH_HASH cmake_flags=$CMAKE_FLAGS_HASH toolchain=$(printf '%s\n' "$TOOLCHAIN" | sha256sum | cut -d' ' -f1)"
 
-if [[ -f "$STAMP_FILE" && "$(cat "$STAMP_FILE")" == "$STAMP_EXPECTED" ]]; then
+install_complete() {
+    [[ -e "$INSTALL_DIR/lib/libaasdk.so" ]] &&
+        [[ -e "$INSTALL_DIR/lib/libaap_protobuf.so" ]] &&
+        [[ -d "$INSTALL_DIR/include/aasdk" ]] &&
+        [[ -d "$INSTALL_DIR/include/aap_protobuf" ]]
+}
+
+if [[ -f "$STAMP_FILE" && "$(cat "$STAMP_FILE")" == "$STAMP_EXPECTED" ]] &&
+   install_complete; then
     echo "dependencies up to date ($STAMP_EXPECTED), nothing to do"
     exit 0
 fi

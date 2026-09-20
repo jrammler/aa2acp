@@ -15,8 +15,9 @@ Real-head-unit testing has verified the wireless connection bootstrap:
    setup.
 
 Screen-stream setup and Android Auto H.264 forwarding remain under active
-compatibility testing. Audio, input/control, and call-audio forwarding are not
-yet verified end to end. The active work is in [TODO.md](TODO.md).
+compatibility testing. Audio, microphone, and input/control forwarding are
+implemented but not yet verified end to end; call-audio interoperability
+remains incomplete. The active work is in [TODO.md](TODO.md).
 
 ## Runbook
 
