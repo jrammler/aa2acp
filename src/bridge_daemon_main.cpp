@@ -348,6 +348,12 @@ void ensure_management_hotspot_settings(aa2acp::bridge::Config &config) {
     config.management_hotspot_passphrase = kDefaultManagementHotspotPassphrase;
 }
 
+bool valid_management_hotspot_passphrase(const std::string_view passphrase) {
+  return passphrase != kDefaultManagementHotspotPassphrase &&
+         passphrase.size() >= 8 &&
+         passphrase.find_first_of("\r\n=") == std::string_view::npos;
+}
+
 bool management_hotspot_needs_setup(const aa2acp::bridge::Config &config) {
   return config.management_hotspot_passphrase ==
          kDefaultManagementHotspotPassphrase;
@@ -1163,9 +1169,7 @@ int main(int argc, char **argv) {
           form_field(body, "management_hotspot_change_ssid").has_value();
       if (!passphrase || !confirmation || *passphrase != *confirmation) {
         respond(400, "text/plain", "Passwords do not match\n");
-      } else if (*passphrase == kDefaultManagementHotspotPassphrase ||
-                 passphrase->size() < 8 ||
-                 passphrase->find_first_of("\r\n=") != std::string::npos) {
+      } else if (!valid_management_hotspot_passphrase(*passphrase)) {
         respond(400, "text/plain", "Choose a different valid password\n");
       } else {
         const auto current = [&] {
@@ -1466,7 +1470,8 @@ int main(int argc, char **argv) {
       if (wifi && hotspot_ssid &&
           (!new_hotspot_password ||
            (hotspot_passphrase_confirm &&
-            *hotspot_passphrase_confirm == *hotspot_passphrase))) {
+            *hotspot_passphrase_confirm == *hotspot_passphrase &&
+            valid_management_hotspot_passphrase(*hotspot_passphrase)))) {
         std::lock_guard transaction_lock(config_transaction_mutex);
         {
           std::lock_guard lock(config_mutex);
