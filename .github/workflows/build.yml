@@ -76,6 +76,11 @@ jobs:
           fi
           cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ inputs.build_type || 'RelWithDebInfo' }} -DCMAKE_PREFIX_PATH="$PWD/.deps/install" -DAA2ACP_VERSION="$version"
 
+      - name: Inspect install RPATH configuration
+        run: |
+          grep -E '^CMAKE_(SKIP_RPATH|SKIP_INSTALL_RPATH):' build/CMakeCache.txt || true
+          grep -n -E 'RPATH_(CHECK|CHANGE)' build/cmake_install.cmake || true
+
       - name: Build
         run: cmake --build build -j"$(nproc)"
 
