@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <charconv>
 #include <chrono>
 #include <cstring>
 #include <fstream>
@@ -425,16 +426,34 @@ void service_event_channel(const int socket_fd, aa2acp::airplay::Bytes read_key,
       std::istringstream lines(request.substr(0, header_end));
       std::string line;
       std::string cseq;
+      std::size_t body_size{};
       while (std::getline(lines, line)) {
         if (line.ends_with('\r'))
           line.pop_back();
         if (line.starts_with("CSeq:"))
           cseq = line.substr(5);
+        if (line.starts_with("Content-Length:")) {
+          auto value = line.substr(std::string("Content-Length:").size());
+          value.erase(0, value.find_first_not_of(' '));
+          const auto [end, error] = std::from_chars(
+              value.data(), value.data() + value.size(), body_size);
+          if (error != std::errc{} || end != value.data() + value.size()) {
+            aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+                << "AirPlay: event channel request has invalid "
+                   "Content-Length\n";
+            close(socket_fd);
+            return;
+          }
+        }
       }
+      const auto request_size = header_end + 4 + body_size;
+      if (plaintext.size() < request_size)
+        continue;
       if (aa2acp::bridge::debug_logging_enabled())
         aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
             << "AirPlay: event channel request "
-            << request.substr(0, header_end) << '\n';
+            << request.substr(0, header_end) << " (body=" << body_size
+            << " byte(s))\n";
       std::string response =
           "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nAudio-Latency: 0\r\n";
       if (!cseq.empty())
@@ -450,7 +469,7 @@ void service_event_channel(const int socket_fd, aa2acp::airplay::Bytes read_key,
       }
       plaintext.erase(plaintext.begin(),
                       plaintext.begin() +
-                          static_cast<std::ptrdiff_t>(header_end + 4));
+                          static_cast<std::ptrdiff_t>(request_size));
     }
   }
   close(socket_fd);
