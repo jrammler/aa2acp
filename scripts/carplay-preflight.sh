@@ -77,7 +77,7 @@ if [[ -n $pi_host ]]; then
   # Killing this SSH process closes the remote journal follower instead of
   # waiting for journalctl to emit a further line after terminal state.
   ssh "$pi_host" \
-    'sudo -n journalctl -u aa2acp -n 0 -f -o short-iso' &
+    'sudo -n journalctl -u aa2acp -n 0 -f -o short-iso | grep --line-buffered -v "Management: GET / HTTP/1.1 -> 200"' &
   log_pid=$!
 fi
 cleanup() {
