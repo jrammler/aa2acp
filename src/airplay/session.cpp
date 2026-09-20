@@ -1485,7 +1485,7 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
         socket_fd, control, encrypted_read_buffer,
         aa2acp::airplay::encode_request("TEARDOWN", "rtsp://127.0.0.1/stream",
                                         cseq, {}, "application/octet-stream"),
-        cseq, timeout_seconds, options.stop_requested, "TEARDOWN");
+        cseq, timeout_seconds, {}, "TEARDOWN");
     if (!response || response->status != 200)
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
           << "AirPlay: TEARDOWN was not accepted\n";
@@ -1670,7 +1670,6 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
         audio_key.size() != 32) {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
           << "Encrypted media-audio SETUP failed\n";
-      close(socket_fd);
       return 1;
     }
     if (aa2acp::bridge::debug_logging_enabled())
@@ -1754,7 +1753,6 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   if (!screen_stream_id) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
         << "Unable to generate a screen stream connection ID\n";
-    close(socket_fd);
     return 1;
   }
   const auto screen_body =
@@ -1822,7 +1820,6 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     }
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
         << "Encrypted screen SETUP failed\n";
-    close(socket_fd);
     return 1;
   }
   if (aa2acp::bridge::debug_logging_enabled())
@@ -1840,7 +1837,6 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   if (!record_response || record_response->status != 200) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
         << "Encrypted RECORD failed\n";
-    close(socket_fd);
     return 1;
   }
   if (aa2acp::bridge::debug_logging_enabled())
@@ -1982,7 +1978,6 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   } stream_stop_guard{options.stop_streams};
   if (video_path.empty() && !options.next_video_frame) {
     send_teardown();
-    close(socket_fd);
     return 0;
   }
 
@@ -2010,22 +2005,18 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     if (!live_video) {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
           << "Unable to parse H.264 SPS/PPS from " << video_path << '\n';
-      close(socket_fd);
       return 1;
     }
     if (options.stop_requested && options.stop_requested()) {
-      close(socket_fd);
       return 0;
     }
     const auto access_unit = options.next_video_frame();
     if (!access_unit) {
       if (options.stop_requested && options.stop_requested()) {
-        close(socket_fd);
         return 0;
       }
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
           << "Android Auto video ended before H.264 SPS/PPS arrived\n";
-      close(socket_fd);
       return 1;
     }
     if (initial_access_units.size() >= kMaximumStartupVideoUnits ||
@@ -2033,7 +2024,6 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
           << "Android Auto video did not provide H.264 SPS/PPS within the "
              "startup buffer limit\n";
-      close(socket_fd);
       return 1;
     }
     startup_video_bytes += access_unit->size();
@@ -2045,8 +2035,18 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
         break;
       }
     }
-    if (!config)
-      nalus.insert(nalus.end(), unit_nalus.begin(), unit_nalus.end());
+    for (const auto &nalu : unit_nalus) {
+      if (nalu.empty() || ((nalu[0] & 0x1f) != 7 && (nalu[0] & 0x1f) != 8))
+        continue;
+      const auto type = nalu[0] & 0x1f;
+      nalus.erase(std::remove_if(nalus.begin(), nalus.end(),
+                                 [type](const auto &existing) {
+                                   return !existing.empty() &&
+                                          (existing[0] & 0x1f) == type;
+                                 }),
+                  nalus.end());
+    }
+    nalus.insert(nalus.end(), unit_nalus.begin(), unit_nalus.end());
     if (unit_keyframe) {
       startup_keyframe = true;
       // Keep only the first complete access unit containing an IDR. Earlier
@@ -2062,7 +2062,6 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   if (stream_key.size() != 32) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
         << "Unable to derive encrypted screen data-stream key\n";
-    close(socket_fd);
     return 1;
   }
   aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
@@ -2076,7 +2075,6 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
         << "AirPlay: screen data connection failed: " << data_stream_error
         << '\n';
-    close(socket_fd);
     return 1;
   }
   aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
@@ -2090,7 +2088,6 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
         << "AirPlay: unable to send H.264 video config: "
         << std::strerror(errno) << '\n';
     close(data_socket);
-    close(socket_fd);
     return 1;
   }
   aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
@@ -2137,14 +2134,12 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     for (const auto &access_unit : static_access_units) {
       if (options.stop_requested && options.stop_requested()) {
         close(data_socket);
-        close(socket_fd);
         return 0;
       }
       if (!send_access_unit(access_unit)) {
         aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
             << "Unable to send encrypted H.264 frame\n";
         close(data_socket);
-        close(socket_fd);
         return 1;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(33));
@@ -2155,7 +2150,6 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
           << "Unable to send encrypted H.264 frame\n";
       close(data_socket);
-      close(socket_fd);
       return 1;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(33));
@@ -2169,14 +2163,12 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
           << "Unable to send encrypted H.264 frame\n";
       close(data_socket);
-      close(socket_fd);
       return 1;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(33));
   }
   close(data_socket);
   send_teardown();
-  close(socket_fd);
   if (aa2acp::bridge::debug_logging_enabled())
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
         << "AirPlay: encrypted H.264 stream sent " << sent_frames << " frames ("

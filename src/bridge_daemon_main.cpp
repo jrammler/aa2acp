@@ -1524,9 +1524,7 @@ int main(int argc, char **argv) {
             return;
           client = request_queue.front();
           request_queue.pop_front();
-        }
-        {
-          std::lock_guard lock(active_clients_mutex);
+          std::lock_guard active_lock(active_clients_mutex);
           active_clients[index].store(client);
         }
         handle_client(client);

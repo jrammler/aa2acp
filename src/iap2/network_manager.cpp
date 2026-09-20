@@ -9,6 +9,7 @@
 #include <poll.h>
 #include <signal.h>
 #include <spawn.h>
+#include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -74,7 +75,8 @@ bool run_nmcli(std::vector<std::string> arguments,
         << "Wi-Fi: unable to capture nmcli diagnostics\n";
     return false;
   }
-  if (has_stdin && pipe2(input_pipe, O_CLOEXEC) != 0) {
+  if (has_stdin &&
+      socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, input_pipe) != 0) {
     if (quiet) {
       close(output_pipe[0]);
       close(output_pipe[1]);
@@ -122,8 +124,8 @@ bool run_nmcli(std::vector<std::string> arguments,
   if (has_stdin) {
     std::size_t offset{};
     while (offset < stdin_data.size()) {
-      const auto count = write(input_pipe[1], stdin_data.data() + offset,
-                               stdin_data.size() - offset);
+      const auto count = send(input_pipe[1], stdin_data.data() + offset,
+                              stdin_data.size() - offset, MSG_NOSIGNAL);
       if (count > 0) {
         offset += static_cast<std::size_t>(count);
         continue;
