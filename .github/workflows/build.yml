@@ -94,7 +94,6 @@ jobs:
 
       - name: Package
         run: |
-          set -x
           # Let dpkg-shlibdeps resolve the bundled aasdk libs (they are
           # shipped inside the deb, so no distro dependency is generated
           # for them; everything else gets a proper Depends entry).
@@ -121,8 +120,8 @@ jobs:
           test -s "$package_root/usr/share/aa2acp/display-preflight.h264"
           test -e "$package_root/usr/lib/aa2acp/libaasdk.so"
           test -e "$package_root/usr/lib/aa2acp/libaap_protobuf.so"
-          test -e "$package_root/lib/systemd/system/aa2acp.service"
-          test -e "$package_root/lib/udev/rules.d/70-aa2acp-android-auto.rules"
+          test -e "$package_root/usr/lib/systemd/system/aa2acp.service"
+          test -e "$package_root/usr/lib/udev/rules.d/70-aa2acp-android-auto.rules"
           test -e "$package_root/usr/share/polkit-1/rules.d/49-aa2acp-networkmanager.rules"
           test -x packaging/deb/postinst
           readelf -d "$package_root/usr/bin/aa2acp" | \
