@@ -972,6 +972,20 @@ int main(int argc, char **argv) {
       << ':' << port << '\n';
   const auto csrf_token = random_token();
   std::atomic_bool management_listener_rebind_requested{};
+  constexpr std::size_t kManagementWorkerCount = 4;
+  std::array<std::atomic<int>, kManagementWorkerCount> active_clients;
+  std::mutex active_clients_mutex;
+  for (auto &client : active_clients)
+    client.store(-1);
+  const auto finish_client = [&](const int client) {
+    std::lock_guard lock(active_clients_mutex);
+    for (auto &active : active_clients) {
+      int expected = client;
+      if (active.compare_exchange_strong(expected, -1))
+        break;
+    }
+    close(client);
+  };
   const auto handle_client = [&](const int client) {
     std::array<char, 4096> buffer{};
     std::string request;
@@ -999,7 +1013,7 @@ int main(int argc, char **argv) {
     while (request.find("\r\n\r\n") == std::string::npos &&
            request.size() <= 16 * 1024) {
       if (!receive_more()) {
-        close(client);
+        finish_client(client);
         return;
       }
     }
@@ -1018,12 +1032,12 @@ int main(int argc, char **argv) {
           std::from_chars(text.data(), text.data() + text.size(), length);
       if (text.empty() || parsed.ec != std::errc{} ||
           parsed.ptr != text.data() + text.size() || length > 16 * 1024) {
-        close(client);
+        finish_client(client);
         return;
       }
       while (request.size() < header_end + 4 + length) {
         if (!receive_more()) {
-          close(client);
+          finish_client(client);
           return;
         }
       }
@@ -1487,19 +1501,15 @@ int main(int argc, char **argv) {
           << "Management: unknown request\n";
       respond(400, "text/plain", "Unknown endpoint\n");
     }
-    close(client);
+    finish_client(client);
   };
 
-  constexpr std::size_t kManagementWorkerCount = 4;
   constexpr std::size_t kManagementQueueLimit = 16;
   std::mutex request_queue_mutex;
   std::condition_variable request_queue_ready;
   std::deque<int> request_queue;
   bool request_queue_stopping{};
   std::vector<std::jthread> request_workers;
-  std::array<std::atomic<int>, kManagementWorkerCount> active_clients;
-  for (auto &client : active_clients)
-    client.store(-1);
   request_workers.reserve(kManagementWorkerCount);
   for (std::size_t index = 0; index < kManagementWorkerCount; ++index) {
     request_workers.emplace_back([&, index] {
@@ -1514,10 +1524,12 @@ int main(int argc, char **argv) {
             return;
           client = request_queue.front();
           request_queue.pop_front();
+        }
+        {
+          std::lock_guard lock(active_clients_mutex);
           active_clients[index].store(client);
         }
         handle_client(client);
-        active_clients[index].store(-1);
       }
     });
   }
@@ -1596,10 +1608,13 @@ int main(int argc, char **argv) {
     request_queue.clear();
   }
   request_queue_ready.notify_all();
-  for (auto &client : active_clients) {
-    const auto fd = client.load();
-    if (fd >= 0)
-      shutdown(fd, SHUT_RDWR);
+  {
+    std::lock_guard lock(active_clients_mutex);
+    for (auto &client : active_clients) {
+      const auto fd = client.load();
+      if (fd >= 0)
+        shutdown(fd, SHUT_RDWR);
+    }
   }
   request_workers.clear();
   wifi_refresh_worker.request_stop();

@@ -54,7 +54,8 @@ std::optional<std::string> ipv4_address(const std::string &interface_name) {
 }
 
 bool run_nmcli(std::vector<std::string> arguments,
-               const bool allow_inactive = false, const bool quiet = false) {
+               const bool allow_inactive = false, const bool quiet = false,
+               const std::string &stdin_data = {}) {
   const auto started = std::chrono::steady_clock::now();
   std::vector<char *> argv;
   argv.reserve(arguments.size() + 1);
@@ -66,34 +67,81 @@ bool run_nmcli(std::vector<std::string> arguments,
   posix_spawn_file_actions_t actions;
   posix_spawn_file_actions_t *action_pointer = nullptr;
   int output_pipe[2]{-1, -1};
-  if (quiet) {
-    if (pipe2(output_pipe, O_CLOEXEC) != 0) {
-      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
-          << "Wi-Fi: unable to capture nmcli diagnostics\n";
-      return false;
+  int input_pipe[2]{-1, -1};
+  const bool has_stdin = !stdin_data.empty();
+  if (quiet && pipe2(output_pipe, O_CLOEXEC) != 0) {
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Wi-Fi: unable to capture nmcli diagnostics\n";
+    return false;
+  }
+  if (has_stdin && pipe2(input_pipe, O_CLOEXEC) != 0) {
+    if (quiet) {
+      close(output_pipe[0]);
+      close(output_pipe[1]);
     }
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Wi-Fi: unable to provide nmcli secrets\n";
+    return false;
+  }
+  if (quiet || has_stdin) {
     posix_spawn_file_actions_init(&actions);
-    posix_spawn_file_actions_adddup2(&actions, output_pipe[1], STDOUT_FILENO);
-    posix_spawn_file_actions_adddup2(&actions, output_pipe[1], STDERR_FILENO);
-    posix_spawn_file_actions_addclose(&actions, output_pipe[0]);
-    posix_spawn_file_actions_addclose(&actions, output_pipe[1]);
+    if (quiet) {
+      posix_spawn_file_actions_adddup2(&actions, output_pipe[1], STDOUT_FILENO);
+      posix_spawn_file_actions_adddup2(&actions, output_pipe[1], STDERR_FILENO);
+      posix_spawn_file_actions_addclose(&actions, output_pipe[0]);
+      posix_spawn_file_actions_addclose(&actions, output_pipe[1]);
+    }
+    if (has_stdin) {
+      posix_spawn_file_actions_adddup2(&actions, input_pipe[0], STDIN_FILENO);
+      posix_spawn_file_actions_addclose(&actions, input_pipe[0]);
+      posix_spawn_file_actions_addclose(&actions, input_pipe[1]);
+    }
     action_pointer = &actions;
   }
   const auto result = posix_spawnp(&child, argv.front(), action_pointer,
                                    nullptr, argv.data(), environ);
-  if (quiet) {
+  if (quiet || has_stdin)
     posix_spawn_file_actions_destroy(&actions);
+  if (quiet) {
     close(output_pipe[1]);
     const auto flags = fcntl(output_pipe[0], F_GETFL);
     if (flags >= 0)
       fcntl(output_pipe[0], F_SETFL, flags | O_NONBLOCK);
   }
+  if (has_stdin)
+    close(input_pipe[0]);
   if (result != 0) {
     if (quiet)
       close(output_pipe[0]);
+    if (has_stdin)
+      close(input_pipe[1]);
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
         << "Wi-Fi: unable to run nmcli (error " << result << ")\n";
     return false;
+  }
+  if (has_stdin) {
+    std::size_t offset{};
+    while (offset < stdin_data.size()) {
+      const auto count = write(input_pipe[1], stdin_data.data() + offset,
+                               stdin_data.size() - offset);
+      if (count > 0) {
+        offset += static_cast<std::size_t>(count);
+        continue;
+      }
+      if (count < 0 && errno == EINTR)
+        continue;
+      close(input_pipe[1]);
+      (void)kill(child, SIGTERM);
+      for (;;) {
+        const auto waited = waitpid(child, nullptr, 0);
+        if (waited >= 0 || errno != EINTR)
+          break;
+      }
+      if (quiet)
+        close(output_pipe[0]);
+      return false;
+    }
+    close(input_pipe[1]);
   }
   int status{};
   // nmcli exits 6 when disconnecting an interface that is already inactive.
@@ -225,25 +273,7 @@ bool join_with_networkmanager(const AccessoryWifiConfiguration &configuration,
       << "Wi-Fi: waiting for accessory SSID to appear after rescan\n";
   std::this_thread::sleep_for(std::chrono::seconds(2));
   aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
-      << "Wi-Fi: trying a fresh connection (NetworkManager may wait up to 30 "
-         "seconds)\n";
-  std::vector<std::string> arguments{
-      "nmcli", "--wait", "30", "device", "wifi", "connect", configuration.ssid};
-  if (!configuration.passphrase.empty()) {
-    arguments.emplace_back("password");
-    arguments.push_back(configuration.passphrase);
-  }
-  arguments.emplace_back("ifname");
-  arguments.push_back(interface_name);
-  if (run_nmcli(std::move(arguments), false, true)) {
-    return true;
-  }
-  aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
-      << "Wi-Fi: fresh NetworkManager connection failed; attempting "
-         "security-profile repair\n";
-  // NetworkManager sometimes creates a profile before refusing the initial
-  // connect because WPA parameters were implicit. Repair it using the iAP2
-  // security type, then bring the profile up explicitly.
+      << "Wi-Fi: preparing a fresh NetworkManager profile\n";
   std::string key_management;
   switch (configuration.security_type) {
   case 0:
@@ -275,14 +305,38 @@ bool join_with_networkmanager(const AccessoryWifiConfiguration &configuration,
     modify.emplace_back("802-11-wireless-security.proto");
     modify.emplace_back("rsn");
   }
-  if (!configuration.passphrase.empty()) {
-    modify.emplace_back("wifi-sec.psk");
-    modify.push_back(configuration.passphrase);
+  if (!run_nmcli(modify, false, true)) {
+    std::vector<std::string> add{"nmcli",
+                                 "connection",
+                                 "add",
+                                 "type",
+                                 "wifi",
+                                 "ifname",
+                                 interface_name,
+                                 "con-name",
+                                 configuration.ssid,
+                                 "ssid",
+                                 configuration.ssid,
+                                 "wifi-sec.key-mgmt",
+                                 key_management};
+    if (configuration.security_type == 2 || configuration.security_type == 3) {
+      add.emplace_back("802-11-wireless-security.proto");
+      add.emplace_back("rsn");
+    }
+    if (!run_nmcli(std::move(add), false, true))
+      return false;
   }
-  return run_nmcli(std::move(modify), false, true) &&
-         run_nmcli({"nmcli", "--wait", "30", "connection", "up", "id",
-                    configuration.ssid, "ifname", interface_name},
-                   false, true);
+  std::vector<std::string> up{
+      "nmcli", "--wait",           "30",     "connection",  "up",
+      "id",    configuration.ssid, "ifname", interface_name};
+  std::string password_file;
+  if (!configuration.passphrase.empty()) {
+    up.emplace_back("passwd-file");
+    up.emplace_back("/dev/stdin");
+    password_file =
+        "802-11-wireless-security.psk:" + configuration.passphrase + '\n';
+  }
+  return run_nmcli(std::move(up), false, true, password_file);
 }
 
 std::optional<std::string>
@@ -361,42 +415,40 @@ bool start_management_hotspot(const std::string &interface_name,
   aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
       << "Wi-Fi: starting configured management hotspot on " << interface_name
       << '\n';
-  // Updating is idempotent. A failed modify means this is the first launch.
-  if (!run_nmcli({"nmcli",
-                  "connection",
-                  "modify",
-                  kManagementProfile,
-                  "connection.interface-name",
-                  interface_name,
-                  "connection.autoconnect",
-                  "yes",
-                  "connection.autoconnect-priority",
-                  "100",
-                  "802-11-wireless.mode",
-                  "ap",
-                  "802-11-wireless.ssid",
-                  ssid,
-                  "ipv4.method",
-                  "shared",
-                  "ipv6.method",
-                  "disabled",
-                  "802-11-wireless-security.key-mgmt",
-                  "wpa-psk",
-                  "802-11-wireless-security.psk",
-                  passphrase},
-                 false, true) &&
-      !run_nmcli({"nmcli",        "connection",   "add",
-                  "type",         "wifi",         "ifname",
-                  interface_name, "con-name",     kManagementProfile,
-                  "ssid",         ssid,           "802-11-wireless.mode",
-                  "ap",           "ipv4.method",  "shared",
-                  "ipv6.method",  "disabled",     "wifi-sec.key-mgmt",
-                  "wpa-psk",      "wifi-sec.psk", passphrase},
-                 false, true))
-    return false;
+  const std::vector<std::string> modify{"nmcli",
+                                        "connection",
+                                        "modify",
+                                        kManagementProfile,
+                                        "connection.interface-name",
+                                        interface_name,
+                                        "connection.autoconnect",
+                                        "yes",
+                                        "connection.autoconnect-priority",
+                                        "100",
+                                        "802-11-wireless.mode",
+                                        "ap",
+                                        "802-11-wireless.ssid",
+                                        ssid,
+                                        "ipv4.method",
+                                        "shared",
+                                        "ipv6.method",
+                                        "disabled",
+                                        "802-11-wireless-security.key-mgmt",
+                                        "wpa-psk"};
+  if (!run_nmcli(modify, false, true)) {
+    if (!run_nmcli({"nmcli", "connection", "add", "type", "wifi", "ifname",
+                    interface_name, "con-name", kManagementProfile, "ssid",
+                    ssid, "802-11-wireless.mode", "ap", "ipv4.method", "shared",
+                    "ipv6.method", "disabled", "wifi-sec.key-mgmt", "wpa-psk"},
+                   false, true))
+      return false;
+  }
+  const auto password_file =
+      std::string("802-11-wireless-security.psk:") + passphrase + '\n';
   if (!run_nmcli({"nmcli", "--wait", "30", "connection", "up", "id",
-                  kManagementProfile, "ifname", interface_name},
-                 false, true))
+                  kManagementProfile, "ifname", interface_name, "passwd-file",
+                  "/dev/stdin"},
+                 false, true, password_file))
     return false;
   if (const auto address = ipv4_address(interface_name))
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)

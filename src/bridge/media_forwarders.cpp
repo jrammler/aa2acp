@@ -326,8 +326,8 @@ void VideoSocketForwarder::push(
     // the latest decoder entry point and every dependent frame after it.
     keyframe_ = frame;
     frames_.clear();
-    queued_bytes_ = frame.size();
-    frames_.push_back(std::move(frame));
+    queued_bytes_ = keyframe_.size();
+    frames_.push_back(keyframe_);
     frames_ready_.notify_one();
     if (debug_logging_enabled())
       log(LogLevel::debug) << "Bridge daemon: retained Android Auto H.264 "

@@ -87,21 +87,35 @@ bool ManagementListener::rebind(std::string interface_name) {
   const auto previous_fd = fd_;
   const auto previous_interface = interface_name_;
   const auto previous_address = address_;
-  fd_ = -1;
-  if (previous_fd >= 0)
-    close(previous_fd);
 
+  // Keep the current listener alive while a replacement can be opened. This
+  // avoids dropping the management service on transient address/interface
+  // changes when both sockets can coexist during the handover.
   in_addr_t replacement_address{};
-  const auto replacement = open_listener(interface_name, replacement_address);
+  bool previous_closed = false;
+  auto replacement = open_listener(interface_name, replacement_address);
+  if (replacement < 0 && previous_fd >= 0) {
+    // The old listener normally owns the port, so retry after closing it. If
+    // this second attempt fails, restore the old binding before reporting the
+    // rebind failure.
+    close(previous_fd);
+    previous_closed = true;
+    fd_ = -1;
+    replacement = open_listener(interface_name, replacement_address);
+  }
   if (replacement < 0) {
-    in_addr_t restored_address{};
-    fd_ = open_listener(previous_interface, restored_address);
-    if (fd_ >= 0)
-      address_ = restored_address;
-    else
-      address_ = previous_address;
+    if (previous_fd >= 0 && fd_ < 0) {
+      in_addr_t restored_address{};
+      fd_ = open_listener(previous_interface, restored_address);
+      if (fd_ >= 0)
+        address_ = restored_address;
+      else
+        address_ = previous_address;
+    }
     return false;
   }
+  if (previous_fd >= 0 && !previous_closed && previous_fd != replacement)
+    close(previous_fd);
   fd_ = replacement;
   address_ = replacement_address;
   interface_name_ = std::move(interface_name);

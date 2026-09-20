@@ -41,8 +41,9 @@ provides two artifacts:
 
 - `aa2acp.deb` — an arm64 Debian package with the binary, systemd units, udev
   rule, and maintainer scripts. This is what most users want.
-- `aa2acp` — the raw arm64 binary, mainly useful for developers running it
-  from a source tree (see Development).
+- `aa2acp` — the raw arm64 binary, mainly useful for developers. It is not a
+  standalone bundle: it requires the matching AASDK libraries and distro
+  runtime dependencies. Use the Debian package for deployment.
 
 Install the package:
 

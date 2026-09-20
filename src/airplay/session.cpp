@@ -167,6 +167,43 @@ int connect_udp(const std::string &host, const std::string &port) {
   return socket_fd;
 }
 
+bool send_udp_packet(
+    const int socket_fd, const std::span<const std::uint8_t> bytes,
+    const std::function<bool()> &stop_requested = std::function<bool()>{}) {
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  for (;;) {
+    if (stop_requested && stop_requested())
+      return false;
+    const auto remaining =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now());
+    if (remaining <= std::chrono::milliseconds::zero())
+      return false;
+    pollfd descriptor{socket_fd, POLLOUT, 0};
+    const auto ready =
+        poll(&descriptor, 1,
+             static_cast<int>(std::min<std::int64_t>(100, remaining.count())));
+    if (ready < 0) {
+      if (errno == EINTR)
+        continue;
+      return false;
+    }
+    if (ready == 0)
+      continue;
+    if ((descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0)
+      return false;
+    const auto count = send(socket_fd, bytes.data(), bytes.size(),
+                            MSG_NOSIGNAL | MSG_DONTWAIT);
+    if (count == static_cast<ssize_t>(bytes.size()))
+      return true;
+    if (count < 0 &&
+        (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK))
+      continue;
+    return false;
+  }
+}
+
 bool send_all(
     const int socket_fd, const std::span<const std::uint8_t> bytes,
     const std::function<bool()> &stop_requested = std::function<bool()>{}) {
@@ -1855,8 +1892,7 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
         aa2acp::airplay::Bytes packet(header.begin(), header.end());
         packet.insert(packet.end(), encrypted->begin(), encrypted->end());
         packet.insert(packet.end(), nonce.begin(), nonce.end());
-        if (send(media_socket, packet.data(), packet.size(), MSG_NOSIGNAL) !=
-            static_cast<ssize_t>(packet.size())) {
+        if (!send_udp_packet(media_socket, packet, options.stop_requested)) {
           aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
               << "Unable to send encrypted Android Auto media audio\n";
           break;
@@ -1921,8 +1957,7 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
         aa2acp::airplay::Bytes packet(header.begin(), header.end());
         packet.insert(packet.end(), encrypted->begin(), encrypted->end());
         packet.insert(packet.end(), nonce.begin(), nonce.end());
-        if (send(fd, packet.data(), packet.size(), MSG_NOSIGNAL) !=
-            static_cast<ssize_t>(packet.size()))
+        if (!send_udp_packet(fd, packet, options.stop_requested))
           break;
         ++sequence;
         timestamp += static_cast<std::uint32_t>(payload.size() / 2);
@@ -1970,7 +2005,7 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   std::optional<aa2acp::airplay::Bytes> config;
   while (!config || (live_video && !startup_keyframe)) {
     config = avcc_config(nalus);
-    if (config)
+    if (config && (!live_video || startup_keyframe))
       break;
     if (!live_video) {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
