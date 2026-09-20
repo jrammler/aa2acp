@@ -115,7 +115,8 @@ jobs:
           test -e "$package_root/usr/share/polkit-1/rules.d/49-aa2acp-networkmanager.rules"
           test -x packaging/deb/postinst
           readelf -d "$package_root/usr/bin/aa2acp" | \
-            grep -Fq '$ORIGIN/../lib/aa2acp'
+            grep -E '(RPATH|RUNPATH)' | tee package-rpath.txt
+          grep -Fq '$ORIGIN/../lib/aa2acp' package-rpath.txt
           ldd "$package_root/usr/bin/aa2acp" | tee package-ldd.txt
           ! grep -q 'not found' package-ldd.txt
 
