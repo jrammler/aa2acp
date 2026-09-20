@@ -194,6 +194,14 @@ target_link_libraries(aa2acp PRIVATE bridge_config bridge_daemon_log bridge_medi
 # works for both /usr/bin + /usr/lib/aa2acp Debian installs and custom prefixes.
 set_property(TARGET aa2acp PROPERTY INSTALL_RPATH
              "\$ORIGIN/../lib/aa2acp")
+# Debian's CMake policy environment may request stripped RPATHs globally. The
+# private libraries are deliberately outside the loader's default directories,
+# so this executable must retain its relative install RUNPATH.
+set(CMAKE_SKIP_RPATH FALSE)
+set(CMAKE_SKIP_INSTALL_RPATH FALSE)
+set_property(TARGET aa2acp PROPERTY SKIP_BUILD_RPATH FALSE)
+set_property(TARGET aa2acp PROPERTY BUILD_WITH_INSTALL_RPATH FALSE)
+set_property(TARGET aa2acp PROPERTY INSTALL_RPATH_USE_LINK_PATH FALSE)
 target_compile_options(aa2acp PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 add_executable(aa2acp-android-auto-usb src/android_auto_usb_main.cpp)
