@@ -5,6 +5,10 @@ project(aa2acp LANGUAGES CXX)
 if(POLICY CMP0167)
   cmake_policy(SET CMP0167 NEW)
 endif()
+# Preserve $ORIGIN literally in generated install scripts and packages.
+if(POLICY CMP0095)
+  cmake_policy(SET CMP0095 NEW)
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -193,15 +197,7 @@ target_link_libraries(aa2acp PRIVATE bridge_config bridge_daemon_log bridge_medi
 # Resolve bundled private libraries relative to the installed executable. This
 # works for both /usr/bin + /usr/lib/aa2acp Debian installs and custom prefixes.
 set_property(TARGET aa2acp PROPERTY INSTALL_RPATH
-             "\$ORIGIN/../lib/aa2acp")
-# Debian's CMake policy environment may request stripped RPATHs globally. The
-# private libraries are deliberately outside the loader's default directories,
-# so this executable must retain its relative install RUNPATH.
-set(CMAKE_SKIP_RPATH FALSE)
-set(CMAKE_SKIP_INSTALL_RPATH FALSE)
-set_property(TARGET aa2acp PROPERTY SKIP_BUILD_RPATH FALSE)
-set_property(TARGET aa2acp PROPERTY BUILD_WITH_INSTALL_RPATH FALSE)
-set_property(TARGET aa2acp PROPERTY INSTALL_RPATH_USE_LINK_PATH FALSE)
+             "$ORIGIN/../lib/aa2acp")
 target_compile_options(aa2acp PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 add_executable(aa2acp-android-auto-usb src/android_auto_usb_main.cpp)
