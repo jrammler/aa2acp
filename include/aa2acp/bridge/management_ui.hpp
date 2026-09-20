@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "aa2acp/bridge/bluez_inventory.hpp"
@@ -49,6 +50,12 @@ struct Snapshot {
   std::string pending_management_hotspot_ssid;
 };
 
+inline constexpr std::string_view kDefaultHotspotPassphrase{"changeme"};
+
+// Validates passwords accepted by management endpoints. The default password
+// is reserved for initial setup and must never be restored through an update.
+bool valid_hotspot_passphrase(std::string_view passphrase);
+
 std::string html_escape(const std::string &value);
 std::string random_token();
 std::string url_decode(const std::string &value);
@@ -56,6 +63,19 @@ std::optional<std::string> form_field(const std::string &body,
                                       const std::string &wanted);
 std::optional<std::string> query_field(const std::string &request,
                                        const std::string &wanted);
+
+struct HttpRequestFraming {
+  enum class Status { incomplete, invalid, complete };
+  Status status{Status::incomplete};
+  std::string_view body;
+};
+
+// Validates a single HTTP request's headers and exact Content-Length body.
+// Extra bytes are invalid because the management server closes each connection
+// after one request rather than supporting pipelining.
+HttpRequestFraming frame_http_request(std::string_view request,
+                                      std::size_t maximum_headers,
+                                      std::size_t maximum_body);
 
 bool send_response(int client, int status, const char *type,
                    const std::string &body, const std::string &extra = {});

@@ -16,7 +16,6 @@
 #include "aa2acp/bridge/logging.hpp"
 
 namespace aa2acp::bridge {
-namespace {
 
 void kill_worker_process_group(const pid_t pid) {
   // The child is a process-group leader. Kill its group so subprocesses such
@@ -25,8 +24,6 @@ void kill_worker_process_group(const pid_t pid) {
   if (pid > 0 && kill(-pid, SIGKILL) != 0 && errno == ESRCH)
     kill(pid, SIGKILL);
 }
-
-} // namespace
 
 CarPlayWorker::CarPlayWorker() {
   int control[2]{-1, -1};

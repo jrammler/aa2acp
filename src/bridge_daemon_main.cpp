@@ -68,11 +68,13 @@ using aa2acp::bridge::RecentLog;
 using aa2acp::bridge::VideoSocketForwarder;
 using aa2acp::bridge::management::form_field;
 using aa2acp::bridge::management::html_escape;
+using aa2acp::bridge::management::kDefaultHotspotPassphrase;
 using aa2acp::bridge::management::query_field;
 using aa2acp::bridge::management::random_token;
 using aa2acp::bridge::management::render_logs_page;
 using aa2acp::bridge::management::render_page;
 using aa2acp::bridge::management::send_response;
+using aa2acp::bridge::management::valid_hotspot_passphrase;
 using aa2acp::bridge::management::wifi_interfaces;
 
 std::unique_ptr<CarPlayWorker> carplay_worker;
@@ -91,51 +93,6 @@ struct PendingManagementHotspotUpdate {
   std::string ssid;
 };
 std::optional<PendingManagementHotspotUpdate> pending_management_hotspot_update;
-
-std::optional<std::size_t> content_length(std::string_view headers,
-                                          bool &valid) {
-  std::optional<std::size_t> result;
-  std::size_t line_start = 0;
-  while (line_start < headers.size()) {
-    const auto line_end = headers.find("\r\n", line_start);
-    const auto line =
-        headers.substr(line_start, line_end == std::string_view::npos
-                                       ? headers.size() - line_start
-                                       : line_end - line_start);
-    const auto separator = line.find(':');
-    if (separator != std::string_view::npos) {
-      std::string name(line.substr(0, separator));
-      std::ranges::transform(name, name.begin(), [](const unsigned char value) {
-        return static_cast<char>(std::tolower(value));
-      });
-      std::size_t value_start = separator + 1;
-      while (value_start < line.size() &&
-             std::isspace(static_cast<unsigned char>(line[value_start])))
-        ++value_start;
-      if (name == "content-length") {
-        std::size_t value_end = line.size();
-        while (value_end > value_start &&
-               std::isspace(static_cast<unsigned char>(line[value_end - 1])))
-          --value_end;
-        std::size_t length{};
-        const auto value = line.substr(value_start, value_end - value_start);
-        const auto parsed =
-            std::from_chars(value.data(), value.data() + value.size(), length);
-        if (value.empty() || parsed.ec != std::errc{} ||
-            parsed.ptr != value.data() + value.size() ||
-            (result && *result != length)) {
-          valid = false;
-          return std::nullopt;
-        }
-        result = length;
-      }
-    }
-    if (line_end == std::string_view::npos)
-      break;
-    line_start = line_end + 2;
-  }
-  return result;
-}
 
 class SecureDiagnosticDump {
 public:
@@ -303,7 +260,6 @@ carplay_input_report(const std::span<const std::uint8_t> request) {
                                                : std::nullopt;
 }
 
-constexpr char kDefaultManagementHotspotPassphrase[] = "changeme";
 #ifdef AA2ACP_DISPLAY_PREFLIGHT_VIDEO
 constexpr char kDisplayPreflightVideo[] = AA2ACP_DISPLAY_PREFLIGHT_VIDEO;
 #else
@@ -345,18 +301,11 @@ void ensure_management_hotspot_settings(aa2acp::bridge::Config &config) {
     config.management_hotspot_ssid =
         management_hotspot_ssid(config.wifi_interface);
   if (config.management_hotspot_passphrase.size() < 8)
-    config.management_hotspot_passphrase = kDefaultManagementHotspotPassphrase;
-}
-
-bool valid_management_hotspot_passphrase(const std::string_view passphrase) {
-  return passphrase != kDefaultManagementHotspotPassphrase &&
-         passphrase.size() >= 8 &&
-         passphrase.find_first_of("\r\n=") == std::string_view::npos;
+    config.management_hotspot_passphrase = kDefaultHotspotPassphrase;
 }
 
 bool management_hotspot_needs_setup(const aa2acp::bridge::Config &config) {
-  return config.management_hotspot_passphrase ==
-         kDefaultManagementHotspotPassphrase;
+  return config.management_hotspot_passphrase == kDefaultHotspotPassphrase;
 }
 
 void refresh_bluetooth_inventory(ManagementState &state) {
@@ -1063,46 +1012,23 @@ int main(int argc, char **argv) {
       request.append(buffer.data(), static_cast<std::size_t>(count));
       return true;
     };
-    while (request.find("\r\n\r\n") == std::string::npos &&
-           request.size() <= 16 * 1024) {
-      if (!receive_more()) {
+    aa2acp::bridge::management::HttpRequestFraming framing;
+    for (;;) {
+      framing = aa2acp::bridge::management::frame_http_request(
+          request, 16 * 1024, 16 * 1024);
+      if (framing.status ==
+              aa2acp::bridge::management::HttpRequestFraming::Status::invalid ||
+          (framing.status == aa2acp::bridge::management::HttpRequestFraming::
+                                 Status::incomplete &&
+           !receive_more())) {
         finish_client(client);
         return;
       }
+      if (framing.status ==
+          aa2acp::bridge::management::HttpRequestFraming::Status::complete)
+        break;
     }
-    const auto header_end = request.find("\r\n\r\n");
-    if (header_end == std::string::npos) {
-      finish_client(client);
-      return;
-    }
-    bool content_length_valid = true;
-    const auto length = content_length(
-        std::string_view(request).substr(0, header_end), content_length_valid);
-    if (!content_length_valid || (length && *length > 16 * 1024)) {
-      finish_client(client);
-      return;
-    }
-    const auto body_start = header_end + 4;
-    const auto body_size = length.value_or(0);
-    if (body_start > std::numeric_limits<std::size_t>::max() - body_size) {
-      finish_client(client);
-      return;
-    }
-    const auto request_size = body_start + body_size;
-    while (request.size() < request_size) {
-      if (!receive_more()) {
-        finish_client(client);
-        return;
-      }
-    }
-    // This server processes exactly one request per connection. Reject bytes
-    // after the declared body rather than allowing them to affect form parsing
-    // or treating a pipelined request as part of this one.
-    if (request.size() != request_size) {
-      finish_client(client);
-      return;
-    }
-    const auto body = request.substr(body_start, body_size);
+    const std::string body(framing.body);
     const auto request_line_end = request.find("\r\n");
     const auto request_line = request.substr(0, request_line_end);
     const auto respond = [&](const int status, const char *type,
@@ -1169,7 +1095,7 @@ int main(int argc, char **argv) {
           form_field(body, "management_hotspot_change_ssid").has_value();
       if (!passphrase || !confirmation || *passphrase != *confirmation) {
         respond(400, "text/plain", "Passwords do not match\n");
-      } else if (!valid_management_hotspot_passphrase(*passphrase)) {
+      } else if (!valid_hotspot_passphrase(*passphrase)) {
         respond(400, "text/plain", "Choose a different valid password\n");
       } else {
         const auto current = [&] {
@@ -1471,7 +1397,7 @@ int main(int argc, char **argv) {
           (!new_hotspot_password ||
            (hotspot_passphrase_confirm &&
             *hotspot_passphrase_confirm == *hotspot_passphrase &&
-            valid_management_hotspot_passphrase(*hotspot_passphrase)))) {
+            valid_hotspot_passphrase(*hotspot_passphrase)))) {
         std::lock_guard transaction_lock(config_transaction_mutex);
         {
           std::lock_guard lock(config_mutex);

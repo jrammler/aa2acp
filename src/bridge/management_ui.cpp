@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <charconv>
 #include <fcntl.h>
 #include <map>
 #include <poll.h>
@@ -46,6 +47,11 @@ bool is_unnamed(const BluetoothDevice &device) {
 }
 
 } // namespace
+
+bool valid_hotspot_passphrase(const std::string_view passphrase) {
+  return passphrase != kDefaultHotspotPassphrase && passphrase.size() >= 8 &&
+         passphrase.find_first_of("\r\n=") == std::string_view::npos;
+}
 
 std::string html_escape(const std::string &value) {
   std::string escaped;
@@ -132,6 +138,70 @@ std::optional<std::string> query_field(const std::string &request,
     return std::nullopt;
   return form_field(request.substr(query_start + 1, path_end - query_start - 1),
                     wanted);
+}
+
+HttpRequestFraming frame_http_request(const std::string_view request,
+                                      const std::size_t maximum_headers,
+                                      const std::size_t maximum_body) {
+  const auto header_end = request.find("\r\n\r\n");
+  if (header_end == std::string_view::npos)
+    return {request.size() > maximum_headers
+                ? HttpRequestFraming::Status::invalid
+                : HttpRequestFraming::Status::incomplete,
+            {}};
+  if (header_end > maximum_headers)
+    return {HttpRequestFraming::Status::invalid, {}};
+
+  std::optional<std::size_t> body_size;
+  std::size_t line_start{};
+  while (line_start < header_end) {
+    const auto line_end = request.find("\r\n", line_start);
+    const auto line =
+        request.substr(line_start, (line_end == std::string_view::npos ||
+                                    line_end > header_end)
+                                       ? header_end - line_start
+                                       : line_end - line_start);
+    const auto separator = line.find(':');
+    if (separator != std::string_view::npos) {
+      std::string name(line.substr(0, separator));
+      std::ranges::transform(name, name.begin(), [](const unsigned char value) {
+        return static_cast<char>(std::tolower(value));
+      });
+      if (name == "content-length") {
+        const auto value_start = line.find_first_not_of(" \t", separator + 1);
+        auto value_end = line.size();
+        while (value_end > separator + 1 &&
+               std::isspace(static_cast<unsigned char>(line[value_end - 1])))
+          --value_end;
+        const auto value =
+            value_start == std::string_view::npos || value_start >= value_end
+                ? std::string_view{}
+                : line.substr(value_start, value_end - value_start);
+        std::size_t parsed{};
+        const auto result =
+            std::from_chars(value.data(), value.data() + value.size(), parsed);
+        if (value.empty() || result.ec != std::errc{} ||
+            result.ptr != value.data() + value.size() ||
+            (body_size && *body_size != parsed))
+          return {HttpRequestFraming::Status::invalid, {}};
+        body_size = parsed;
+      }
+    }
+    if (line_end == std::string_view::npos || line_end >= header_end)
+      break;
+    line_start = line_end + 2;
+  }
+  const auto body_start = header_end + 4;
+  const auto length = body_size.value_or(0);
+  if (length > maximum_body || body_start > request.max_size() - length)
+    return {HttpRequestFraming::Status::invalid, {}};
+  const auto request_size = body_start + length;
+  if (request.size() < request_size)
+    return {HttpRequestFraming::Status::incomplete, {}};
+  if (request.size() > request_size)
+    return {HttpRequestFraming::Status::invalid, {}};
+  return {HttpRequestFraming::Status::complete,
+          request.substr(body_start, length)};
 }
 
 bool send_response(const int client, const int status, const char *type,

@@ -14,6 +14,10 @@
 
 namespace aa2acp::bridge {
 
+// Sends SIGKILL to a worker process group, falling back to its leader if the
+// group already disappeared. Used when graceful CarPlay-worker shutdown fails.
+void kill_worker_process_group(pid_t pid);
+
 // Hosts the CarPlay/IAP2 Bluetooth worker in a forked child process so a
 // crashed or wedged session can be torn down without taking the daemon down.
 // Control messages cross a sequenced UNIX socket; worker output is piped to
