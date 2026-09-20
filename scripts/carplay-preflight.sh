@@ -77,7 +77,7 @@ if [[ -n $pi_host ]]; then
   # Killing this SSH process closes the remote journal follower instead of
   # waiting for journalctl to emit a further line after terminal state.
   ssh "$pi_host" \
-    'sudo -n journalctl -u aa2acp -n 0 -f -o short-iso | grep --line-buffered -E "Bluetooth:|iAP2: link established|CSM: identification|Wi-Fi: joining|AirPlay: (Pair-Setup|Pair-Verify|screen SETUP)|Management: CarPlay preflight"' &
+    'sudo -n journalctl -u aa2acp -n 0 -f -o short-iso | grep --line-buffered -E "Bluetooth:|iAP2: link established|CSM: identification|Wi-Fi: joining|AirPlay: (Pair-Setup|Pair-Verify|screen SETUP)|Encrypted screen SETUP|Management: CarPlay preflight"' &
   log_pid=$!
 fi
 cleanup() {
