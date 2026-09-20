@@ -173,6 +173,7 @@ FrameSocketReceiver::~FrameSocketReceiver() {
 }
 
 void FrameSocketReceiver::shutdown_client() {
+  std::lock_guard lock(client_mutex_);
   if (client_ >= 0)
     shutdown(client_, SHUT_RDWR);
 }
@@ -188,9 +189,12 @@ void FrameSocketReceiver::receive(const std::stop_token stop) {
         accept4(listener_, nullptr, nullptr, SOCK_CLOEXEC | SOCK_NONBLOCK);
     if (client < 0)
       continue;
-    if (client_ >= 0)
-      shutdown(client_, SHUT_RDWR);
-    client_ = client;
+    {
+      std::lock_guard lock(client_mutex_);
+      if (client_ >= 0)
+        shutdown(client_, SHUT_RDWR);
+      client_ = client;
+    }
     if (debug_logging_enabled())
       log(LogLevel::debug) << "Bridge daemon: connected to CarPlay " << name_
                            << " IPC\n";
@@ -212,8 +216,13 @@ void FrameSocketReceiver::receive(const std::stop_token stop) {
       if (callback_)
         callback_(frame);
     }
-    close(client);
-    client_ = -1;
+    {
+      std::lock_guard lock(client_mutex_);
+      if (client_ == client) {
+        client_ = -1;
+        close(client);
+      }
+    }
   }
 }
 

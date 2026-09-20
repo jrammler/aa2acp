@@ -1,6 +1,5 @@
 #pragma once
 
-#include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -39,7 +38,10 @@ private:
   const std::string name_;
   const Callback callback_;
   int listener_{-1};
-  std::atomic<int> client_{-1};
+  // Serializes the client fd's assignment, shutdown, and close so a reused fd
+  // can never be shut down by a concurrent destructor.
+  std::mutex client_mutex_;
+  int client_{-1};
   std::jthread worker_;
 };
 

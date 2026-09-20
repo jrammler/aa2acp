@@ -148,8 +148,9 @@ cmake --build build -j"$(nproc)"
 ctest --test-dir build --output-on-failure
 ```
 
-The dependency step is idempotent: it rebuilds only when `deps.lock` or a
-patch changes.
+The dependency step is idempotent: it rebuilds when `deps.lock`, patches,
+build flags, the compiler/CMake/protobuf toolchain, or the installed
+protobuf/Abseil/Boost dependency identity changes.
 
 ### Nix
 
