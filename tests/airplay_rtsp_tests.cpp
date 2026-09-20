@@ -120,6 +120,22 @@ int main() {
       !aa2acp::airplay::load_head_unit_capabilities(display_path, "DD:EE:FF"));
   std::filesystem::remove(display_path);
 
+  const aa2acp::airplay::PlistValue::Dictionary audio_only_info{
+      {"audioFormats", info.at("audioFormats")}};
+  const auto audio_only =
+      aa2acp::airplay::head_unit_capabilities(audio_only_info, "AA:BB:CC");
+  assert(audio_only && audio_only->width_pixels == 0 &&
+         audio_only->height_pixels == 0 && audio_only->max_fps == 0 &&
+         audio_only->media_pcm_48k_stereo &&
+         audio_only->guidance_pcm_16k_mono && audio_only->system_pcm_16k_mono);
+  assert(
+      aa2acp::airplay::save_head_unit_capabilities(display_path, *audio_only));
+  const auto restored_audio_only =
+      aa2acp::airplay::load_head_unit_capabilities(display_path, "AA:BB:CC");
+  assert(restored_audio_only && restored_audio_only->width_pixels == 0 &&
+         restored_audio_only->media_pcm_48k_stereo);
+  std::filesystem::remove(display_path);
+
   const auto identity = aa2acp::airplay::ed25519_generate();
   assert(identity);
   const auto pairing_path =
