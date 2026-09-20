@@ -21,6 +21,7 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <thread>
 
@@ -244,6 +245,69 @@ send_encrypted(const int socket_fd, aa2acp::airplay::ControlCipher &cipher,
               ? " stopped before a response\n"
               : " timed out waiting for response\n");
   return std::nullopt;
+}
+
+void service_event_channel(const int socket_fd, aa2acp::airplay::Bytes read_key,
+                           aa2acp::airplay::Bytes write_key,
+                           const std::stop_token stop) {
+  aa2acp::airplay::ControlCipher cipher(std::move(read_key),
+                                        std::move(write_key));
+  aa2acp::airplay::Bytes encrypted_buffer;
+  aa2acp::airplay::Bytes plaintext;
+  std::array<std::uint8_t, 4096> buffer{};
+  while (!stop.stop_requested()) {
+    pollfd descriptor{socket_fd, POLLIN, 0};
+    const auto ready = poll(&descriptor, 1, 100);
+    if (ready <= 0)
+      continue;
+    const auto count = recv(socket_fd, buffer.data(), buffer.size(), 0);
+    if (count <= 0)
+      break;
+    encrypted_buffer.insert(encrypted_buffer.end(), buffer.begin(),
+                            buffer.begin() + count);
+    while (true) {
+      const auto frame = cipher.decrypt_one(encrypted_buffer);
+      if (!frame) {
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+            << "AirPlay: event channel received undecryptable data\n";
+        close(socket_fd);
+        return;
+      }
+      if (frame->empty())
+        break;
+      plaintext.insert(plaintext.end(), frame->begin(), frame->end());
+      const std::string request(plaintext.begin(), plaintext.end());
+      const auto header_end = request.find("\r\n\r\n");
+      if (header_end == std::string::npos)
+        continue;
+      std::istringstream lines(request.substr(0, header_end));
+      std::string line;
+      std::string cseq;
+      while (std::getline(lines, line)) {
+        if (line.ends_with('\r'))
+          line.pop_back();
+        if (line.starts_with("CSeq:"))
+          cseq = line.substr(5);
+      }
+      std::string response =
+          "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nAudio-Latency: 0\r\n";
+      if (!cseq.empty())
+        response += "CSeq:" + cseq + "\r\n";
+      response += "\r\n";
+      const auto encrypted = cipher.encrypt(
+          aa2acp::airplay::Bytes(response.begin(), response.end()));
+      if (!encrypted || !send_all(socket_fd, *encrypted)) {
+        aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+            << "AirPlay: event channel response failed\n";
+        close(socket_fd);
+        return;
+      }
+      plaintext.erase(plaintext.begin(),
+                      plaintext.begin() +
+                          static_cast<std::ptrdiff_t>(header_end + 4));
+    }
+  }
+  close(socket_fd);
 }
 
 const aa2acp::airplay::PlistValue::Dictionary *
@@ -945,6 +1009,7 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   const auto session_body =
       aa2acp::airplay::encode_bplist(aa2acp::airplay::PlistValue::Dictionary{
           {"timingPort", aa2acp::airplay::PlistValue(std::uint64_t{0})},
+          {"timingProtocol", aa2acp::airplay::PlistValue("None")},
           {"name", aa2acp::airplay::PlistValue("AA2ACP")},
           {"deviceID", aa2acp::airplay::PlistValue(pairing.controller_id)},
           {"model", aa2acp::airplay::PlistValue("RaspberryPi")},
@@ -967,10 +1032,37 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     close(socket_fd);
     return 1;
   }
+  const auto event_port = integer_at(*session_info, "eventPort");
+  if (!event_port || *event_port == 0 || *event_port > UINT16_MAX) {
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "AirPlay: session SETUP returned an invalid event port\n";
+    close(socket_fd);
+    return 1;
+  }
+  const auto event_read_key = aa2acp::airplay::hkdf_sha512(
+      *shared, "Events-Salt", "Events-Write-Encryption-Key", 32);
+  const auto event_write_key = aa2acp::airplay::hkdf_sha512(
+      *shared, "Events-Salt", "Events-Read-Encryption-Key", 32);
+  const auto event_socket = connect_tcp(
+      host, std::to_string(static_cast<std::uint16_t>(*event_port)));
+  if (event_socket < 0 || event_read_key.size() != 32 ||
+      event_write_key.size() != 32) {
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "AirPlay: unable to establish encrypted event channel\n";
+    if (event_socket >= 0)
+      close(event_socket);
+    close(socket_fd);
+    return 1;
+  }
+  std::jthread event_channel([event_socket, event_read_key,
+                              event_write_key](const std::stop_token stop) {
+    service_event_channel(event_socket, event_read_key, event_write_key, stop);
+  });
   std::uint32_t next_cseq = 8;
   if (aa2acp::bridge::debug_logging_enabled())
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
-        << "AirPlay: session SETUP received timing/event ports\n";
+        << "AirPlay: session SETUP connected encrypted event channel on port "
+        << *event_port << '\n';
 
   constexpr std::string_view main_audio_stream_id =
       "8B4C4DF6-AE7F-48F5-A36B-546EEAAEF4B5";
