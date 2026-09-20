@@ -94,6 +94,7 @@ jobs:
 
       - name: Package
         run: |
+          set -x
           # Let dpkg-shlibdeps resolve the bundled aasdk libs (they are
           # shipped inside the deb, so no distro dependency is generated
           # for them; everything else gets a proper Depends entry).
