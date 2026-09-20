@@ -372,17 +372,18 @@ std::string render_page(const Config &config, const Snapshot &snapshot,
               ">Prepare/Test CarPlay</button></form>";
   if (!config.head_unit_mac.empty())
     output +=
-        "<form method=post action=\"/bluetooth-forget\" onsubmit=\"return "
-        "confirm('Forget the local Bluetooth bond? You may also need to "
-        "clear the pairing on the head unit.');\">" +
+        "<form method=post action=\"/head-unit-forget\" onsubmit=\"return "
+        "confirm('Clear all local state for this head unit? You will need to "
+        "start CarPlay pairing again on the head unit.');\">" +
         csrf_input + "<button type=submit " +
         std::string(aa2acp::bridge::management::preflight_active(
-                        snapshot.preflight_state)
+                        snapshot.preflight_state) ||
+                            snapshot.bluetooth_scan_running
                         ? "disabled"
                         : "") +
-        ">Forget Bluetooth bond</button></form><p class=hint>This removes "
-        "the bond from AA2ACP only. It keeps the configured head unit; clear "
-        "or restart pairing on the head unit too if it remains stuck.</p>";
+        ">Forget head unit</button></form><p class=hint>This keeps the "
+        "configured head unit but clears its local Bluetooth bond, AirPlay "
+        "pairing, and cached capabilities.</p>";
   output +=
       "<script>(()=>{const filter=document.querySelector('#show-unnamed');"
       "if(filter)filter.addEventListener('change',()=>filter.form."

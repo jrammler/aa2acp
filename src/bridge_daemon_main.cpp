@@ -994,41 +994,64 @@ int main(int argc, char **argv) {
             << " requested\n";
         respond(303, "text/plain", "", "Location: /\r\n");
       }
-    } else if (request.starts_with("POST /bluetooth-forget ")) {
+    } else if (request.starts_with("POST /head-unit-forget ")) {
       const auto selected_config = [&] {
         std::lock_guard lock(config_mutex);
         return config;
       }();
       const auto snapshot = management_snapshot(management_state);
-      std::string error;
       if (selected_config.head_unit_mac.empty()) {
-        respond(400, "text/plain", "No configured Bluetooth device\n");
-      } else if (aa2acp::bridge::management::preflight_active(
-                     snapshot.preflight_state)) {
-        respond(409, "text/plain",
-                "Cannot forget a Bluetooth bond while CarPlay preparation is "
-                "running\n");
-      } else if (!aa2acp::bridge::forget_bluez_device(
-                     selected_config.head_unit_mac, &error)) {
-        aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
-            << "Management: unable to forget Bluetooth bond for "
-            << selected_config.head_unit_mac << ": " << error << '\n';
-        respond(400, "text/plain",
-                "Unable to forget Bluetooth bond: " + error + "\n");
-      } else {
-        refresh_bluetooth_inventory(management_state);
         {
           std::lock_guard lock(management_state.mutex);
           ++management_state.snapshot.preflight_revision;
           management_state.snapshot.preflight_detail =
-              "local Bluetooth bond removed; clear or restart pairing on the "
-              "head unit if needed";
+              "configure a head unit before clearing its local state";
         }
-        aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
-            << "Management: removed Bluetooth bond for "
-            << selected_config.head_unit_mac << '\n';
-        respond(303, "text/plain", "", "Location: /\r\n");
+      } else if (aa2acp::bridge::management::preflight_active(
+                     snapshot.preflight_state)) {
+        {
+          std::lock_guard lock(management_state.mutex);
+          ++management_state.snapshot.preflight_revision;
+          management_state.snapshot.preflight_detail =
+              "cannot clear head-unit state while CarPlay preparation is "
+              "running";
+        }
+      } else {
+        std::string bluetooth_error;
+        const bool bluetooth_removed = aa2acp::bridge::forget_bluez_device(
+            selected_config.head_unit_mac, &bluetooth_error);
+        std::error_code pairing_error;
+        std::error_code capabilities_error;
+        std::filesystem::remove(selected_config.airplay_pairing_store,
+                                pairing_error);
+        std::filesystem::remove(
+            aa2acp::bridge::default_head_unit_capabilities_store(),
+            capabilities_error);
+        refresh_bluetooth_inventory(management_state);
+        const bool fully_cleared = !pairing_error && !capabilities_error;
+        {
+          std::lock_guard lock(management_state.mutex);
+          ++management_state.snapshot.preflight_revision;
+          management_state.snapshot.preflight_detail =
+              fully_cleared
+                  ? "local Bluetooth, AirPlay, and capability state cleared; "
+                    "start fresh pairing on the head unit"
+                  : "some local head-unit state could not be cleared; see "
+                    "daemon log";
+        }
+        if (bluetooth_removed) {
+          aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+              << "Management: cleared local state for "
+              << selected_config.head_unit_mac << '\n';
+        } else {
+          aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+              << "Management: cleared AirPlay and capability state for "
+              << selected_config.head_unit_mac
+              << "; no local Bluetooth bond was present (" << bluetooth_error
+              << ")\n";
+        }
       }
+      respond(303, "text/plain", "", "Location: /\r\n");
     } else if (request.starts_with("POST /scan ")) {
       aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
           << "Management: Bluetooth scan requested\n";
