@@ -8,6 +8,7 @@
 #include "aa2acp/airplay/srp.hpp"
 #include "aa2acp/bridge/logging.hpp"
 
+#include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <openssl/rand.h>
@@ -96,6 +97,60 @@ int connect_tcp(const std::string &host, const std::string &port) {
     socket_fd = -1;
   }
   freeaddrinfo(addresses);
+  return socket_fd;
+}
+
+int connect_tcp_with_timeout(const std::string &host, const std::string &port,
+                             const std::chrono::milliseconds timeout,
+                             std::string *error) {
+  addrinfo hints{};
+  hints.ai_socktype = SOCK_STREAM;
+  addrinfo *addresses = nullptr;
+  if (getaddrinfo(host.c_str(), port.c_str(), &hints, &addresses) != 0) {
+    if (error != nullptr)
+      *error = "name resolution failed";
+    return -1;
+  }
+  int socket_fd = -1;
+  std::string last_error = "connection failed";
+  for (auto *address = addresses; address != nullptr;
+       address = address->ai_next) {
+    socket_fd =
+        socket(address->ai_family, address->ai_socktype, address->ai_protocol);
+    if (socket_fd < 0) {
+      last_error = std::strerror(errno);
+      continue;
+    }
+    const auto flags = fcntl(socket_fd, F_GETFL, 0);
+    if (flags < 0 || fcntl(socket_fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+      last_error = std::strerror(errno);
+      close(socket_fd);
+      socket_fd = -1;
+      continue;
+    }
+    if (connect(socket_fd, address->ai_addr, address->ai_addrlen) != 0 &&
+        errno != EINPROGRESS) {
+      last_error = std::strerror(errno);
+      close(socket_fd);
+      socket_fd = -1;
+      continue;
+    }
+    pollfd descriptor{socket_fd, POLLOUT, 0};
+    const auto ready = poll(&descriptor, 1, static_cast<int>(timeout.count()));
+    int socket_error = ready > 0 ? 0 : ETIMEDOUT;
+    socklen_t socket_error_size = sizeof(socket_error);
+    if (ready > 0 && getsockopt(socket_fd, SOL_SOCKET, SO_ERROR, &socket_error,
+                                &socket_error_size) != 0)
+      socket_error = errno;
+    if (socket_error == 0 && fcntl(socket_fd, F_SETFL, flags) == 0)
+      break;
+    last_error = std::strerror(socket_error);
+    close(socket_fd);
+    socket_fd = -1;
+  }
+  freeaddrinfo(addresses);
+  if (socket_fd < 0 && error != nullptr)
+    *error = last_error;
   return socket_fd;
 }
 
@@ -1559,26 +1614,45 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
       *shared,
       std::string("DataStream-Salt") + std::to_string(*screen_stream_id),
       "DataStream-Output-Encryption-Key", 32);
-  const auto data_socket = connect_tcp(host, std::to_string(screen_port_value));
-  if (stream_key.size() != 32 || data_socket < 0) {
+  if (stream_key.size() != 32) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
-        << "Unable to establish encrypted screen data stream\n";
+        << "Unable to derive encrypted screen data-stream key\n";
     close(socket_fd);
     return 1;
   }
+  aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+      << "AirPlay: connecting screen data stream to " << host << ':'
+      << screen_port_value << '\n';
+  std::string data_stream_error;
+  const auto data_socket =
+      connect_tcp_with_timeout(host, std::to_string(screen_port_value),
+                               std::chrono::seconds(10), &data_stream_error);
+  if (data_socket < 0) {
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "AirPlay: screen data connection failed: " << data_stream_error
+        << '\n';
+    close(socket_fd);
+    return 1;
+  }
+  aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+      << "AirPlay: screen data stream connected\n";
   aa2acp::airplay::Bytes config_header(128);
   store_le32(std::span(config_header).first(4), config->size());
   config_header[4] = 1;
   if (!send_all(data_socket, config_header) ||
       !send_all(data_socket, *config)) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
-        << "Unable to send H.264 video config\n";
+        << "AirPlay: unable to send H.264 video config: "
+        << std::strerror(errno) << '\n';
     close(data_socket);
     close(socket_fd);
     return 1;
   }
+  aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+      << "AirPlay: sent H.264 video config (" << config->size() << " bytes)\n";
   std::uint64_t frame_counter{};
   std::size_t sent_frames{};
+  std::size_t sent_video_bytes{};
   const auto send_access_unit =
       [&](const std::vector<aa2acp::airplay::Bytes> &access_unit) {
         aa2acp::airplay::Bytes frame;
@@ -1606,6 +1680,11 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
           return false;
         ++frame_counter;
         ++sent_frames;
+        sent_video_bytes += frame.size();
+        if (sent_frames == 1)
+          aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+              << "AirPlay: sent first encrypted H.264 video frame ("
+              << frame.size() << " bytes)\n";
         return true;
       };
   for (const auto &nalu : nalus) {
@@ -1651,7 +1730,7 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
   close(socket_fd);
   if (aa2acp::bridge::debug_logging_enabled())
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
-        << "AirPlay: encrypted H.264 stream sent " << sent_frames
-        << " frames\n";
+        << "AirPlay: encrypted H.264 stream sent " << sent_frames << " frames ("
+        << sent_video_bytes << " bytes)\n";
   return 0;
 }
