@@ -4,7 +4,9 @@
 #include "aa2acp/iap2/link_layer.hpp"
 
 #include <array>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <vector>
 
 namespace aa2acp::iap2 {
@@ -67,6 +69,39 @@ std::uint32_t u32_parameter(const csm::Message &message,
 std::uint8_t u8_parameter(const csm::Message &message, const std::uint16_t id) {
   const auto value = csm::first_bytes_parameter(message.payload, id);
   return value && value->size() == 1 ? (*value)[0] : 0;
+}
+
+void log_carplay_control_parameters(const csm::Message &message) {
+  if (!aa2acp::bridge::debug_logging_enabled() || message.id < 0x5000 ||
+      message.id > 0x5003)
+    return;
+  std::ostringstream details;
+  details << "CSM: CarPlay control 0x" << std::hex << message.id << std::dec
+          << " parameters:";
+  for (std::size_t offset = 0; offset + 4 <= message.payload.size();) {
+    const auto length =
+        (static_cast<std::size_t>(message.payload[offset]) << 8) |
+        message.payload[offset + 1];
+    const auto id =
+        (static_cast<std::uint16_t>(message.payload[offset + 2]) << 8) |
+        message.payload[offset + 3];
+    if (length < 4 || offset + length > message.payload.size()) {
+      details << " malformed@" << offset;
+      break;
+    }
+    details << " {id=0x" << std::hex << id << std::dec
+            << ", bytes=" << length - 4 << ", value=";
+    constexpr std::size_t kMaximumValueBytes = 32;
+    const auto value_size = std::min(length - 4, kMaximumValueBytes);
+    for (std::size_t index = 0; index < value_size; ++index)
+      details << std::hex << std::setw(2) << std::setfill('0')
+              << static_cast<unsigned int>(message.payload[offset + 4 + index]);
+    if (length - 4 > kMaximumValueBytes)
+      details << "...";
+    details << std::dec << '}';
+    offset += length;
+  }
+  aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug) << details.str() << '\n';
 }
 
 } // namespace
@@ -148,6 +183,7 @@ void CarPlayProbe::fail(const char *message) {
 }
 
 void CarPlayProbe::handle(const csm::Message &message) {
+  log_carplay_control_parameters(message);
   if (aa2acp::bridge::debug_logging_enabled())
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
         << "CSM: received 0x" << std::hex << message.id << std::dec << '\n';
