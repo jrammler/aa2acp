@@ -42,9 +42,9 @@ jobs:
         run: |
           echo "hash=$( (gcc --version; protoc --version; cmake --version; dpkg-query -W -f='${Package}=${Version}\n' libabsl-dev libboost1.83-dev libprotobuf-dev protobuf-compiler) | sha256sum | cut -d' ' -f1 )" >> "$GITHUB_OUTPUT"
 
-      - name: Cache aasdk/aap_protobuf
+      - name: Restore aasdk/aap_protobuf cache
         id: deps-cache
-        uses: actions/cache@v6
+        uses: actions/cache/restore@v6
         with:
           path: .deps/install
           key: aasdk-trixie-${{ steps.toolchain.outputs.hash }}-${{ hashFiles('deps.lock') }}-${{ hashFiles('patches/aasdk/*.patch') }}
@@ -54,6 +54,16 @@ jobs:
       # contain a stale or partial install; only the script knows for sure.
       - name: Build pinned dependencies
         run: ./scripts/build-deps.sh
+
+      # Save as soon as the validated dependency build succeeds. Later app
+      # build, test, or packaging failures must not discard this expensive,
+      # independently keyed cache entry.
+      - name: Save aasdk/aap_protobuf cache
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: .deps/install
+          key: aasdk-trixie-${{ steps.toolchain.outputs.hash }}-${{ hashFiles('deps.lock') }}-${{ hashFiles('patches/aasdk/*.patch') }}
 
       - name: Verify patch list matches flake.nix
         run: |
