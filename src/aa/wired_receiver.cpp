@@ -28,6 +28,7 @@
 #include <atomic>
 #include <chrono>
 #include <climits>
+#include <condition_variable>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -448,7 +449,10 @@ public:
         audio_frame_callback_(std::move(audio_frame_callback)),
         head_unit_capabilities_provider_(
             std::move(head_unit_capabilities_provider)),
-        ended_callback_(std::move(ended_callback)) {}
+        ended_callback_(std::move(ended_callback)) {
+    capability_worker_ = std::jthread(
+        [this](const std::stop_token stop) { capability_loop(stop); });
+  }
 
   void start() {
     try {
@@ -500,6 +504,9 @@ public:
   }
 
   void stop() {
+    capability_stopping_.store(true);
+    capability_worker_.request_stop();
+    capability_ready_.notify_all();
     if (messenger_)
       messenger_->stop();
     if (transport_)
@@ -555,17 +562,15 @@ public:
       override {
     // Compute capabilities off the strand: the provider can block up to five
     // seconds waiting for CarPlay capability discovery, which would stall
-    // every channel sharing this strand past the phone's ping timeout.
-    std::weak_ptr<ControlSession> weak = shared_from_this();
-    auto provider = head_unit_capabilities_provider_;
-    std::thread([weak, provider = std::move(provider)]() mutable {
-      auto profile = provider ? provider() : std::nullopt;
-      if (auto self = weak.lock()) {
-        boost::asio::post(self->strand_, [self, profile]() mutable {
-          self->send_service_discovery_response(profile);
-        });
-      }
-    }).detach();
+    // every channel sharing this strand past the phone's ping timeout. Keep a
+    // single owned worker and coalesce duplicate requests while it is busy.
+    {
+      std::lock_guard lock(capability_mutex_);
+      if (capability_stopping_ || capability_request_pending_)
+        return;
+      capability_request_pending_ = true;
+    }
+    capability_ready_.notify_one();
   }
 
   void send_service_discovery_response(
@@ -845,6 +850,31 @@ public:
   }
 
 private:
+  void capability_loop(const std::stop_token stop) {
+    for (;;) {
+      {
+        std::unique_lock lock(capability_mutex_);
+        capability_ready_.wait_for(lock, std::chrono::milliseconds(100), [&] {
+          return capability_request_pending_ || stop.stop_requested() ||
+                 capability_stopping_.load();
+        });
+        if (stop.stop_requested() || capability_stopping_.load())
+          return;
+        capability_request_pending_ = false;
+      }
+      const auto profile = head_unit_capabilities_provider_
+                               ? head_unit_capabilities_provider_()
+                               : std::nullopt;
+      if (stop.stop_requested() || capability_stopping_.load())
+        return;
+      const auto self = shared_from_this();
+      boost::asio::post(strand_, [self, profile] {
+        if (!self->capability_stopping_.load())
+          self->send_service_discovery_response(profile);
+      });
+    }
+  }
+
   void send_version_request() {
     send([this](auto promise) {
       control_->sendVersionRequest(std::move(promise));
@@ -905,6 +935,11 @@ private:
   WiredReceiver::AudioFrameCallback audio_frame_callback_;
   WiredReceiver::HeadUnitCapabilitiesProvider head_unit_capabilities_provider_;
   std::function<void()> ended_callback_;
+  std::mutex capability_mutex_;
+  std::condition_variable capability_ready_;
+  bool capability_request_pending_{};
+  std::atomic_bool capability_stopping_{false};
+  std::jthread capability_worker_;
   aasdk::transport::ITransport::Pointer transport_;
   aasdk::messenger::ICryptor::Pointer cryptor_;
   aasdk::messenger::IMessenger::Pointer messenger_;

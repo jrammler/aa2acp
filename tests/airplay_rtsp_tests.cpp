@@ -157,5 +157,9 @@ int main() {
          restored->controller.public_key == record.controller.public_key &&
          restored->accessory_public_key == record.accessory_public_key);
   std::filesystem::remove(pairing_path);
+  const std::filesystem::path relative_pairing_path =
+      "acp-relative-pairing-test.bin";
+  assert(aa2acp::airplay::save_pairing_record(relative_pairing_path, record));
+  std::filesystem::remove(relative_pairing_path);
   std::cout << "airplay RTSP tests passed\n";
 }

@@ -21,7 +21,28 @@ bool valid_key(const std::string_view key) {
          key == "airplay_pairing_store";
 }
 
+bool valid_serialized_value(const std::string &value) {
+  return value.find_first_of("\r\n=") == std::string::npos &&
+         value.find('\0') == std::string::npos;
+}
+
 } // namespace
+
+bool validate_config(const Config &config, const bool allow_legacy_hotspot) {
+  if (config.wifi_interface.empty() ||
+      !valid_serialized_value(config.head_unit_mac) ||
+      !valid_serialized_value(config.wifi_interface) ||
+      !valid_serialized_value(config.management_hotspot_ssid) ||
+      !valid_serialized_value(config.management_hotspot_passphrase) ||
+      !valid_serialized_value(config.airplay_pairing_store.string()))
+    return false;
+  const auto legacy_hotspot = config.management_hotspot_ssid.empty() &&
+                              config.management_hotspot_passphrase.empty();
+  if (legacy_hotspot && allow_legacy_hotspot)
+    return true;
+  return !config.management_hotspot_ssid.empty() &&
+         config.management_hotspot_passphrase.size() >= 8;
+}
 
 std::filesystem::path default_state_directory() {
   if (const char *state_home = std::getenv("XDG_STATE_HOME");
@@ -68,27 +89,13 @@ std::optional<Config> load_config(const std::filesystem::path &path) {
   }
   // Older configurations predate the management hotspot. The daemon migrates
   // them by generating and persisting credentials on its next start.
-  if (config.wifi_interface.empty())
+  if (!validate_config(config, true))
     return std::nullopt;
   return config;
 }
 
 bool save_config(const std::filesystem::path &path, const Config &config) {
-  if (config.wifi_interface.empty() || config.management_hotspot_ssid.empty() ||
-      config.management_hotspot_passphrase.size() < 8 ||
-      config.head_unit_mac.find_first_of("\r\n=") != std::string::npos ||
-      config.head_unit_mac.find('\0') != std::string::npos ||
-      config.wifi_interface.find_first_of("\r\n=") != std::string::npos ||
-      config.wifi_interface.find('\0') != std::string::npos ||
-      config.management_hotspot_ssid.find_first_of("\r\n=") !=
-          std::string::npos ||
-      config.management_hotspot_ssid.find('\0') != std::string::npos ||
-      config.management_hotspot_passphrase.find_first_of("\r\n=") !=
-          std::string::npos ||
-      config.management_hotspot_passphrase.find('\0') != std::string::npos ||
-      config.airplay_pairing_store.string().find_first_of("\r\n=") !=
-          std::string::npos ||
-      config.airplay_pairing_store.string().find('\0') != std::string::npos)
+  if (!validate_config(config))
     return false;
   if (!path.parent_path().empty()) {
     std::error_code error;

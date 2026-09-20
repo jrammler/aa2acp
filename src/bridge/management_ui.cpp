@@ -3,10 +3,16 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
-#include <cstdio>
+#include <fcntl.h>
 #include <map>
 #include <poll.h>
 #include <random>
+#include <spawn.h>
+#include <sstream>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#include <signal.h>
 
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -15,6 +21,8 @@
 #include <chrono>
 
 #include "aa2acp/bridge/logging.hpp"
+
+extern char **environ;
 
 namespace aa2acp::bridge::management {
 namespace {
@@ -165,21 +173,107 @@ bool send_response(const int client, const int status, const char *type,
   return true;
 }
 
+std::optional<std::string> run_nmcli_device_status() {
+  int output_pipe[2]{-1, -1};
+  if (pipe2(output_pipe, O_CLOEXEC) != 0)
+    return std::nullopt;
+  std::vector<std::string> arguments{"nmcli",       "-t",     "-f",
+                                     "DEVICE,TYPE", "device", "status"};
+  std::vector<char *> argv;
+  argv.reserve(arguments.size() + 1);
+  for (auto &argument : arguments)
+    argv.push_back(argument.data());
+  argv.push_back(nullptr);
+  posix_spawn_file_actions_t actions;
+  posix_spawn_file_actions_init(&actions);
+  posix_spawn_file_actions_adddup2(&actions, output_pipe[1], STDOUT_FILENO);
+  posix_spawn_file_actions_adddup2(&actions, output_pipe[1], STDERR_FILENO);
+  posix_spawn_file_actions_addclose(&actions, output_pipe[0]);
+  posix_spawn_file_actions_addclose(&actions, output_pipe[1]);
+  pid_t child{};
+  const auto result = posix_spawnp(&child, argv.front(), &actions, nullptr,
+                                   argv.data(), environ);
+  posix_spawn_file_actions_destroy(&actions);
+  close(output_pipe[1]);
+  if (result != 0) {
+    close(output_pipe[0]);
+    return std::nullopt;
+  }
+  const auto flags = fcntl(output_pipe[0], F_GETFL);
+  if (flags < 0 || fcntl(output_pipe[0], F_SETFL, flags | O_NONBLOCK) != 0) {
+    kill(child, SIGKILL);
+    waitpid(child, nullptr, 0);
+    close(output_pipe[0]);
+    return std::nullopt;
+  }
+  std::string output;
+  constexpr std::size_t kMaximumOutput = 64 * 1024;
+  int status{};
+  bool complete = false;
+  bool overflow = false;
+  const auto drain = [&] {
+    std::array<char, 4096> buffer{};
+    for (;;) {
+      const auto count = read(output_pipe[0], buffer.data(), buffer.size());
+      if (count > 0) {
+        if (output.size() + static_cast<std::size_t>(count) > kMaximumOutput) {
+          overflow = true;
+          return;
+        }
+        output.append(buffer.data(), static_cast<std::size_t>(count));
+        continue;
+      }
+      if (count < 0 && errno == EINTR)
+        continue;
+      return;
+    }
+  };
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (!complete && !overflow) {
+    drain();
+    const auto waited = waitpid(child, &status, WNOHANG);
+    if (waited == child) {
+      complete = true;
+      break;
+    }
+    if (waited < 0 && errno != EINTR)
+      break;
+    if (std::chrono::steady_clock::now() >= deadline)
+      break;
+    pollfd descriptor{output_pipe[0], POLLIN, 0};
+    (void)poll(&descriptor, 1, 50);
+  }
+  if (!complete || overflow) {
+    kill(child, SIGKILL);
+    do {
+      complete = waitpid(child, &status, 0) == child;
+    } while (!complete && errno == EINTR);
+  }
+  drain();
+  close(output_pipe[0]);
+  if (overflow || !complete || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
+    return std::nullopt;
+  return output;
+}
+
 std::vector<std::string> wifi_interfaces() {
   std::vector<std::string> interfaces;
-  FILE *stream = popen("nmcli -t -f DEVICE,TYPE device status", "r");
-  std::array<char, 256> line{};
-  while (stream != nullptr &&
-         fgets(line.data(), line.size(), stream) != nullptr) {
-    std::string value(line.data());
+  const auto output = run_nmcli_device_status();
+  if (!output) {
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+        << "Management: nmcli Wi-Fi inventory failed or timed out\n";
+    return interfaces;
+  }
+  std::istringstream lines(*output);
+  std::string value;
+  while (std::getline(lines, value)) {
     while (!value.empty() && (value.back() == '\n' || value.back() == '\r'))
       value.pop_back();
     const auto separator = value.find(':');
     if (separator != std::string::npos && value.substr(separator + 1) == "wifi")
       interfaces.push_back(value.substr(0, separator));
   }
-  if (stream != nullptr)
-    pclose(stream);
   return interfaces;
 }
 

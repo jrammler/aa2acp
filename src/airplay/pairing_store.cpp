@@ -72,7 +72,8 @@ bool save_pairing_record(const std::filesystem::path &path,
       record.accessory_public_key.size() != 32)
     return false;
   std::error_code error;
-  std::filesystem::create_directories(path.parent_path(), error);
+  if (!path.parent_path().empty())
+    std::filesystem::create_directories(path.parent_path(), error);
   if (error)
     return false;
   // The file contains the Ed25519 private key: create it exclusively with

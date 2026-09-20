@@ -93,6 +93,23 @@ jobs:
           cpack --config build/CPackConfig.cmake
           mv *.deb aa2acp.deb
           cp build/aa2acp aa2acp
+          # Smoke-test the package layout before publishing artifacts. This
+          # catches missing private libraries/assets without starting systemd
+          # in the build container.
+          package_root="$(mktemp -d)"
+          trap 'rm -rf "$package_root"' EXIT
+          dpkg-deb --info aa2acp.deb
+          dpkg-deb --extract aa2acp.deb "$package_root"
+          test -x "$package_root/usr/bin/aa2acp"
+          test -s "$package_root/usr/share/aa2acp/display-preflight.h264"
+          test -e "$package_root/usr/lib/aa2acp/libaasdk.so"
+          test -e "$package_root/usr/lib/aa2acp/libaap_protobuf.so"
+          test -e "$package_root/lib/systemd/system/aa2acp.service"
+          test -e "$package_root/lib/udev/rules.d/70-aa2acp-android-auto.rules"
+          test -e "$package_root/usr/share/polkit-1/rules.d/49-aa2acp-networkmanager.rules"
+          LD_LIBRARY_PATH="$package_root/usr/lib/aa2acp" \
+            ldd "$package_root/usr/bin/aa2acp" | tee package-ldd.txt
+          ! grep -q 'not found' package-ldd.txt
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7

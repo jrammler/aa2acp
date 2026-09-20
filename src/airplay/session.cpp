@@ -145,6 +145,27 @@ int connect_tcp_with_timeout(const std::string &host, const std::string &port,
   return socket_fd;
 }
 
+bool connect_udp_peer(const int socket_fd, const std::string &host,
+                      const std::uint16_t port) {
+  addrinfo hints{};
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_DGRAM;
+  addrinfo *addresses = nullptr;
+  if (getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints,
+                  &addresses) != 0)
+    return false;
+  bool connected = false;
+  for (auto *address = addresses; address != nullptr;
+       address = address->ai_next) {
+    if (connect(socket_fd, address->ai_addr, address->ai_addrlen) == 0) {
+      connected = true;
+      break;
+    }
+  }
+  freeaddrinfo(addresses);
+  return connected;
+}
+
 int connect_udp(const std::string &host, const std::string &port) {
   addrinfo hints{};
   hints.ai_socktype = SOCK_DGRAM;
@@ -1556,8 +1577,14 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
           std::string("DataStream-Salt") +
               std::to_string(*microphone_stream_id),
           "DataStream-Input-Encryption-Key", 32);
+      const bool microphone_peer_ready =
+          !microphone_data_port ||
+          (*microphone_data_port > 0 && *microphone_data_port <= UINT16_MAX &&
+           connect_udp_peer(microphone_socket, host,
+                            static_cast<std::uint16_t>(*microphone_data_port)));
       if (microphone_response && microphone_response->status == 200 &&
-          microphone_info && microphone_key.size() == 32) {
+          microphone_info && microphone_key.size() == 32 &&
+          microphone_peer_ready) {
         if (aa2acp::bridge::debug_logging_enabled())
           aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
               << "AirPlay: microphone SETUP accepted (local data port "
@@ -1573,6 +1600,9 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
                                                 options.microphone_received](
                                                const std::stop_token stop) {
           std::array<std::uint8_t, 64 * 1024> packet{};
+          std::uint64_t highest_nonce{};
+          std::uint64_t replay_window{};
+          bool have_nonce = false;
           while (!stop.stop_requested()) {
             pollfd descriptor{socket_fd, POLLIN, 0};
             if (poll(&descriptor, 1, 100) <= 0)
@@ -1593,6 +1623,29 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
                 std::span(packet).subspan(4, 8));
             if (!decrypted)
               continue;
+            std::uint64_t nonce_counter{};
+            for (std::size_t index = 0; index < 8; ++index)
+              nonce_counter |=
+                  static_cast<std::uint64_t>(packet[size - 8 + index])
+                  << (index * 8);
+            if (have_nonce) {
+              if (nonce_counter > highest_nonce) {
+                const auto distance = nonce_counter - highest_nonce;
+                replay_window =
+                    distance >= 64 ? 1 : (replay_window << distance) | 1;
+                highest_nonce = nonce_counter;
+              } else {
+                const auto distance = highest_nonce - nonce_counter;
+                if (distance >= 64 ||
+                    (replay_window & (std::uint64_t{1} << distance)) != 0)
+                  continue;
+                replay_window |= std::uint64_t{1} << distance;
+              }
+            } else {
+              highest_nonce = nonce_counter;
+              replay_window = 1;
+              have_nonce = true;
+            }
             // CarPlay's PCM payload is big-endian; Android Auto's
             // microphone source expects little-endian S16 samples.
             if (decrypted->size() % 2 != 0)

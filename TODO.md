@@ -56,6 +56,13 @@
   those tests against anonymized capability profiles (iAP2 messages, Wi-Fi
   handoff, AirPlay capabilities, and negotiated formats) for every verified
   behavior.
+- [ ] Provision and validate the Apple/MFi trust chain for software-MFi
+  authentication. The current major-2 verifier intentionally accepts the
+  signer certificate carried by the accessory; do not enable chain checking
+  until a redistributable/pinned trust anchor is available.
+- [ ] Confirm the exact major-2 RSA signature encoding on sanitized head-unit
+  captures; the current verifier accepts the observed raw-challenge form and
+  retains a legacy DigestInfo compatibility path.
 - [ ] Support MFi authentication protocol major 3, including its 32-byte
   challenge and SHA-256 signature-verification path while retaining the
   verified 20-byte SHA-1 major-2 path.

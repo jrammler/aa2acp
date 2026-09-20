@@ -33,6 +33,9 @@ protected:
 
   MediaSocketForwarder(const std::filesystem::path &path, std::string name);
 
+  // Derived classes call this after their own state has been initialized.
+  void start_worker();
+
   // Queues a frame for the consumer, dropping the oldest frame when full.
   void enqueue(Bytes frame);
 

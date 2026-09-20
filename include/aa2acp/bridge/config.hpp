@@ -24,6 +24,9 @@ std::filesystem::path default_state_directory();
 std::filesystem::path default_config_path();
 std::filesystem::path default_airplay_pairing_store();
 std::filesystem::path default_head_unit_capabilities_store();
+// Returns false for malformed serialized values or incomplete required
+// settings. Legacy files may omit both management-hotspot fields.
+bool validate_config(const Config &config, bool allow_legacy_hotspot = false);
 std::optional<Config> load_config(const std::filesystem::path &path);
 bool save_config(const std::filesystem::path &path, const Config &config);
 

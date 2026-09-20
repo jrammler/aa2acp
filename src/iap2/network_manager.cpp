@@ -56,7 +56,8 @@ std::optional<std::string> ipv4_address(const std::string &interface_name) {
 
 bool run_nmcli(std::vector<std::string> arguments,
                const bool allow_inactive = false, const bool quiet = false,
-               const std::string &stdin_data = {}) {
+               const std::string &stdin_data = {},
+               std::string *captured_output = nullptr) {
   const auto started = std::chrono::steady_clock::now();
   std::vector<char *> argv;
   argv.reserve(arguments.size() + 1);
@@ -122,18 +123,10 @@ bool run_nmcli(std::vector<std::string> arguments,
     return false;
   }
   if (has_stdin) {
-    std::size_t offset{};
-    while (offset < stdin_data.size()) {
-      const auto count = send(input_pipe[1], stdin_data.data() + offset,
-                              stdin_data.size() - offset, MSG_NOSIGNAL);
-      if (count > 0) {
-        offset += static_cast<std::size_t>(count);
-        continue;
-      }
-      if (count < 0 && errno == EINTR)
-        continue;
+    const auto flags = fcntl(input_pipe[1], F_GETFL);
+    if (flags < 0 || fcntl(input_pipe[1], F_SETFL, flags | O_NONBLOCK) != 0) {
       close(input_pipe[1]);
-      (void)kill(child, SIGTERM);
+      (void)kill(child, SIGKILL);
       for (;;) {
         const auto waited = waitpid(child, nullptr, 0);
         if (waited >= 0 || errno != EINTR)
@@ -143,7 +136,6 @@ bool run_nmcli(std::vector<std::string> arguments,
         close(output_pipe[0]);
       return false;
     }
-    close(input_pipe[1]);
   }
   int status{};
   // nmcli exits 6 when disconnecting an interface that is already inactive.
@@ -187,8 +179,18 @@ bool run_nmcli(std::vector<std::string> arguments,
       waited = waitpid(child, &status, 0);
     } while (waited < 0 && errno == EINTR);
   };
+  std::size_t stdin_offset{};
+  bool stdin_open = has_stdin;
+  const auto close_stdin = [&] {
+    if (stdin_open) {
+      close(input_pipe[1]);
+      stdin_open = false;
+    }
+  };
   for (;;) {
     drain_diagnostics();
+    if (stdin_open && stdin_offset == stdin_data.size())
+      close_stdin();
     waited = waitpid(child, &status, WNOHANG);
     if (waited < 0 && errno == EINTR)
       continue;
@@ -205,17 +207,47 @@ bool run_nmcli(std::vector<std::string> arguments,
       terminate_and_reap();
       break;
     }
-    if (quiet) {
-      pollfd descriptor{output_pipe[0], POLLIN, 0};
-      poll(&descriptor, 1, 50);
-    } else {
+    std::array<pollfd, 2> descriptors{};
+    nfds_t descriptor_count{};
+    if (quiet)
+      descriptors[descriptor_count++] = {output_pipe[0], POLLIN, 0};
+    if (stdin_open)
+      descriptors[descriptor_count++] = {input_pipe[1], POLLOUT, 0};
+    if (descriptor_count == 0) {
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      continue;
+    }
+    const auto poll_result = poll(descriptors.data(), descriptor_count, 50);
+    if (poll_result < 0) {
+      if (errno == EINTR)
+        continue;
+      terminate_and_reap();
+      break;
+    }
+    if (stdin_open) {
+      const auto index = quiet ? 1U : 0U;
+      const auto events = descriptors[index].revents;
+      if ((events & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+        close_stdin();
+      } else if ((events & POLLOUT) != 0) {
+        const auto count =
+            send(input_pipe[1], stdin_data.data() + stdin_offset,
+                 stdin_data.size() - stdin_offset, MSG_NOSIGNAL | MSG_DONTWAIT);
+        if (count > 0)
+          stdin_offset += static_cast<std::size_t>(count);
+        else if (count < 0 && errno != EINTR && errno != EAGAIN &&
+                 errno != EWOULDBLOCK)
+          close_stdin();
+      }
     }
   }
+  close_stdin();
   if (quiet) {
     drain_diagnostics();
     close(output_pipe[0]);
   }
+  if (captured_output != nullptr)
+    *captured_output = diagnostics;
   const bool success = waited >= 0 && WIFEXITED(status) &&
                        (WEXITSTATUS(status) == 0 ||
                         (allow_inactive && WEXITSTATUS(status) == 6));
@@ -242,6 +274,71 @@ bool run_nmcli(std::vector<std::string> arguments,
   return true;
 }
 
+std::string unescape_nmcli_field(const std::string_view value) {
+  std::string result;
+  result.reserve(value.size());
+  bool escaped = false;
+  for (const char character : value) {
+    if (escaped) {
+      result += character;
+      escaped = false;
+    } else if (character == '\\') {
+      escaped = true;
+    } else {
+      result += character;
+    }
+  }
+  if (escaped)
+    result += '\\';
+  return result;
+}
+
+std::vector<std::string> split_nmcli_fields(const std::string &line) {
+  std::vector<std::string> fields;
+  std::string field;
+  bool escaped = false;
+  for (const char character : line) {
+    if (character == ':' && !escaped) {
+      fields.push_back(std::move(field));
+      field.clear();
+      continue;
+    }
+    field += character;
+    escaped = character == '\\' && !escaped;
+    if (character != '\\')
+      escaped = false;
+  }
+  fields.push_back(std::move(field));
+  return fields;
+}
+
+std::optional<std::string>
+saved_connection_uuid(const std::string &ssid,
+                      const std::string &interface_name) {
+  std::string output;
+  if (!run_nmcli({"nmcli", "-t", "-f",
+                  "UUID,TYPE,802-11-wireless.ssid,connection.interface-name",
+                  "connection", "show"},
+                 false, true, {}, &output))
+    return std::nullopt;
+  std::istringstream lines(output);
+  std::string line;
+  while (std::getline(lines, line)) {
+    if (!line.empty() && line.back() == '\r')
+      line.pop_back();
+    const auto fields = split_nmcli_fields(line);
+    if (fields.size() < 3 || fields[1] != "802-11-wireless" ||
+        unescape_nmcli_field(fields[2]) != ssid)
+      continue;
+    const auto profile_interface =
+        fields.size() < 4 ? std::string{} : unescape_nmcli_field(fields[3]);
+    if (profile_interface.empty() || profile_interface == "--" ||
+        profile_interface == interface_name)
+      return fields[0];
+  }
+  return std::nullopt;
+}
+
 } // namespace
 
 bool join_with_networkmanager(const AccessoryWifiConfiguration &configuration,
@@ -260,9 +357,11 @@ bool join_with_networkmanager(const AccessoryWifiConfiguration &configuration,
   // after a completed session.
   aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
       << "Wi-Fi: checking for a saved NetworkManager accessory profile\n";
-  if (run_nmcli({"nmcli", "--wait", "30", "connection", "up", "id",
-                 configuration.ssid, "ifname", interface_name},
-                false, true)) {
+  const auto saved_uuid =
+      saved_connection_uuid(configuration.ssid, interface_name);
+  if (saved_uuid && run_nmcli({"nmcli", "--wait", "30", "connection", "up",
+                               "uuid", *saved_uuid, "ifname", interface_name},
+                              false, true)) {
     return true;
   }
   aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
@@ -297,12 +396,15 @@ bool join_with_networkmanager(const AccessoryWifiConfiguration &configuration,
         << static_cast<int>(configuration.security_type) << '\n';
     return false;
   }
-  std::vector<std::string> modify{"nmcli",
-                                  "connection",
-                                  "modify",
-                                  configuration.ssid,
-                                  "802-11-wireless-security.key-mgmt",
-                                  key_management};
+  std::vector<std::string> modify{"nmcli", "connection", "modify"};
+  if (saved_uuid) {
+    modify.emplace_back("uuid");
+    modify.push_back(*saved_uuid);
+  } else {
+    modify.push_back(configuration.ssid);
+  }
+  modify.emplace_back("802-11-wireless-security.key-mgmt");
+  modify.push_back(key_management);
   if (configuration.security_type == 2 || configuration.security_type == 3) {
     modify.emplace_back("802-11-wireless-security.proto");
     modify.emplace_back("rsn");
@@ -328,9 +430,16 @@ bool join_with_networkmanager(const AccessoryWifiConfiguration &configuration,
     if (!run_nmcli(std::move(add), false, true))
       return false;
   }
-  std::vector<std::string> up{
-      "nmcli", "--wait",           "30",     "connection",  "up",
-      "id",    configuration.ssid, "ifname", interface_name};
+  std::vector<std::string> up{"nmcli", "--wait", "30", "connection", "up"};
+  if (saved_uuid) {
+    up.emplace_back("uuid");
+    up.push_back(*saved_uuid);
+  } else {
+    up.emplace_back("id");
+    up.push_back(configuration.ssid);
+  }
+  up.emplace_back("ifname");
+  up.push_back(interface_name);
   std::string password_file;
   if (!configuration.passphrase.empty()) {
     up.emplace_back("passwd-file");

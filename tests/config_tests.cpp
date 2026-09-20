@@ -21,6 +21,12 @@ int main() {
   malformed.management_hotspot_ssid += '\0';
   malformed.management_hotspot_ssid += "suffix";
   assert(!aa2acp::bridge::save_config(path, malformed));
+  const aa2acp::bridge::Config legacy{"", "wlan0", "", "", ""};
+  assert(aa2acp::bridge::validate_config(legacy, true));
+  assert(!aa2acp::bridge::validate_config(legacy));
+  auto partial = legacy;
+  partial.management_hotspot_ssid = "only-ssid";
+  assert(!aa2acp::bridge::validate_config(partial, true));
   std::filesystem::remove(path);
   assert(aa2acp::bridge::default_config_path().filename() == "config");
   assert(aa2acp::bridge::default_airplay_pairing_store().filename() ==

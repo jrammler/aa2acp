@@ -91,6 +91,51 @@ struct PendingManagementHotspotUpdate {
 };
 std::optional<PendingManagementHotspotUpdate> pending_management_hotspot_update;
 
+std::optional<std::size_t> content_length(std::string_view headers,
+                                          bool &valid) {
+  std::optional<std::size_t> result;
+  std::size_t line_start = 0;
+  while (line_start < headers.size()) {
+    const auto line_end = headers.find("\r\n", line_start);
+    const auto line =
+        headers.substr(line_start, line_end == std::string_view::npos
+                                       ? headers.size() - line_start
+                                       : line_end - line_start);
+    const auto separator = line.find(':');
+    if (separator != std::string_view::npos) {
+      std::string name(line.substr(0, separator));
+      std::ranges::transform(name, name.begin(), [](const unsigned char value) {
+        return static_cast<char>(std::tolower(value));
+      });
+      std::size_t value_start = separator + 1;
+      while (value_start < line.size() &&
+             std::isspace(static_cast<unsigned char>(line[value_start])))
+        ++value_start;
+      if (name == "content-length") {
+        std::size_t value_end = line.size();
+        while (value_end > value_start &&
+               std::isspace(static_cast<unsigned char>(line[value_end - 1])))
+          --value_end;
+        std::size_t length{};
+        const auto value = line.substr(value_start, value_end - value_start);
+        const auto parsed =
+            std::from_chars(value.data(), value.data() + value.size(), length);
+        if (value.empty() || parsed.ec != std::errc{} ||
+            parsed.ptr != value.data() + value.size() ||
+            (result && *result != length)) {
+          valid = false;
+          return std::nullopt;
+        }
+        result = length;
+      }
+    }
+    if (line_end == std::string_view::npos)
+      break;
+    line_start = line_end + 2;
+  }
+  return result;
+}
+
 class SecureDiagnosticDump {
 public:
   ~SecureDiagnosticDump() {
@@ -990,7 +1035,7 @@ int main(int argc, char **argv) {
     std::array<char, 4096> buffer{};
     std::string request;
     const auto request_deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
     const auto receive_more = [&] {
       const auto remaining =
           std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1000,7 +1045,7 @@ int main(int argc, char **argv) {
       pollfd descriptor{client, POLLIN, 0};
       if (poll(&descriptor, 1,
                static_cast<int>(
-                   std::min(remaining, std::chrono::milliseconds(5000))
+                   std::min(remaining, std::chrono::milliseconds(1000))
                        .count())) <= 0 ||
           (descriptor.revents & POLLIN) == 0)
         return false;
@@ -1018,24 +1063,18 @@ int main(int argc, char **argv) {
       }
     }
     const auto header_end = request.find("\r\n\r\n");
-    const auto content_marker = request.find("Content-Length: ");
-    if (header_end != std::string::npos &&
-        content_marker != std::string::npos) {
-      const auto start = content_marker + 16;
-      const auto end = request.find("\r\n", start);
-      std::size_t length{};
-      const auto text =
-          end == std::string::npos
-              ? std::string_view{}
-              : std::string_view(request).substr(start, end - start);
-      const auto parsed =
-          std::from_chars(text.data(), text.data() + text.size(), length);
-      if (text.empty() || parsed.ec != std::errc{} ||
-          parsed.ptr != text.data() + text.size() || length > 16 * 1024) {
-        finish_client(client);
-        return;
-      }
-      while (request.size() < header_end + 4 + length) {
+    bool content_length_valid = true;
+    const auto length =
+        content_length(header_end == std::string::npos
+                           ? std::string_view(request)
+                           : std::string_view(request).substr(0, header_end),
+                       content_length_valid);
+    if (!content_length_valid || (length && *length > 16 * 1024)) {
+      finish_client(client);
+      return;
+    }
+    if (header_end != std::string::npos && length) {
+      while (request.size() < header_end + 4 + *length) {
         if (!receive_more()) {
           finish_client(client);
           return;

@@ -39,7 +39,12 @@ MediaSocketForwarder::MediaSocketForwarder(const std::filesystem::path &path,
     unlink(value.c_str());
     return;
   }
-  worker_ = std::jthread([this](const std::stop_token stop) { forward(stop); });
+}
+
+void MediaSocketForwarder::start_worker() {
+  if (listener_ >= 0)
+    worker_ =
+        std::jthread([this](const std::stop_token stop) { forward(stop); });
 }
 
 MediaSocketForwarder::~MediaSocketForwarder() {
@@ -212,6 +217,7 @@ VideoSocketForwarder::VideoSocketForwarder(const std::filesystem::path &path)
           << "Bridge daemon: unable to capture Android Auto H.264 to "
           << dump_path << " (refusing unsafe paths)\n";
   }
+  start_worker();
 }
 
 VideoSocketForwarder::~VideoSocketForwarder() {
@@ -373,6 +379,7 @@ AudioSocketForwarder::AudioSocketForwarder(const std::filesystem::path &path,
                                            std::string name)
     : MediaSocketForwarder(path, std::move(name)) {
   maximum_queued_frames_ = 100;
+  start_worker();
 }
 
 void AudioSocketForwarder::log_client_connected() {
