@@ -103,6 +103,11 @@ add_library(bridge_media_forwarders src/bridge/media_forwarders.cpp)
 target_include_directories(bridge_media_forwarders PUBLIC include)
 target_compile_options(bridge_media_forwarders PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
+add_library(bridge_carplay_ipc src/bridge/carplay_ipc.cpp)
+target_include_directories(bridge_carplay_ipc PUBLIC include)
+target_link_libraries(bridge_carplay_ipc PUBLIC bridge_daemon_log)
+target_compile_options(bridge_carplay_ipc PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
 add_library(bridge_carplay_worker src/bridge/carplay_worker.cpp)
 target_include_directories(bridge_carplay_worker PUBLIC include)
 target_link_libraries(bridge_carplay_worker PUBLIC iap2_bluetooth_worker)
@@ -159,7 +164,7 @@ endif()
 
 add_library(iap2_bluetooth_worker src/iap2_bt_main.cpp src/iap2/bluez_pairing.cpp)
 target_include_directories(iap2_bluetooth_worker PUBLIC include)
-target_link_libraries(iap2_bluetooth_worker PUBLIC iap2_link airplay_session bluez_inventory ${BLUETOOTH_LIBRARY} PkgConfig::DBUS)
+target_link_libraries(iap2_bluetooth_worker PUBLIC iap2_link airplay_session bridge_carplay_ipc bluez_inventory ${BLUETOOTH_LIBRARY} PkgConfig::DBUS)
 target_compile_options(iap2_bluetooth_worker PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 if(AA2ACP_BUILD_DIAGNOSTICS)
@@ -178,7 +183,7 @@ cmake_path(GET AAP_PROTOBUF_SHARED_LIBRARY PARENT_PATH AAP_PROTOBUF_LIB_DIR)
 
 add_executable(aa2acp src/bridge_daemon_main.cpp)
 target_compile_definitions(aa2acp PRIVATE AA2ACP_VERSION="${AA2ACP_VERSION}")
-target_link_libraries(aa2acp PRIVATE bridge_config bridge_daemon_log bridge_media_forwarders bridge_management_ui bridge_carplay_worker bluez_inventory android_auto_usb h264_normalizer airplay_rtsp iap2_link iap2_bluetooth_worker)
+target_link_libraries(aa2acp PRIVATE bridge_config bridge_daemon_log bridge_media_forwarders bridge_carplay_ipc bridge_management_ui bridge_carplay_worker bluez_inventory android_auto_usb h264_normalizer airplay_rtsp iap2_link iap2_bluetooth_worker)
 set_property(TARGET aa2acp PROPERTY INSTALL_RPATH "/usr/lib/aa2acp")
 target_compile_options(aa2acp PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
@@ -207,6 +212,10 @@ if(BUILD_TESTING)
   target_link_libraries(h264-normalizer-tests PRIVATE h264_normalizer)
   target_compile_options(h264-normalizer-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
   add_test(NAME h264-normalizer-tests COMMAND h264-normalizer-tests)
+  add_executable(carplay-ipc-tests tests/carplay_ipc_tests.cpp)
+  target_link_libraries(carplay-ipc-tests PRIVATE bridge_carplay_ipc)
+  target_compile_options(carplay-ipc-tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+  add_test(NAME carplay-ipc-tests COMMAND carplay-ipc-tests)
   add_test(NAME no-direct-stream-logs
            COMMAND ${CMAKE_COMMAND} -DPROJECT_SOURCE_DIR=${PROJECT_SOURCE_DIR}
                    -P ${PROJECT_SOURCE_DIR}/tests/no_direct_stream_logs.cmake)

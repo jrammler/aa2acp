@@ -27,6 +27,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <climits>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -185,6 +186,16 @@ public:
     fail(error.what());
   }
 
+  void
+  send_report(aap_protobuf::service::inputsource::message::InputReport report) {
+    boost::asio::post(strand_, [self = shared_from_this(),
+                                report = std::move(report)] {
+      self->send([self, report](aasdk::channel::SendPromise::Pointer promise) {
+        self->channel_->sendInputReport(report, std::move(promise));
+      });
+    });
+  }
+
 private:
   template <typename Sender> void send(Sender sender) {
     auto promise = aasdk::channel::SendPromise::defer(strand_);
@@ -300,9 +311,13 @@ public:
   void onMediaSourceOpenRequest(
       const aap_protobuf::service::media::source::message::MicrophoneRequest
           &request) override {
+    microphone_session_id_ = request.open() ? 1 : 0;
+    microphone_send_in_flight_ = false;
+    if (!request.open())
+      pending_audio_.clear();
     aap_protobuf::service::media::source::message::MicrophoneResponse response;
     response.set_status(aap_protobuf::shared::STATUS_SUCCESS);
-    response.set_session_id(request.open() ? 1 : 0);
+    response.set_session_id(microphone_session_id_);
     send([this, response](aasdk::channel::SendPromise::Pointer promise) {
       channel_->sendMicrophoneOpenResponse(response, std::move(promise));
     });
@@ -310,7 +325,20 @@ public:
   }
   void onMediaChannelAckIndication(
       const aap_protobuf::service::media::source::message::Ack &) override {
+    microphone_send_in_flight_ = false;
+    if (!pending_audio_.empty()) {
+      auto audio = std::move(pending_audio_);
+      pending_audio_.clear();
+      send_audio_on_strand(std::move(audio));
+    }
     receive_next();
+  }
+
+  void send_audio(std::vector<std::uint8_t> audio) {
+    boost::asio::post(strand_,
+                      [self = shared_from_this(), audio = std::move(audio)] {
+                        self->send_audio_on_strand(std::move(audio));
+                      });
   }
   void onChannelError(const aasdk::error::Error &error) override {
     fail(error.what());
@@ -324,6 +352,24 @@ private:
     sender(std::move(promise));
   }
   void receive_next() { channel_->receive(shared_from_this()); }
+  void send_audio_on_strand(std::vector<std::uint8_t> audio) {
+    if (microphone_session_id_ == 0 || audio.empty())
+      return;
+    if (microphone_send_in_flight_) {
+      pending_audio_ = std::move(audio);
+      return;
+    }
+    microphone_send_in_flight_ = true;
+    const auto timestamp = static_cast<aasdk::messenger::Timestamp::ValueType>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+    const aasdk::common::Data data(std::move(audio));
+    send([this, timestamp, data](aasdk::channel::SendPromise::Pointer promise) {
+      channel_->sendMediaSourceWithTimestampIndication(timestamp, data,
+                                                       std::move(promise));
+    });
+  }
   void fail(const std::string &detail) {
     callback_({WiredReceiverEventType::error,
                "Android Auto microphone channel: " + detail});
@@ -331,6 +377,9 @@ private:
   boost::asio::io_service::strand &strand_;
   WiredReceiver::EventCallback callback_;
   aasdk::channel::mediasource::IMediaSourceService::Pointer channel_;
+  std::int32_t microphone_session_id_{};
+  bool microphone_send_in_flight_{};
+  std::vector<std::uint8_t> pending_audio_;
 };
 
 class ControlSession final
@@ -413,6 +462,15 @@ public:
       transport_->stop();
     if (cryptor_)
       cryptor_->deinit();
+  }
+
+  void send_input_report(
+      aap_protobuf::service::inputsource::message::InputReport report) {
+    input_->send_report(std::move(report));
+  }
+
+  void send_microphone_audio(std::vector<std::uint8_t> audio) {
+    microphone_->send_audio(std::move(audio));
   }
 
   void onVersionResponse(uint16_t, uint16_t,
@@ -880,6 +938,36 @@ public:
     return true;
   }
 
+  bool send_input_report(std::span<const std::uint8_t> serialized_report) {
+    aap_protobuf::service::inputsource::message::InputReport report;
+    if (serialized_report.size() > static_cast<std::size_t>(INT_MAX) ||
+        !report.ParseFromArray(serialized_report.data(),
+                               static_cast<int>(serialized_report.size())))
+      return false;
+    std::lock_guard lock(mutex_);
+    if (!running_ || stopping_)
+      return false;
+    io_service_.post([this, report = std::move(report)] {
+      if (control_session_)
+        control_session_->send_input_report(std::move(report));
+    });
+    return true;
+  }
+
+  bool send_microphone_audio(std::span<const std::uint8_t> pcm) {
+    if (pcm.empty())
+      return false;
+    std::vector<std::uint8_t> copy(pcm.begin(), pcm.end());
+    std::lock_guard lock(mutex_);
+    if (!running_ || stopping_)
+      return false;
+    io_service_.post([this, audio = std::move(copy)] {
+      if (control_session_)
+        control_session_->send_microphone_audio(std::move(audio));
+    });
+    return true;
+  }
+
   void stop() {
     {
       std::lock_guard lock(mutex_);
@@ -1079,5 +1167,15 @@ WiredReceiver::~WiredReceiver() = default;
 bool WiredReceiver::start(std::string *error) { return impl_->start(error); }
 
 void WiredReceiver::stop() { impl_->stop(); }
+
+bool WiredReceiver::send_input_report(
+    const std::span<const std::uint8_t> serialized_report) {
+  return impl_->send_input_report(serialized_report);
+}
+
+bool WiredReceiver::send_microphone_audio(
+    const std::span<const std::uint8_t> pcm) {
+  return impl_->send_microphone_audio(pcm);
+}
 
 } // namespace aa2acp::aa

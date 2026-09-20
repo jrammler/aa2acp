@@ -68,6 +68,13 @@ public:
   bool start(std::string *error = nullptr);
   void stop();
 
+  // Injects an Android Auto InputReport serialized by the bridge's input
+  // adapter. The report is delivered on AASDK's I/O strand.
+  bool send_input_report(std::span<const std::uint8_t> serialized_report);
+  // Queues one 16 kHz mono S16LE microphone packet for the phone. The packet
+  // is dropped until Android Auto has opened the microphone source.
+  bool send_microphone_audio(std::span<const std::uint8_t> pcm);
+
 private:
   class Impl;
   std::unique_ptr<Impl> impl_;

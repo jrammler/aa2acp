@@ -376,9 +376,50 @@ void service_timing_channel(const int socket_fd, const std::stop_token stop) {
   close(socket_fd);
 }
 
-void service_event_channel(const int socket_fd, aa2acp::airplay::Bytes read_key,
-                           aa2acp::airplay::Bytes write_key,
-                           const std::stop_token stop) {
+void log_event_plist(const std::span<const std::uint8_t> body) {
+  const auto plist = aa2acp::airplay::decode_bplist(
+      aa2acp::airplay::Bytes(body.begin(), body.end()));
+  if (!plist)
+    return;
+  const auto *dictionary =
+      std::get_if<aa2acp::airplay::PlistValue::Dictionary>(&plist->data);
+  if (dictionary == nullptr)
+    return;
+  std::ostringstream summary;
+  summary << "AirPlay: event plist keys:";
+  for (const auto &[key, value] : *dictionary) {
+    summary << ' ' << key;
+    if (const auto *text = std::get_if<std::string>(&value.data))
+      summary << '=' << '"' << *text << '"';
+    else if (const auto *bytes =
+                 std::get_if<aa2acp::airplay::Bytes>(&value.data))
+      summary << "[" << bytes->size() << " bytes]";
+  }
+  if (const auto uuid = dictionary->find("uuid"); uuid != dictionary->end())
+    if (const auto *text = std::get_if<std::string>(&uuid->second.data))
+      summary << " uuid=" << *text;
+  if (const auto report = dictionary->find("hidReport");
+      report != dictionary->end()) {
+    if (const auto *bytes =
+            std::get_if<aa2acp::airplay::Bytes>(&report->second.data)) {
+      summary << " hidReport=";
+      constexpr std::size_t kMaximumReportBytes = 64;
+      for (const auto byte : std::span(*bytes).first(
+               std::min(bytes->size(), kMaximumReportBytes)))
+        summary << ' ' << std::hex << std::setw(2) << std::setfill('0')
+                << static_cast<unsigned int>(byte);
+      if (bytes->size() > kMaximumReportBytes)
+        summary << " ...";
+    }
+  }
+  aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug) << summary.str() << '\n';
+}
+
+void service_event_channel(
+    const int socket_fd, aa2acp::airplay::Bytes read_key,
+    aa2acp::airplay::Bytes write_key,
+    const std::function<void(std::span<const std::uint8_t>)> &event_received,
+    const std::stop_token stop) {
   aa2acp::airplay::ControlCipher cipher(std::move(read_key),
                                         std::move(write_key));
   aa2acp::airplay::Bytes encrypted_buffer;
@@ -454,6 +495,11 @@ void service_event_channel(const int socket_fd, aa2acp::airplay::Bytes read_key,
             << "AirPlay: event channel request "
             << request.substr(0, header_end) << " (body=" << body_size
             << " byte(s))\n";
+      if (aa2acp::bridge::debug_logging_enabled() && body_size != 0)
+        log_event_plist(
+            std::span(plaintext).subspan(header_end + 4, body_size));
+      if (event_received)
+        event_received(std::span(plaintext).first(request_size));
       std::string response =
           "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nAudio-Latency: 0\r\n";
       if (!cseq.empty())
@@ -1231,10 +1277,12 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
     close(socket_fd);
     return 1;
   }
-  std::jthread event_channel([event_socket, event_read_key,
-                              event_write_key](const std::stop_token stop) {
-    service_event_channel(event_socket, event_read_key, event_write_key, stop);
-  });
+  std::jthread event_channel(
+      [event_socket, event_read_key, event_write_key,
+       event_received = options.event_received](const std::stop_token stop) {
+        service_event_channel(event_socket, event_read_key, event_write_key,
+                              event_received, stop);
+      });
   std::uint32_t next_cseq = 8;
   if (aa2acp::bridge::debug_logging_enabled())
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)

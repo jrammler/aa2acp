@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -32,6 +33,12 @@ struct SessionOptions {
   // Called before the audio sender threads are joined, so a callback blocked
   // waiting for Android Auto data can be interrupted during teardown.
   std::function<void()> stop_streams;
+  // Receives each complete decrypted event-channel HTTP message. The callback
+  // runs on the event-channel thread and must not block.
+  std::function<void(std::span<const std::uint8_t>)> event_received;
+  // Receives microphone PCM packets from the AirPlay data stream when one is
+  // negotiated. The callback runs on the stream thread and must not block.
+  std::function<void(std::span<const std::uint8_t>)> microphone_received;
 };
 
 int run_session(const SessionOptions &options);

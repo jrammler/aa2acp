@@ -1,4 +1,5 @@
 #include "aa2acp/airplay/session.hpp"
+#include "aa2acp/bridge/carplay_ipc.hpp"
 #include "aa2acp/bridge/logging.hpp"
 #include "aa2acp/iap2/bluetooth_worker.hpp"
 #include "aa2acp/iap2/bluez_pairing.hpp"
@@ -245,6 +246,8 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
   std::string audio_socket;
   std::string guidance_audio_socket;
   std::string system_audio_socket;
+  std::string event_socket;
+  std::string microphone_socket;
   std::string pairing_store;
   std::string head_unit_capabilities_store;
   std::string wifi_interface;
@@ -303,6 +306,10 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
       guidance_audio_socket = argv[++index];
     } else if (argument == "--system-audio-socket" && index + 1 < argc) {
       system_audio_socket = argv[++index];
+    } else if (argument == "--event-socket" && index + 1 < argc) {
+      event_socket = argv[++index];
+    } else if (argument == "--microphone-socket" && index + 1 < argc) {
+      microphone_socket = argv[++index];
     } else if (argument == "--pairing-store" && index + 1 < argc) {
       pairing_store = argv[++index];
     } else if (argument == "--wifi-interface" && index + 1 < argc) {
@@ -320,6 +327,7 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
              "[--video "
              "H264_FILE] [--video-socket PATH] [--audio-socket PATH] "
              "[--guidance-audio-socket PATH] [--system-audio-socket PATH] "
+             "[--event-socket PATH] [--microphone-socket PATH] "
              "[--pairing-store FILE] [--head-unit-capabilities-store FILE]\n";
       return 2;
     }
@@ -472,6 +480,16 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
         << "Bridge: starting AirPlay on " << host << ':'
         << carplay_probe.airplay_port() << '\n';
+    const auto event_writer =
+        event_socket.empty()
+            ? std::shared_ptr<aa2acp::bridge::FrameSocketWriter>{}
+            : std::make_shared<aa2acp::bridge::FrameSocketWriter>(event_socket,
+                                                                  "event");
+    const auto microphone_writer =
+        microphone_socket.empty()
+            ? std::shared_ptr<aa2acp::bridge::FrameSocketWriter>{}
+            : std::make_shared<aa2acp::bridge::FrameSocketWriter>(
+                  microphone_socket, "microphone");
     const auto run_airplay =
         [&] {
           const auto stop_streams = std::make_shared<std::atomic_bool>();
@@ -519,6 +537,19 @@ int aa2acp::iap2::run_bluetooth_worker(int argc, char **argv) {
           .head_unit_mac = address,
           .stop_requested = [] { return shutdown_requested(); },
           .stop_streams = [stop_streams] { stop_streams->store(true); },
+          .event_received =
+              event_writer
+                  ? [event_writer](const std::span<const std::uint8_t> bytes) {
+                      event_writer->send(bytes);
+                    }
+                  : std::function<void(std::span<const std::uint8_t>)>{},
+          .microphone_received =
+              microphone_writer
+                  ? [microphone_writer](
+                        const std::span<const std::uint8_t> bytes) {
+                      microphone_writer->send(bytes);
+                    }
+                  : std::function<void(std::span<const std::uint8_t>)>{},
       };
           return aa2acp::airplay::run_session(options);
         };

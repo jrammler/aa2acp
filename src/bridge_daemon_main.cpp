@@ -1,6 +1,7 @@
 #include "aa2acp/aa/wired_receiver.hpp"
 #include "aa2acp/airplay/head_unit_capabilities.hpp"
 #include "aa2acp/bridge/bluez_inventory.hpp"
+#include "aa2acp/bridge/carplay_ipc.hpp"
 #include "aa2acp/bridge/carplay_worker.hpp"
 #include "aa2acp/bridge/config.hpp"
 #include "aa2acp/bridge/daemon_log.hpp"
@@ -54,6 +55,7 @@ namespace {
 using aa2acp::bridge::AudioSocketForwarder;
 using aa2acp::bridge::CarPlayWorker;
 using aa2acp::bridge::DaemonLog;
+using aa2acp::bridge::FrameSocketReceiver;
 using aa2acp::bridge::next_daemon_log_path;
 using aa2acp::bridge::RecentLog;
 using aa2acp::bridge::VideoSocketForwarder;
@@ -201,6 +203,8 @@ int run_carplay_session(const aa2acp::bridge::Config &config,
                         const std::string &media_audio_socket = {},
                         const std::string &guidance_audio_socket = {},
                         const std::string &system_audio_socket = {},
+                        const std::string &event_socket = {},
+                        const std::string &microphone_socket = {},
                         const bool preflight = false,
                         const std::string &video_path = {}) {
   if (config.head_unit_mac.empty()) {
@@ -246,6 +250,14 @@ int run_carplay_session(const aa2acp::bridge::Config &config,
   if (!system_audio_socket.empty()) {
     arguments.push_back("--system-audio-socket");
     arguments.push_back(system_audio_socket);
+  }
+  if (!event_socket.empty()) {
+    arguments.push_back("--event-socket");
+    arguments.push_back(event_socket);
+  }
+  if (!microphone_socket.empty()) {
+    arguments.push_back("--microphone-socket");
+    arguments.push_back(microphone_socket);
   }
   if (!carplay_worker) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
@@ -298,7 +310,7 @@ void run_carplay_preflight(const aa2acp::bridge::Config config,
       << '\n';
   const auto result =
       run_carplay_session(config, stop, phone_disconnected, active_child, {},
-                          {}, {}, {}, true, kDisplayPreflightVideo);
+                          {}, {}, {}, {}, {}, true, kDisplayPreflightVideo);
   set_preflight(result == 0
                     ? aa2acp::bridge::management::PreflightState::succeeded
                     : aa2acp::bridge::management::PreflightState::failed,
@@ -351,6 +363,11 @@ int run_wired_android_auto_receiver(
   const auto system_audio_socket =
       socket_dir /
       ("aa2acp-system-audio-" + std::to_string(getpid()) + ".sock");
+  const auto event_socket = socket_dir / ("aa2acp-carplay-event-" +
+                                          std::to_string(getpid()) + ".sock");
+  const auto microphone_socket =
+      socket_dir /
+      ("aa2acp-carplay-microphone-" + std::to_string(getpid()) + ".sock");
   VideoSocketForwarder forwarder(video_socket);
   if (!forwarder.ready()) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
@@ -492,6 +509,60 @@ int run_wired_android_auto_receiver(
                "seconds; using 1280x720 fallback\n";
         return std::nullopt;
       });
+  const auto event_dump_path = [] {
+    const char *value = std::getenv("AA2ACP_DUMP_CARPLAY_EVENTS");
+    return value != nullptr && *value ? std::filesystem::path(value)
+                                      : std::filesystem::path{};
+  }();
+  auto event_dump = std::make_shared<std::ofstream>();
+  if (!event_dump_path.empty()) {
+    event_dump->open(event_dump_path, std::ios::binary | std::ios::trunc);
+    if (!*event_dump)
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::warning)
+          << "Bridge daemon: unable to dump CarPlay events to "
+          << event_dump_path << '\n';
+    else
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::info)
+          << "Bridge daemon: dumping CarPlay events to " << event_dump_path
+          << '\n';
+  }
+  FrameSocketReceiver event_receiver(
+      event_socket, "event",
+      [event_dump](const std::span<const std::uint8_t> bytes) {
+        if (event_dump && *event_dump) {
+          const auto size = bytes.size();
+          const std::array<std::uint8_t, 4> header{
+              static_cast<std::uint8_t>(size >> 24),
+              static_cast<std::uint8_t>(size >> 16),
+              static_cast<std::uint8_t>(size >> 8),
+              static_cast<std::uint8_t>(size)};
+          event_dump->write(reinterpret_cast<const char *>(header.data()),
+                            static_cast<std::streamsize>(header.size()));
+          event_dump->write(reinterpret_cast<const char *>(bytes.data()),
+                            static_cast<std::streamsize>(bytes.size()));
+          event_dump->flush();
+        }
+        if (aa2acp::bridge::debug_logging_enabled())
+          aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+              << "Bridge daemon: received CarPlay event message ("
+              << bytes.size()
+              << " bytes); input mapping awaits a sanitized "
+                 "head-unit event capture\n";
+      });
+  FrameSocketReceiver microphone_receiver(
+      microphone_socket, "microphone",
+      [&receiver](const std::span<const std::uint8_t> pcm) {
+        if (!receiver.send_microphone_audio(pcm) &&
+            aa2acp::bridge::debug_logging_enabled())
+          aa2acp::bridge::log(aa2acp::bridge::LogLevel::debug)
+              << "Bridge daemon: discarded CarPlay microphone packet before "
+                 "Android Auto microphone open\n";
+      });
+  if (!event_receiver.ready() || !microphone_receiver.ready()) {
+    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+        << "Bridge daemon: unable to listen for CarPlay IPC\n";
+    return 1;
+  }
   std::string error;
   if (!receiver.start(&error)) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
@@ -518,7 +589,8 @@ int run_wired_android_auto_receiver(
     }
     const auto result = run_carplay_session(
         config, stop, phone_disconnected, active_carplay_child, video_socket,
-        media_audio_socket, guidance_audio_socket, system_audio_socket);
+        media_audio_socket, guidance_audio_socket, system_audio_socket,
+        event_socket, microphone_socket);
     if (stop.stop_requested())
       break;
     if (phone_disconnected.load()) {
