@@ -81,7 +81,11 @@ bool receive_all(const int socket_fd, std::span<std::uint8_t> bytes,
     }
     if (ready == 0)
       continue;
-    if ((descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0)
+    // A stream peer may close after writing its last frame, yielding POLLIN
+    // and POLLHUP together. Consume readable bytes before accepting the hangup
+    // as terminal so the final complete frame is not discarded.
+    if ((descriptor.revents & POLLNVAL) != 0 ||
+        (descriptor.revents & POLLIN) == 0)
       return false;
     const auto count =
         recv(socket_fd, bytes.data() + offset, bytes.size() - offset, 0);
