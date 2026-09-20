@@ -1578,10 +1578,10 @@ int aa2acp::airplay::run_session(const SessionOptions &options) {
               std::to_string(*microphone_stream_id),
           "DataStream-Input-Encryption-Key", 32);
       const bool microphone_peer_ready =
-          !microphone_data_port ||
-          (*microphone_data_port > 0 && *microphone_data_port <= UINT16_MAX &&
-           connect_udp_peer(microphone_socket, host,
-                            static_cast<std::uint16_t>(*microphone_data_port)));
+          microphone_data_port && *microphone_data_port > 0 &&
+          *microphone_data_port <= UINT16_MAX &&
+          connect_udp_peer(microphone_socket, host,
+                           static_cast<std::uint16_t>(*microphone_data_port));
       if (microphone_response && microphone_response->status == 200 &&
           microphone_info && microphone_key.size() == 32 &&
           microphone_peer_ready) {
