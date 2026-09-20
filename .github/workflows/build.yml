@@ -86,11 +86,6 @@ jobs:
           fi
           cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ inputs.build_type || 'RelWithDebInfo' }} -DCMAKE_PREFIX_PATH="$PWD/.deps/install" -DAA2ACP_VERSION="$version"
 
-      - name: Inspect install RPATH configuration
-        run: |
-          grep -E '^CMAKE_(SKIP_RPATH|SKIP_INSTALL_RPATH):' build/CMakeCache.txt || true
-          grep -A8 -B4 -E 'RPATH_(CHECK|CHANGE)' build/cmake_install.cmake || true
-
       - name: Build
         run: cmake --build build -j"$(nproc)"
 
@@ -105,12 +100,7 @@ jobs:
           for f in .deps/install/lib/libaasdk.so* .deps/install/lib/libaap_protobuf.so*; do
             ln -sf "$PWD/$f" /usr/lib/aarch64-linux-gnu/
           done
-          echo '--- build executable dynamic section ---'
-          readelf -d build/aa2acp | grep -E '(RPATH|RUNPATH)' || true
           cpack --config build/CPackConfig.cmake
-          echo '--- CPack staging executable dynamic section ---'
-          find _CPack_Packages -path '*/usr/bin/aa2acp' -type f -exec \
-            readelf -d '{}' \; | grep -E '(RPATH|RUNPATH)' || true
           mv *.deb aa2acp.deb
           cp build/aa2acp aa2acp
           # Smoke-test the package layout before publishing artifacts. This
@@ -134,7 +124,6 @@ jobs:
           test -e "$package_root/lib/udev/rules.d/70-aa2acp-android-auto.rules"
           test -e "$package_root/usr/share/polkit-1/rules.d/49-aa2acp-networkmanager.rules"
           test -x packaging/deb/postinst
-          echo '--- extracted package executable dynamic section ---'
           readelf -d "$package_root/usr/bin/aa2acp" | \
             grep -E '(RPATH|RUNPATH)' | tee package-rpath.txt
           grep -Fq '$ORIGIN/../lib/aa2acp' package-rpath.txt
@@ -142,6 +131,7 @@ jobs:
           ! grep -q 'not found' package-ldd.txt
 
       - name: Upload artifacts
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: aa2acp-artifacts
