@@ -100,6 +100,25 @@ void test_negotiation() {
   identification_packet.push_back(aa2acp::iap2::checksum(identification));
   link.receive(identification_packet, now);
   assert(received_control == identification);
+
+  // Do not advance receive state or deliver a later control message while a
+  // sequence is missing; the ACK must name the last contiguous frame.
+  const std::array<std::uint8_t, 1> skipped_payload{0x42};
+  const auto skipped_header = aa2acp::iap2::encode_header(
+      {static_cast<std::uint16_t>(skipped_payload.size() + 10),
+       aa2acp::iap2::kControlAck, 6, 101, 1});
+  std::vector<std::uint8_t> skipped_packet(skipped_header.begin(),
+                                           skipped_header.end());
+  skipped_packet.insert(skipped_packet.end(), skipped_payload.begin(),
+                        skipped_payload.end());
+  skipped_packet.push_back(aa2acp::iap2::checksum(skipped_payload));
+  link.receive(skipped_packet, now);
+  assert(received_control == identification);
+  const auto gap_ack =
+      aa2acp::iap2::decode_header(std::span(writes.back()).first<9>());
+  assert(gap_ack.has_value());
+  assert(gap_ack->control == aa2acp::iap2::kControlAck);
+  assert(gap_ack->acknowledgement == 4);
 }
 
 void test_csm_codec() {

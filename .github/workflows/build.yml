@@ -30,7 +30,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            cmake g++ pkg-config git dpkg-dev file ca-certificates \
+            cmake g++ pkg-config git dpkg-dev file binutils ca-certificates \
             libssl-dev \
             libboost1.83-dev libboost-system1.83-dev libboost-log1.83-dev libboost-test1.83-dev \
             libabsl-dev protobuf-compiler libprotobuf-dev \
@@ -40,7 +40,7 @@ jobs:
       - name: Compute toolchain fingerprint
         id: toolchain
         run: |
-          echo "hash=$( (gcc --version; protoc --version; cmake --version) | sha256sum | cut -d' ' -f1 )" >> "$GITHUB_OUTPUT"
+          echo "hash=$( (gcc --version; protoc --version; cmake --version; dpkg-query -W -f='${Package}=${Version}\n' libabsl-dev libboost1.83-dev libprotobuf-dev protobuf-compiler) | sha256sum | cut -d' ' -f1 )" >> "$GITHUB_OUTPUT"
 
       - name: Cache aasdk/aap_protobuf
         id: deps-cache
@@ -114,8 +114,9 @@ jobs:
           test -e "$package_root/lib/udev/rules.d/70-aa2acp-android-auto.rules"
           test -e "$package_root/usr/share/polkit-1/rules.d/49-aa2acp-networkmanager.rules"
           test -x packaging/deb/postinst
-          LD_LIBRARY_PATH="$package_root/usr/lib/aa2acp" \
-            ldd "$package_root/usr/bin/aa2acp" | tee package-ldd.txt
+          readelf -d "$package_root/usr/bin/aa2acp" | \
+            grep -Fq '[$ORIGIN/../lib/aa2acp]'
+          ldd "$package_root/usr/bin/aa2acp" | tee package-ldd.txt
           ! grep -q 'not found' package-ldd.txt
 
       - name: Upload artifacts

@@ -44,6 +44,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -1075,17 +1076,27 @@ int main(int argc, char **argv) {
       finish_client(client);
       return;
     }
-    if (header_end != std::string::npos && length) {
-      while (request.size() < header_end + 4 + *length) {
-        if (!receive_more()) {
-          finish_client(client);
-          return;
-        }
+    const auto body_start = header_end + 4;
+    const auto body_size = length.value_or(0);
+    if (body_start > std::numeric_limits<std::size_t>::max() - body_size) {
+      finish_client(client);
+      return;
+    }
+    const auto request_size = body_start + body_size;
+    while (request.size() < request_size) {
+      if (!receive_more()) {
+        finish_client(client);
+        return;
       }
     }
-    const auto split = request.find("\r\n\r\n");
-    const auto body =
-        split == std::string::npos ? "" : request.substr(split + 4);
+    // This server processes exactly one request per connection. Reject bytes
+    // after the declared body rather than allowing them to affect form parsing
+    // or treating a pipelined request as part of this one.
+    if (request.size() != request_size) {
+      finish_client(client);
+      return;
+    }
+    const auto body = request.substr(body_start, body_size);
     const auto request_line_end = request.find("\r\n");
     const auto request_line = request.substr(0, request_line_end);
     const auto respond = [&](const int status, const char *type,

@@ -494,9 +494,12 @@ void PhoneLink::handle_packet(const Header &header,
     if (last_sequence_valid_ &&
         static_cast<std::uint8_t>(header.sequence - last_received_sequence_) >
             1) {
-      // Ordered transport should never skip ahead; accept but make the gap
-      // visible in debug logs.
-      log("iAP2: sequence gap detected; accepting frame");
+      // Ordered transport must not deliver a later message before the missing
+      // one. A cumulative ACK of the last contiguous sequence prompts the
+      // peer's normal retransmission path without advancing receive state.
+      log("iAP2: sequence gap detected; awaiting retransmission");
+      send_ack();
+      return;
     }
     if (last_sequence_valid_ && header.sequence == last_received_sequence_) {
       // Duplicate/replayed frame: re-acknowledge but do not deliver twice.

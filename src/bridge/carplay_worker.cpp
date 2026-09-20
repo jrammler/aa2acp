@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include <array>
+#include <cerrno>
 #include <chrono>
 #include <cstring>
 #include <thread>
@@ -15,6 +16,17 @@
 #include "aa2acp/bridge/logging.hpp"
 
 namespace aa2acp::bridge {
+namespace {
+
+void kill_worker_process_group(const pid_t pid) {
+  // The child is a process-group leader. Kill its group so subprocesses such
+  // as nmcli cannot outlive a forced worker shutdown. Fall back to the direct
+  // child if it exited or could not establish the group.
+  if (pid > 0 && kill(-pid, SIGKILL) != 0 && errno == ESRCH)
+    kill(pid, SIGKILL);
+}
+
+} // namespace
 
 CarPlayWorker::CarPlayWorker() {
   int control[2]{-1, -1};
@@ -35,7 +47,8 @@ CarPlayWorker::CarPlayWorker() {
     return;
   }
   if (pid_ == 0) {
-    setpgid(0, 0);
+    if (setpgid(0, 0) != 0)
+      _exit(127);
     close(control[0]);
     close(output[0]);
     dup2(output[1], STDOUT_FILENO);
@@ -117,7 +130,7 @@ CarPlayWorker::~CarPlayWorker() {
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     } while (waited == 0 && std::chrono::steady_clock::now() < deadline);
     if (waited == 0) {
-      kill(pid_, SIGKILL);
+      kill_worker_process_group(pid_);
       while (waitpid(pid_, &status, 0) < 0 && errno == EINTR) {
       }
     }
@@ -155,7 +168,7 @@ int CarPlayWorker::run(std::vector<std::string> arguments,
       log(LogLevel::warning)
           << "Bridge daemon: CarPlay worker did not exit after stop; "
              "killing child\n";
-      ::kill(pid_, SIGKILL);
+      kill_worker_process_group(pid_);
       stop_deadline.reset(); // SIGKILL is terminal; no further escalation
     }
     pollfd descriptors[]{{output_fd_, POLLIN, 0}, {control_fd_, POLLIN, 0}};

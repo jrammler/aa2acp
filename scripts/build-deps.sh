@@ -41,12 +41,24 @@ CMAKE_FLAGS=(
 PATCH_HASH=$(cat "$ROOT"/patches/aasdk/*.patch | sha256sum | cut -d' ' -f1)
 CMAKE_FLAGS_HASH=$(printf '%s\n' "${CMAKE_FLAGS[@]}" | sha256sum | cut -d' ' -f1)
 AASDK_URL_HASH=$(printf '%s' "$AASDK_URL" | sha256sum | cut -d' ' -f1)
-# Include toolchain versions and all dependency build flags in the stamp:
-# protobuf-generated headers and C++ objects must match the compiler/protoc and
-# configuration that aa2acp itself will use.
+# Include toolchain and system dependency identities in the stamp:
+# protobuf-generated headers and C++ objects must match the compiler, protoc,
+# and the protobuf/Abseil/Boost versions that aasdk is built against.
 TOOLCHAIN=$(protoc --version; cmake --version | head -1; ${CC:-gcc} --version | head -1; ${CXX:-g++} --version | head -1)
+dependency_identity() {
+    if command -v dpkg-query >/dev/null; then
+        dpkg-query -W -f='${Package}=${Version}\n' \
+            libabsl-dev libboost-dev libprotobuf-dev protobuf-compiler 2>/dev/null || true
+    fi
+    pkg-config --modversion protobuf 2>/dev/null || true
+    ${CXX:-g++} -dM -E -x c++ -include boost/version.hpp - </dev/null 2>/dev/null |
+        grep -E 'BOOST_(VERSION|LIB_VERSION)' || true
+    ${CXX:-g++} -dM -E -x c++ -include absl/base/options.h - </dev/null 2>/dev/null |
+        grep -E 'ABSL_(LTS_RELEASE|OPTION_)' || true
+}
+SYSTEM_DEPS=$(dependency_identity)
 STAMP_FILE="$INSTALL_DIR/.built-stamp"
-STAMP_EXPECTED="url=$AASDK_URL_HASH rev=$AASDK_REV patches=$PATCH_HASH cmake_flags=$CMAKE_FLAGS_HASH toolchain=$(printf '%s\n' "$TOOLCHAIN" | sha256sum | cut -d' ' -f1)"
+STAMP_EXPECTED="url=$AASDK_URL_HASH rev=$AASDK_REV patches=$PATCH_HASH cmake_flags=$CMAKE_FLAGS_HASH toolchain=$(printf '%s\n' "$TOOLCHAIN" | sha256sum | cut -d' ' -f1) system_deps=$(printf '%s\n' "$SYSTEM_DEPS" | sha256sum | cut -d' ' -f1)"
 
 install_complete() {
     [[ -e "$INSTALL_DIR/lib/libaasdk.so" ]] &&
