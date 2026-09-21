@@ -48,14 +48,16 @@
   protocol logging, locally redacts identifiers, credentials, addresses, and
   pairing material, then exports an issue-ready support bundle for
   head-unit-specific interoperability reports.
-- [ ] Build head-unit interoperability regression coverage: retain raw car
-  captures outside the repository; derive sanitized protocol fixtures that
-  assert parsing and normalized outgoing messages; inject transport, clock,
-  Bluetooth, Wi-Fi, and AirPlay dependencies for deterministic pairing,
-  reconnect, handoff, timeout, and failure-path state-machine tests; and run
-  those tests against anonymized capability profiles (iAP2 messages, Wi-Fi
-  handoff, AirPlay capabilities, and negotiated formats) for every verified
-  behavior.
+- [ ] Add sanitized head-unit protocol fixtures under `tests/fixtures/` that
+  assert parsing and normalized outgoing messages. Keep raw car captures
+  outside the repository, and verify committed fixtures contain no credentials,
+  pairing keys, MAC/IP addresses, or other identifying data.
+- [ ] Inject transport, clock, Bluetooth, Wi-Fi, and AirPlay dependencies so
+  pairing, reconnect, handoff, timeout, and failure-path state machines can be
+  tested deterministically without hardware.
+- [ ] Define anonymized capability profiles for each verified head unit,
+  covering iAP2 messages, Wi-Fi handoff, AirPlay capabilities, and negotiated
+  formats, and run the regression suite against every profile in CI.
 - [ ] Provision and validate the Apple/MFi trust chain for software-MFi
   authentication. The current major-2 verifier intentionally accepts the
   signer certificate carried by the accessory; do not enable chain checking
