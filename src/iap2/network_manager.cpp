@@ -9,8 +9,10 @@
 #include <poll.h>
 #include <signal.h>
 #include <spawn.h>
-#include <sys/socket.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
+
+#include <linux/memfd.h>
 #include <unistd.h>
 
 #include <array>
@@ -54,6 +56,33 @@ std::optional<std::string> ipv4_address(const std::string &interface_name) {
   return address;
 }
 
+// nmcli reopens passwd-file, so a pipe/socket at /dev/stdin is rejected.
+// An anonymous seekable file keeps the secret out of the filesystem.
+int secret_memfd(const std::string &contents) {
+  const int descriptor = static_cast<int>(
+      syscall(SYS_memfd_create, "aa2acp-nmcli-secret", MFD_CLOEXEC));
+  if (descriptor < 0)
+    return -1;
+  std::size_t offset{};
+  while (offset < contents.size()) {
+    const auto count =
+        write(descriptor, contents.data() + offset, contents.size() - offset);
+    if (count > 0) {
+      offset += static_cast<std::size_t>(count);
+      continue;
+    }
+    if (count < 0 && errno == EINTR)
+      continue;
+    close(descriptor);
+    return -1;
+  }
+  if (lseek(descriptor, 0, SEEK_SET) < 0) {
+    close(descriptor);
+    return -1;
+  }
+  return descriptor;
+}
+
 bool run_nmcli(std::vector<std::string> arguments,
                const bool allow_inactive = false, const bool quiet = false,
                const std::string &stdin_data = {},
@@ -69,22 +98,24 @@ bool run_nmcli(std::vector<std::string> arguments,
   posix_spawn_file_actions_t actions;
   posix_spawn_file_actions_t *action_pointer = nullptr;
   int output_pipe[2]{-1, -1};
-  int input_pipe[2]{-1, -1};
   const bool has_stdin = !stdin_data.empty();
+  int input_descriptor{-1};
   if (quiet && pipe2(output_pipe, O_CLOEXEC) != 0) {
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
         << "Wi-Fi: unable to capture nmcli diagnostics\n";
     return false;
   }
-  if (has_stdin &&
-      socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, input_pipe) != 0) {
-    if (quiet) {
-      close(output_pipe[0]);
-      close(output_pipe[1]);
+  if (has_stdin) {
+    input_descriptor = secret_memfd(stdin_data);
+    if (input_descriptor < 0) {
+      if (quiet) {
+        close(output_pipe[0]);
+        close(output_pipe[1]);
+      }
+      aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
+          << "Wi-Fi: unable to provide nmcli secrets\n";
+      return false;
     }
-    aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
-        << "Wi-Fi: unable to provide nmcli secrets\n";
-    return false;
   }
   if (quiet || has_stdin) {
     posix_spawn_file_actions_init(&actions);
@@ -95,9 +126,10 @@ bool run_nmcli(std::vector<std::string> arguments,
       posix_spawn_file_actions_addclose(&actions, output_pipe[1]);
     }
     if (has_stdin) {
-      posix_spawn_file_actions_adddup2(&actions, input_pipe[0], STDIN_FILENO);
-      posix_spawn_file_actions_addclose(&actions, input_pipe[0]);
-      posix_spawn_file_actions_addclose(&actions, input_pipe[1]);
+      posix_spawn_file_actions_adddup2(&actions, input_descriptor,
+                                       STDIN_FILENO);
+      if (input_descriptor != STDIN_FILENO)
+        posix_spawn_file_actions_addclose(&actions, input_descriptor);
     }
     action_pointer = &actions;
   }
@@ -112,30 +144,13 @@ bool run_nmcli(std::vector<std::string> arguments,
       fcntl(output_pipe[0], F_SETFL, flags | O_NONBLOCK);
   }
   if (has_stdin)
-    close(input_pipe[0]);
+    close(input_descriptor);
   if (result != 0) {
     if (quiet)
       close(output_pipe[0]);
-    if (has_stdin)
-      close(input_pipe[1]);
     aa2acp::bridge::log(aa2acp::bridge::LogLevel::error)
         << "Wi-Fi: unable to run nmcli (error " << result << ")\n";
     return false;
-  }
-  if (has_stdin) {
-    const auto flags = fcntl(input_pipe[1], F_GETFL);
-    if (flags < 0 || fcntl(input_pipe[1], F_SETFL, flags | O_NONBLOCK) != 0) {
-      close(input_pipe[1]);
-      (void)kill(child, SIGKILL);
-      for (;;) {
-        const auto waited = waitpid(child, nullptr, 0);
-        if (waited >= 0 || errno != EINTR)
-          break;
-      }
-      if (quiet)
-        close(output_pipe[0]);
-      return false;
-    }
   }
   int status{};
   // nmcli exits 6 when disconnecting an interface that is already inactive.
@@ -179,18 +194,8 @@ bool run_nmcli(std::vector<std::string> arguments,
       waited = waitpid(child, &status, 0);
     } while (waited < 0 && errno == EINTR);
   };
-  std::size_t stdin_offset{};
-  bool stdin_open = has_stdin;
-  const auto close_stdin = [&] {
-    if (stdin_open) {
-      close(input_pipe[1]);
-      stdin_open = false;
-    }
-  };
   for (;;) {
     drain_diagnostics();
-    if (stdin_open && stdin_offset == stdin_data.size())
-      close_stdin();
     waited = waitpid(child, &status, WNOHANG);
     if (waited < 0 && errno == EINTR)
       continue;
@@ -211,8 +216,6 @@ bool run_nmcli(std::vector<std::string> arguments,
     nfds_t descriptor_count{};
     if (quiet)
       descriptors[descriptor_count++] = {output_pipe[0], POLLIN, 0};
-    if (stdin_open)
-      descriptors[descriptor_count++] = {input_pipe[1], POLLOUT, 0};
     if (descriptor_count == 0) {
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
       continue;
@@ -224,24 +227,8 @@ bool run_nmcli(std::vector<std::string> arguments,
       terminate_and_reap();
       break;
     }
-    if (stdin_open) {
-      const auto index = quiet ? 1U : 0U;
-      const auto events = descriptors[index].revents;
-      if ((events & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
-        close_stdin();
-      } else if ((events & POLLOUT) != 0) {
-        const auto count =
-            send(input_pipe[1], stdin_data.data() + stdin_offset,
-                 stdin_data.size() - stdin_offset, MSG_NOSIGNAL | MSG_DONTWAIT);
-        if (count > 0)
-          stdin_offset += static_cast<std::size_t>(count);
-        else if (count < 0 && errno != EINTR && errno != EAGAIN &&
-                 errno != EWOULDBLOCK)
-          close_stdin();
-      }
-    }
   }
-  close_stdin();
+
   if (quiet) {
     drain_diagnostics();
     close(output_pipe[0]);
@@ -443,7 +430,7 @@ bool join_with_networkmanager(const AccessoryWifiConfiguration &configuration,
   std::string password_file;
   if (!configuration.passphrase.empty()) {
     up.emplace_back("passwd-file");
-    up.emplace_back("/dev/stdin");
+    up.emplace_back("/proc/self/fd/0");
     password_file =
         "802-11-wireless-security.psk:" + configuration.passphrase + '\n';
   }
@@ -558,7 +545,7 @@ bool start_management_hotspot(const std::string &interface_name,
       std::string("802-11-wireless-security.psk:") + passphrase + '\n';
   if (!run_nmcli({"nmcli", "--wait", "30", "connection", "up", "id",
                   kManagementProfile, "ifname", interface_name, "passwd-file",
-                  "/dev/stdin"},
+                  "/proc/self/fd/0"},
                  false, true, password_file))
     return false;
   if (const auto address = ipv4_address(interface_name))
